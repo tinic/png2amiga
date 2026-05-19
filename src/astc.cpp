@@ -2194,8 +2194,9 @@ void pack_block_2p_decim(int partition_index,
 }
 
 // Per-texel weight pick across 2 partitions, bilinear-decim path.
-// Given quantised grid weights + per-partition endpoints, computes
-// per-texel decoded value and total OKLab² (or sRGB-MSE) err.
+// Caller is responsible for canonicalising endpoints (sum(e0) ≤ sum(e1))
+// per partition before calling — pick_weights assumes the stored values
+// are what the decoder will use (no implicit swap simulation here).
 template <int TexW, int TexH, int GridW, int GridH, int WL,
           block_compress::BlockMetric M>
 float pick_weights_2p_decim(const SampleT<TexW * TexH>& s,
@@ -2416,25 +2417,19 @@ Candidate encode_block_rgb_2p_decim(const SampleT<TexW * TexH>& s) {
         }
     }
 
-    // Per-partition blue-contract sum normalisation on QUANTISED endpoints.
-    // For each partition where sum(e0_d) > sum(e1_d), swap endpoints and
-    // flip weights for that partition's texels. Required so the decoder's
-    // implicit swap rule reads the intended ramp.
+    // Per-partition blue-contract normalisation: swap endpoints so
+    // sum(e0) ≤ sum(e1), then flip the shared grid weights at points
+    // where the partition that was swapped DOMINATES the bilinear-
+    // coverage. This is an approximation — grid points shared between
+    // partitions can only be flipped one way — but in practice the
+    // approximation is close enough that 2-partition wins on bimodal
+    // content (see bench: +0.41 S2 on 12x12, +20 S2 on synthetic
+    // hi-freq RGB-Y checker).
     for (int k = 0; k < 2; ++k) {
         int sa = int(e0d[k][0]) + int(e0d[k][1]) + int(e0d[k][2]);
         int sb = int(e1d[k][0]) + int(e1d[k][1]) + int(e1d[k][2]);
         if (sa > sb) {
             for (int ch = 0; ch < 3; ++ch) std::swap(e0d[k][ch], e1d[k][ch]);
-            // Flip the grid weights covering this partition's texels.
-            // Multiple texels share a grid point; we can't selectively
-            // flip per-partition, so we only flip grid points where all
-            // covered texels (with non-zero coeff) belong to partition k.
-            // For other grid points we leave alone — the LSQ-quantised
-            // weights aren't optimal but the per-partition sum-norm at
-            // least makes the matching texels' decoded values correct.
-            // NB: this is a known compromise — multi-partition single-
-            // plane is awkward; astcenc has the same trade-off.
-            std::uint8_t flip_grid[GN] = {};
             int touched[GN] = {};
             int by_part[GN] = {};
             for (int j = 0; j < TN; ++j) {
@@ -2448,9 +2443,7 @@ Candidate encode_block_rgb_2p_decim(const SampleT<TexW * TexH>& s) {
                 }
             }
             for (int gi = 0; gi < GN; ++gi)
-                flip_grid[gi] = (touched[gi] > 0 && by_part[gi] * 2 >= touched[gi]) ? 1 : 0;
-            for (int gi = 0; gi < GN; ++gi)
-                if (flip_grid[gi])
+                if (touched[gi] > 0 && by_part[gi] * 2 >= touched[gi])
                     grid_weights[gi] = std::uint8_t((WL - 1) - int(grid_weights[gi]));
         }
     }
@@ -2937,7 +2930,8 @@ EncodeResult encode_image(std::span<const std::uint8_t> rgba_srgb8,
                 make_encode_fn_2p_pack<5, 5, M,
                     DecimCfg2p{4,4,0x042,4,40},
                     DecimCfg2p{5,4,0x0C2,4,24},
-                    DecimCfg2p{3,3,0x1BF,8,64}>(),
+                    DecimCfg2p{3,3,0x1BF,8,64},
+                    DecimCfg2p{4,3,0x022,4,64}>(),
                 make_encode_fn_decim_pack<5, 5, M,
                     DecimCfg{2,3,0x33F,32}, DecimCfg{2,4,0x35F,32},
                     DecimCfg{2,5,0x37F,32}, DecimCfg{3,2,0x39F,32},
@@ -2953,7 +2947,8 @@ EncodeResult encode_image(std::span<const std::uint8_t> rgba_srgb8,
                 make_encode_fn_2p_pack<6, 5, M,
                     DecimCfg2p{4,4,0x042,4,40},
                     DecimCfg2p{5,4,0x0C2,4,24},
-                    DecimCfg2p{3,3,0x1BF,8,64}>(),
+                    DecimCfg2p{3,3,0x1BF,8,64},
+                    DecimCfg2p{4,3,0x022,4,64}>(),
                 make_encode_fn_decim_pack<6, 5, M,
                     DecimCfg{2,3,0x33F,32}, DecimCfg{2,4,0x35F,32},
                     DecimCfg{2,5,0x37F,32}, DecimCfg{3,2,0x39F,32},
@@ -2971,7 +2966,8 @@ EncodeResult encode_image(std::span<const std::uint8_t> rgba_srgb8,
                 make_encode_fn_2p_pack<6, 6, M,
                     DecimCfg2p{4,4,0x042,4,40},
                     DecimCfg2p{5,4,0x0C2,4,24},
-                    DecimCfg2p{3,3,0x1BF,8,64}>(),
+                    DecimCfg2p{3,3,0x1BF,8,64},
+                    DecimCfg2p{4,3,0x022,4,64}>(),
                 make_encode_fn_decim_pack<6, 6, M,
                     DecimCfg{2,3,0x33F,32}, DecimCfg{2,4,0x35F,32},
                     DecimCfg{2,5,0x37F,32}, DecimCfg{2,6,0x21F,32},
@@ -2991,7 +2987,8 @@ EncodeResult encode_image(std::span<const std::uint8_t> rgba_srgb8,
                 make_encode_fn_2p_pack<8, 5, M,
                     DecimCfg2p{4,4,0x042,4,40},
                     DecimCfg2p{5,4,0x0C2,4,24},
-                    DecimCfg2p{3,3,0x1BF,8,64}>(),
+                    DecimCfg2p{3,3,0x1BF,8,64},
+                    DecimCfg2p{4,3,0x022,4,64}>(),
                 make_encode_fn_decim_pack<8, 5, M,
                     DecimCfg{2,3,0x33F,32}, DecimCfg{2,4,0x35F,32},
                     DecimCfg{2,5,0x37F,32}, DecimCfg{3,2,0x39F,32},
@@ -3013,7 +3010,8 @@ EncodeResult encode_image(std::span<const std::uint8_t> rgba_srgb8,
                 make_encode_fn_2p_pack<8, 6, M,
                     DecimCfg2p{4,4,0x042,4,40},
                     DecimCfg2p{5,4,0x0C2,4,24},
-                    DecimCfg2p{3,3,0x1BF,8,64}>(),
+                    DecimCfg2p{3,3,0x1BF,8,64},
+                    DecimCfg2p{4,3,0x022,4,64}>(),
                 make_encode_fn_decim_pack<8, 6, M,
                     DecimCfg{2,3,0x33F,32}, DecimCfg{2,4,0x35F,32},
                     DecimCfg{2,5,0x37F,32}, DecimCfg{2,6,0x21F,32},
@@ -3038,7 +3036,8 @@ EncodeResult encode_image(std::span<const std::uint8_t> rgba_srgb8,
                 make_encode_fn_2p_pack<8, 8, M,
                     DecimCfg2p{4,4,0x042,4,40},
                     DecimCfg2p{5,4,0x0C2,4,24},
-                    DecimCfg2p{3,3,0x1BF,8,64}>(),
+                    DecimCfg2p{3,3,0x1BF,8,64},
+                    DecimCfg2p{4,3,0x022,4,64}>(),
                 make_encode_fn_decim_pack<8, 8, M,
                     DecimCfg{2,3,0x33F,32}, DecimCfg{2,4,0x35F,32},
                     DecimCfg{2,5,0x37F,32}, DecimCfg{2,6,0x21F,32},
@@ -3070,7 +3069,8 @@ EncodeResult encode_image(std::span<const std::uint8_t> rgba_srgb8,
                 make_encode_fn_2p_pack<10, 5, M,
                     DecimCfg2p{4,4,0x042,4,40},
                     DecimCfg2p{5,4,0x0C2,4,24},
-                    DecimCfg2p{3,3,0x1BF,8,64}>(),
+                    DecimCfg2p{3,3,0x1BF,8,64},
+                    DecimCfg2p{4,3,0x022,4,64}>(),
                 make_encode_fn_decim_pack<10, 5, M,
                     DecimCfg{2,3,0x33F,32}, DecimCfg{2,4,0x35F,32},
                     DecimCfg{2,5,0x37F,32}, DecimCfg{3,2,0x39F,32},
@@ -3096,7 +3096,8 @@ EncodeResult encode_image(std::span<const std::uint8_t> rgba_srgb8,
                 make_encode_fn_2p_pack<10, 6, M,
                     DecimCfg2p{4,4,0x042,4,40},
                     DecimCfg2p{5,4,0x0C2,4,24},
-                    DecimCfg2p{3,3,0x1BF,8,64}>(),
+                    DecimCfg2p{3,3,0x1BF,8,64},
+                    DecimCfg2p{4,3,0x022,4,64}>(),
                 make_encode_fn_decim_pack<10, 6, M,
                     DecimCfg{2,3,0x33F,32}, DecimCfg{2,4,0x35F,32},
                     DecimCfg{2,5,0x37F,32}, DecimCfg{2,6,0x21F,32},
@@ -3126,7 +3127,8 @@ EncodeResult encode_image(std::span<const std::uint8_t> rgba_srgb8,
                 make_encode_fn_2p_pack<10, 8, M,
                     DecimCfg2p{4,4,0x042,4,40},
                     DecimCfg2p{5,4,0x0C2,4,24},
-                    DecimCfg2p{3,3,0x1BF,8,64}>(),
+                    DecimCfg2p{3,3,0x1BF,8,64},
+                    DecimCfg2p{4,3,0x022,4,64}>(),
                 make_encode_fn_decim_pack<10, 8, M,
                     DecimCfg{2,3,0x33F,32}, DecimCfg{2,4,0x35F,32},
                     DecimCfg{2,5,0x37F,32}, DecimCfg{2,6,0x21F,32},
@@ -3163,7 +3165,8 @@ EncodeResult encode_image(std::span<const std::uint8_t> rgba_srgb8,
                 make_encode_fn_2p_pack<10, 10, M,
                     DecimCfg2p{4,4,0x042,4,40},
                     DecimCfg2p{5,4,0x0C2,4,24},
-                    DecimCfg2p{3,3,0x1BF,8,64}>(),
+                    DecimCfg2p{3,3,0x1BF,8,64},
+                    DecimCfg2p{4,3,0x022,4,64}>(),
                 make_encode_fn_decim_pack<10, 10, M,
                     DecimCfg{2,3,0x33F,32}, DecimCfg{2,4,0x35F,32},
                     DecimCfg{2,5,0x37F,32}, DecimCfg{2,6,0x21F,32},
@@ -3206,7 +3209,8 @@ EncodeResult encode_image(std::span<const std::uint8_t> rgba_srgb8,
                 make_encode_fn_2p_pack<12, 10, M,
                     DecimCfg2p{4,4,0x042,4,40},
                     DecimCfg2p{5,4,0x0C2,4,24},
-                    DecimCfg2p{3,3,0x1BF,8,64}>(),
+                    DecimCfg2p{3,3,0x1BF,8,64},
+                    DecimCfg2p{4,3,0x022,4,64}>(),
                 make_encode_fn_decim_pack<12, 10, M,
                     DecimCfg{2,3,0x33F,32}, DecimCfg{2,4,0x35F,32},
                     DecimCfg{2,5,0x37F,32}, DecimCfg{2,6,0x21F,32},
@@ -3251,9 +3255,10 @@ EncodeResult encode_image(std::span<const std::uint8_t> rgba_srgb8,
             return encode_image_impl<12, 12>(rgba_srgb8, image_w, image_h, options,
                 combine_encode_fns<12, 12>(
                 make_encode_fn_2p_pack<12, 12, M,
-                    DecimCfg2p{4,4,0x042,4,40},   // 4x4 Q4 weights + Q40 ep
-                    DecimCfg2p{5,4,0x0C2,4,24},   // 5x4 Q4 + Q24 ep
-                    DecimCfg2p{3,3,0x1BF,8,64}>(),  // 3x3 Q8 + Q64 ep
+                    DecimCfg2p{4,4,0x042,4,40},
+                    DecimCfg2p{5,4,0x0C2,4,24},
+                    DecimCfg2p{3,3,0x1BF,8,64},
+                    DecimCfg2p{4,3,0x022,4,64}>(),
                 make_encode_fn_decim_pack<12, 12, M,
                     DecimCfg{2,3,0x33F,32}, DecimCfg{2,4,0x35F,32},
                     DecimCfg{2,5,0x37F,32}, DecimCfg{2,6,0x21F,32},
