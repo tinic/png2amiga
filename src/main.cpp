@@ -936,8 +936,8 @@ struct Config {
     int etc2_effort = 2;
     std::string etc2_metric = "oklab2";
 
-    // ASTC (--mode astc) knobs. block_w × block_h selects the footprint
-    // (4×4 through 12×12). quality maps to astcenc's 0-100 preset scale.
+    // ASTC (--mode astc-WxH) knobs. block_w × block_h is set by the
+    // mode parser; quality maps to astcenc's 0-100 preset scale.
     int astc_block_w = 4;
     int astc_block_h = 4;
     float astc_quality = 60.0f;
@@ -1314,7 +1314,6 @@ void print_usage() {
         "  --etc2-effort <0-3>             Search depth (default: 2)\n"
         "  --etc2-jitter <0-15>            Endpoint search width (default: 1)\n"
         "  --etc2-metric <oklab2|srgb-mse> Block scoring metric (default: oklab2)\n"
-        "  --astc-block <WxH>              ASTC footprint, 4x4..12x12 (default: 4x4)\n"
         "  --astc-quality <0-100>          ASTC quality preset (default: 60)\n"
         "\n"
         "HAM:\n"
@@ -2192,8 +2191,35 @@ Result<Config> parse_args(int argc, char* argv[]) {
                     config.mode = amiga::Mode::bc3;
                 else if (v == "bc7" || v == "bc7-rgba")
                     config.mode = amiga::Mode::bc7;
-                else if (v == "astc" || v == "astc-rgba")
+                else if (v.starts_with("astc-")) {
+                    // --mode astc-WxH: 14 LDR 2D footprints.
+                    std::string dims = v.substr(5);
+                    auto xpos = dims.find('x');
+                    int w = 0, h = 0;
+                    if (xpos != std::string::npos) {
+                        w = std::atoi(dims.substr(0, xpos).c_str());
+                        h = std::atoi(dims.substr(xpos + 1).c_str());
+                    }
+                    static constexpr std::pair<int, int> kAstcDims[] = {
+                        {4, 4},   {5, 4},   {5, 5},   {6, 5},  {6, 6},
+                        {8, 5},   {8, 6},   {8, 8},   {10, 5}, {10, 6},
+                        {10, 8},  {10, 10}, {12, 10}, {12, 12}};
+                    bool ok = false;
+                    for (auto [dw, dh] : kAstcDims) {
+                        if (w == dw && h == dh) { ok = true; break; }
+                    }
+                    if (!ok) {
+                        return std::unexpected{Error{
+                            ErrorCode::unsupported_mode,
+                            std::format("Invalid ASTC mode '{}': expected one of "
+                                        "astc-{{4x4, 5x4, 5x5, 6x5, 6x6, 8x5, 8x6, 8x8, "
+                                        "10x5, 10x6, 10x8, 10x10, 12x10, 12x12}}",
+                                        v)}};
+                    }
                     config.mode = amiga::Mode::astc;
+                    config.astc_block_w = w;
+                    config.astc_block_h = h;
+                }
                 else if (v == "png") {
                     // Benchmark-only path: emit indexed PNG-8 directly
                     // (no Amiga encoding). Used to compare our quantizer
@@ -2271,17 +2297,6 @@ Result<Config> parse_args(int argc, char* argv[]) {
                                                              "'srgb-mse' or 'oklab2' (default)",
                                                              config.etc2_metric)}};
                 }
-            } else if (arg == "--astc-block") {
-                // Format: WxH (e.g. 4x4, 6x6, 8x8, 12x12).
-                std::string v(val);
-                auto pos = v.find('x');
-                if (pos == std::string::npos) {
-                    return std::unexpected{Error{ErrorCode::unsupported_mode,
-                                                 std::format("Invalid --astc-block '{}': expected WxH",
-                                                             v)}};
-                }
-                config.astc_block_w = std::atoi(v.substr(0, pos).c_str());
-                config.astc_block_h = std::atoi(v.substr(pos + 1).c_str());
             } else if (arg == "--astc-quality") {
                 config.astc_quality = std::strtof(std::string(val).c_str(), nullptr);
                 if (config.astc_quality < 0.f) config.astc_quality = 0.f;
@@ -6601,7 +6616,7 @@ int run_astc(Config cfg) {
     auto vkf = astc_vkformat_for(cfg.astc_block_w, cfg.astc_block_h);
     if (vkf == ktx2::VkFormat::etc2_r8g8b8_srgb_block) {
         std::println(stderr,
-                     "Error: --astc-block {}x{} is not a valid ASTC LDR 2D footprint",
+                     "Error: ASTC footprint {}x{} is not a valid LDR 2D footprint",
                      cfg.astc_block_w, cfg.astc_block_h);
         return exit_code::usage;
     }
