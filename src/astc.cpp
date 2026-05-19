@@ -60,6 +60,9 @@ constexpr int kBlockH = 4;
 // → bits 0..1 = 10, bit 4 = 0).
 [[maybe_unused]] constexpr std::uint32_t kBlockModeRgb5x5  = 0xE2;
 [[maybe_unused]] constexpr std::uint32_t kBlockModeRgb6x5  = 0x162;
+// 5x3 grid QUANT_8 weights — used as a decim option for 8x5 / 10x5
+// (15 weights, 45 weight bits, leaves QUANT_256 endpoints).
+[[maybe_unused]] constexpr std::uint32_t kBlockModeRgb5x3  = 0x0B3;
 // QUANT_2 weight footprints (binary, 1bpw). 6x6: 36w×1=36; 8x5: 40w;
 // 8x6: 48w. Quality is expected to suffer — block reduces to "snap each
 // pixel to one of two endpoints" — but the bit-budget supports
@@ -2153,19 +2156,22 @@ EncodeResult encode_image(std::span<const std::uint8_t> rgba_srgb8,
                     6, 5, kBlockModeRgb6x5, 4, M>());
         if (W == 10 && H == 5)
             return encode_image_impl<10, 5>(rgba_srgb8, image_w, image_h, options,
-                make_encode_fn_decim2<10, 5,
+                make_encode_fn_decim3<10, 5,
                     5, 4, kBlockModeRgb5x4, 8,
-                    4, 4, kBlockModeRgb4x4, 8, M>());
+                    4, 4, kBlockModeRgb4x4, 8,
+                    5, 5, kBlockModeRgb5x5, 4, M>());
         if (W == 10 && H == 6)
             return encode_image_impl<10, 6>(rgba_srgb8, image_w, image_h, options,
-                make_encode_fn_decim2<10, 6,
+                make_encode_fn_decim3<10, 6,
                     5, 5, kBlockModeRgb5x5, 4,
-                    4, 4, kBlockModeRgb4x4, 8, M>());
+                    4, 4, kBlockModeRgb4x4, 8,
+                    5, 4, kBlockModeRgb5x4, 8, M>());
         if (W == 10 && H == 8)
             return encode_image_impl<10, 8>(rgba_srgb8, image_w, image_h, options,
-                make_encode_fn_decim2<10, 8,
+                make_encode_fn_decim3<10, 8,
                     5, 5, kBlockModeRgb5x5, 4,
-                    4, 4, kBlockModeRgb4x4, 8, M>());
+                    4, 4, kBlockModeRgb4x4, 8,
+                    5, 4, kBlockModeRgb5x4, 8, M>());
         if (W == 10 && H == 10)
             return encode_image_impl<10, 10>(rgba_srgb8, image_w, image_h, options,
                 make_encode_fn_decim3<10, 10,
@@ -2177,13 +2183,13 @@ EncodeResult encode_image(std::span<const std::uint8_t> rgba_srgb8,
                 make_encode_fn_decim3<12, 10,
                     6, 5, kBlockModeRgb6x5, 4,
                     4, 4, kBlockModeRgb4x4, 8,
-                    5, 5, kBlockModeRgb5x5, 4, M>());
+                    5, 4, kBlockModeRgb5x4, 8, M>());
         if (W == 12 && H == 12)
             return encode_image_impl<12, 12>(rgba_srgb8, image_w, image_h, options,
                 make_encode_fn_decim3<12, 12,
                     6, 5, kBlockModeRgb6x5, 4,
                     4, 4, kBlockModeRgb4x4, 8,
-                    5, 5, kBlockModeRgb5x5, 4, M>());
+                    5, 4, kBlockModeRgb5x4, 8, M>());
         return EncodeResult{};  // unsupported footprint
     };
 
