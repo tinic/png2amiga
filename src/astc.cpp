@@ -51,16 +51,36 @@ namespace {
 constexpr int kBlockW = 4;
 constexpr int kBlockH = 4;
 
-// Fixed-block-mode encoding constants.
-constexpr std::uint32_t kBlockMode = 0x53;        // see header table
-constexpr int kWeightLevels = 8;                  // QUANT_8 (3-bit, straight)
+// Two fixed block modes are used per block:
+//
+//   RGB-only blocks (alpha = 255 everywhere):
+//     block_mode = 0x53,   CEM = 8  (LDR RGB direct, 6 endpoint values)
+//     weights = QUANT_8 (3-bit, 8 levels, 48 weight bits)
+//     endpoints = QUANT_256 (8-bit straight, 6 × 8 = 48 endpoint bits)
+//
+//   RGBA blocks (any non-trivial alpha):
+//     block_mode = 0x42,   CEM = 12 (LDR RGBA direct, 8 endpoint values)
+//     weights = QUANT_4 (2-bit, 4 levels, 32 weight bits)
+//     endpoints = QUANT_256 (8-bit straight, 8 × 8 = 64 endpoint bits)
+//
+// Both quant levels have identity scramble maps (power-of-2 ranges so
+// no trit/quint BISE encoding required).
+constexpr std::uint32_t kBlockModeRgb  = 0x53;   // QUANT_8 weights, 4x4 grid
+constexpr std::uint32_t kBlockModeRgba = 0x42;   // QUANT_4 weights, 4x4 grid
 
-// Pre-computed 3-bit weight ramp scaled to the canonical 0..64 range
-// used in the ASTC paint formula `(64-w)*e0 + w*e1`. The ASTC spec
-// rounds these to specific values per quant table; for QUANT_8 the
-// "scrambled" map is identity (no trit/quint packing), so the simple
-// linear mapping below matches the spec exactly.
-constexpr int kWeightToInterp[kWeightLevels] = {0, 9, 18, 27, 37, 46, 55, 64};
+constexpr int kWeightLevels8 = 8;
+constexpr int kWeightLevels4 = 4;
+
+// Pre-computed weight ramps scaled to the canonical 0..64 range used
+// in the ASTC paint formula `((64-w)*e0 + w*e1) / 64`. Per ASTC §16:
+//   QUANT_8 = {0, 9, 18, 27, 37, 46, 55, 64}     (table row above kBlockMode)
+//   QUANT_4 = {0, 21, 43, 64}
+constexpr int kWeightToInterp8[kWeightLevels8] = {0, 9, 18, 27, 37, 46, 55, 64};
+constexpr int kWeightToInterp4[kWeightLevels4] = {0, 21, 43, 64};
+
+// Legacy alias for phase-1 RGB path.
+constexpr int kWeightLevels = kWeightLevels8;
+constexpr const int* kWeightToInterp = kWeightToInterp8;
 
 // Sample16 — same shape as bc7.cpp. Holds source RGBA8 + per-pixel
 // OKLab values for fast scoring.
@@ -165,7 +185,7 @@ float pick_weights(const Sample16& s,
                    const std::uint8_t e0[3],
                    const std::uint8_t e1[3],
                    std::uint8_t out_w[16],
-                   std::uint8_t decoded[16][3]) {
+                   std::uint8_t decoded[16][4]) {
     std::uint8_t paint[kWeightLevels][3];
     for (int w_i = 0; w_i < kWeightLevels; ++w_i) {
         int w = kWeightToInterp[w_i];
@@ -223,6 +243,7 @@ float pick_weights(const Sample16& s,
         decoded[p][0] = paint[best][0];
         decoded[p][1] = paint[best][1];
         decoded[p][2] = paint[best][2];
+        decoded[p][3] = 255;
         tot += best_e;
     }
     if constexpr (M == block_compress::BlockMetric::srgb_mse) {
@@ -329,7 +350,7 @@ void pack_block(const std::uint8_t e0[3], const std::uint8_t e1[3],
     // section ends at bit 64; bits 65..79 are unused. The weight area
     // (bits 80..127) was prepopulated above and is not overwritten by
     // these write_bits calls (max offset = 17 + 47 = 64).
-    write_bits(kBlockMode, 11, 0, pcb);
+    write_bits(kBlockModeRgb, 11, 0, pcb);
     write_bits(0, 2, 11, pcb);  // partition_count - 1
     write_bits(8, 4, 13, pcb);  // CEM = LDR RGB direct
 
@@ -346,18 +367,227 @@ void pack_block(const std::uint8_t e0[3], const std::uint8_t e1[3],
     for (std::size_t i = 0; i < kBlockBytes; ++i) out[i] = pcb[i];
 }
 
+// Pack one 4×4 RGBA block (CEM 12 = LDR RGBA direct):
+//   - 11-bit block mode = 0x42 (QUANT_4 weights, 4×4 grid)
+//   - 2-bit partition count - 1 = 0
+//   - 4-bit CEM = 12 (LDR RGBA direct, 8 endpoint values)
+//   - 64-bit endpoint BISE (8 × straight-8-bit, QUANT_256, identity scramble)
+//   - 32-bit weight BISE (16 × straight-2-bit, QUANT_4) bit-reversed at top
+void pack_block_rgba(const std::uint8_t e0[4], const std::uint8_t e1[4],
+                     const std::uint8_t weights[16], Block& out) {
+    std::uint8_t pcb[16] = {};
+
+    // Weights: 16 × 2 bits = 32 bits at the top of the block, bit-reversed
+    // per byte per ASTC §16.7.
+    std::uint8_t weightbuf[16] = {};
+    for (int i = 0; i < 16; ++i) {
+        write_bits(std::uint32_t(weights[i] & 0x3), 2, i * 2, weightbuf);
+    }
+    for (int i = 0; i < 16; ++i) {
+        pcb[i] = bitrev8(weightbuf[15 - i]);
+    }
+
+    write_bits(kBlockModeRgba, 11, 0, pcb);
+    write_bits(0, 2, 11, pcb);   // partition_count - 1
+    write_bits(12, 4, 13, pcb);  // CEM = LDR RGBA direct
+
+    // Endpoint order for CEM 12 (LDR RGBA direct):
+    //   r0, r1, g0, g1, b0, b1, a0, a1
+    // Each 8 bits straight (QUANT_256, identity scramble).
+    const std::uint8_t ep[8] = {e0[0], e1[0], e0[1], e1[1],
+                                e0[2], e1[2], e0[3], e1[3]};
+    int off = 17;
+    for (int i = 0; i < 8; ++i) {
+        write_bits(std::uint32_t(ep[i]), 8, off, pcb);
+        off += 8;
+    }
+
+    for (std::size_t i = 0; i < kBlockBytes; ++i) out[i] = pcb[i];
+}
+
 // ---------------------------------------------------------------------------
 // Per-block encoder (BC7 Mode 6 shape, hardcoded ASTC block mode).
 // ---------------------------------------------------------------------------
 
 struct Candidate {
     Block block{};
-    std::uint8_t decoded[16][3]{};
+    std::uint8_t decoded[16][4]{};  // RGBA — alpha=255 for CEM 8 outputs
     float err{};
 };
 
+// ---------------------------------------------------------------------------
+// RGBA path (CEM 12): 4-level weights × 4 channels.
+// ---------------------------------------------------------------------------
+
 template <block_compress::BlockMetric M>
-Candidate encode_block(const Sample16& s) {
+float pick_weights_q4_rgba(const Sample16& s,
+                           const std::uint8_t e0[4],
+                           const std::uint8_t e1[4],
+                           std::uint8_t out_w[16],
+                           std::uint8_t decoded[16][4]) {
+    std::uint8_t paint[kWeightLevels4][4];
+    for (int w_i = 0; w_i < kWeightLevels4; ++w_i) {
+        int w = kWeightToInterp4[w_i];
+        int inv = 64 - w;
+        for (int ch = 0; ch < 4; ++ch) {
+            paint[w_i][ch] =
+                std::uint8_t((inv * int(e0[ch]) + w * int(e1[ch]) + 32) >> 6);
+        }
+    }
+    alignas(16) float paint_L[kWeightLevels4], paint_A[kWeightLevels4], paint_B[kWeightLevels4];
+    if constexpr (M == block_compress::BlockMetric::oklab2) {
+        std::uint8_t rgb4[4][3];
+        for (int j = 0; j < 4; ++j) {
+            rgb4[j][0] = paint[j][0];
+            rgb4[j][1] = paint[j][1];
+            rgb4[j][2] = paint[j][2];
+        }
+        auto labs = color_space::srgb8_to_oklab_batch4(rgb4);
+        for (int j = 0; j < 4; ++j) {
+            paint_L[j] = labs.labs[j].L;
+            paint_A[j] = labs.labs[j].a;
+            paint_B[j] = labs.labs[j].b;
+        }
+    }
+    float tot = 0.f;
+    for (int p = 0; p < 16; ++p) {
+        int best = 0;
+        float best_e = std::numeric_limits<float>::infinity();
+        int sa = int(s.alpha[p]);
+        if constexpr (M == block_compress::BlockMetric::srgb_mse) {
+            int sr = int(s.rgba8[p][0]);
+            int sg = int(s.rgba8[p][1]);
+            int sb = int(s.rgba8[p][2]);
+            for (int w_i = 0; w_i < kWeightLevels4; ++w_i) {
+                int dr = sr - int(paint[w_i][0]);
+                int dg = sg - int(paint[w_i][1]);
+                int db = sb - int(paint[w_i][2]);
+                int da = sa - int(paint[w_i][3]);
+                float e = float(dr * dr + dg * dg + db * db + da * da);
+                if (e < best_e) { best_e = e; best = w_i; }
+            }
+        } else {
+            float sL = s.lab[p].L, sA = s.lab[p].a, sB = s.lab[p].b;
+            for (int w_i = 0; w_i < kWeightLevels4; ++w_i) {
+                float dL = sL - paint_L[w_i];
+                float dA = sA - paint_A[w_i];
+                float dB = sB - paint_B[w_i];
+                float e = dL * dL + dA * dA + dB * dB;
+                float dAlpha = float(sa - int(paint[w_i][3])) * (1.f / 255.f);
+                e += dAlpha * dAlpha;
+                if (e < best_e) { best_e = e; best = w_i; }
+            }
+        }
+        out_w[p] = std::uint8_t(best);
+        decoded[p][0] = paint[best][0];
+        decoded[p][1] = paint[best][1];
+        decoded[p][2] = paint[best][2];
+        decoded[p][3] = paint[best][3];
+        tot += best_e;
+    }
+    if constexpr (M == block_compress::BlockMetric::srgb_mse) {
+        tot *= (1.f / 65536.f);
+    }
+    return tot;
+}
+
+// LSQ refit for 4-channel RGBA at QUANT_4 weights. Closed-form 2×2
+// normal-equation solve per channel.
+bool refit_endpoints_rgba_q4(const Sample16& s,
+                             const std::uint8_t w[16],
+                             std::uint8_t e0[4],
+                             std::uint8_t e1[4]) {
+    int n[kWeightLevels4] = {};
+    int sum[kWeightLevels4][4] = {};
+    for (int p = 0; p < 16; ++p) {
+        int k = w[p];
+        ++n[k];
+        sum[k][0] += s.rgba8[p][0];
+        sum[k][1] += s.rgba8[p][1];
+        sum[k][2] += s.rgba8[p][2];
+        sum[k][3] += int(s.alpha[p]);
+    }
+    float A00 = 0, A11 = 0, A01 = 0;
+    float B[4] = {0, 0, 0, 0}, Bb[4] = {0, 0, 0, 0};
+    for (int k = 0; k < kWeightLevels4; ++k) {
+        if (n[k] == 0) continue;
+        float w1 = float(kWeightToInterp4[k]) * (1.f / 64.f);
+        float w0 = 1.f - w1;
+        float nk = float(n[k]);
+        A00 += nk * w0 * w0;
+        A11 += nk * w1 * w1;
+        A01 += nk * w0 * w1;
+        for (int ch = 0; ch < 4; ++ch) {
+            B[ch] += w0 * float(sum[k][ch]);
+            Bb[ch] += w1 * float(sum[k][ch]);
+        }
+    }
+    float det = A00 * A11 - A01 * A01;
+    if (std::abs(det) < 1e-6f) return false;
+    float inv = 1.f / det;
+    for (int ch = 0; ch < 4; ++ch) {
+        float c0 = (A11 * B[ch] - A01 * Bb[ch]) * inv;
+        float c1 = (-A01 * B[ch] + A00 * Bb[ch]) * inv;
+        e0[ch] = std::uint8_t(std::clamp(int(std::lround(c0)), 0, 255));
+        e1[ch] = std::uint8_t(std::clamp(int(std::lround(c1)), 0, 255));
+    }
+    return true;
+}
+
+template <block_compress::BlockMetric M>
+Candidate encode_block_rgba(const Sample16& s) {
+    Candidate out{};
+
+    // PCA seed in OKLab for RGB; alpha endpoints from min/max.
+    std::uint8_t e0[4], e1[4];
+    pca_seed_rgb(s, e0, e1);
+    int amin = 255, amax = 0;
+    for (int i = 0; i < 16; ++i) {
+        int a = int(s.alpha[i]);
+        if (a < amin) amin = a;
+        if (a > amax) amax = a;
+    }
+    e0[3] = std::uint8_t(amin);
+    e1[3] = std::uint8_t(amax);
+
+    std::uint8_t weights[16];
+    float err = pick_weights_q4_rgba<M>(s, e0, e1, weights, out.decoded);
+
+    for (int it = 0; it < 4; ++it) {
+        std::uint8_t ne0[4], ne1[4];
+        if (!refit_endpoints_rgba_q4(s, weights, ne0, ne1)) break;
+        std::uint8_t new_w[16];
+        std::uint8_t new_dec[16][4];
+        float new_err = pick_weights_q4_rgba<M>(s, ne0, ne1, new_w, new_dec);
+        if (new_err >= err - 1e-7f) break;
+        err = new_err;
+        std::memcpy(e0, ne0, 4);
+        std::memcpy(e1, ne1, 4);
+        std::memcpy(weights, new_w, 16);
+        std::memcpy(out.decoded, new_dec, sizeof(new_dec));
+    }
+
+    // Blue-contract sum-normalisation (rgba_unpack applies the same swap
+    // rule as rgb_unpack — RGB sum only, not including alpha). Complement
+    // weights w → 3 - w (QUANT_4 ramp satisfies kWeightToInterp4[s] +
+    // kWeightToInterp4[3-s] == 64).
+    int s0 = int(e0[0]) + int(e0[1]) + int(e0[2]);
+    int s1 = int(e1[0]) + int(e1[1]) + int(e1[2]);
+    if (s0 > s1) {
+        std::swap(e0[0], e1[0]);
+        std::swap(e0[1], e1[1]);
+        std::swap(e0[2], e1[2]);
+        std::swap(e0[3], e1[3]);
+        for (int i = 0; i < 16; ++i) weights[i] = std::uint8_t(3 - int(weights[i]));
+    }
+
+    pack_block_rgba(e0, e1, weights, out.block);
+    out.err = err;
+    return out;
+}
+
+template <block_compress::BlockMetric M>
+Candidate encode_block_rgb(const Sample16& s) {
     Candidate out{};
 
     // 1. PCA seed.
@@ -373,7 +603,7 @@ Candidate encode_block(const Sample16& s) {
         std::uint8_t ne0[3], ne1[3];
         if (!refit_endpoints(s, weights, ne0, ne1)) break;
         std::uint8_t new_w[16];
-        std::uint8_t new_dec[16][3];
+        std::uint8_t new_dec[16][4];
         float new_err = pick_weights<M>(s, ne0, ne1, new_w, new_dec);
         if (new_err >= err - 1e-7f) break;
         err = new_err;
@@ -403,6 +633,20 @@ Candidate encode_block(const Sample16& s) {
     pack_block(e0, e1, weights, out.block);
     out.err = err;
     return out;
+}
+
+// Per-block dispatch: blocks whose alpha is constant 255 use the
+// QUANT_8-weight RGB-direct path (CEM 8, 3-bit weights for sharper
+// gradients). Blocks with any non-trivial alpha use the QUANT_4-weight
+// RGBA-direct path (CEM 12). Both paths land in the same stream — ASTC
+// allows mixing block modes / CEMs per block.
+template <block_compress::BlockMetric M>
+Candidate encode_block(const Sample16& s) {
+    bool any_alpha = false;
+    for (int i = 0; i < 16; ++i) {
+        if (s.alpha[i] != 255) { any_alpha = true; break; }
+    }
+    return any_alpha ? encode_block_rgba<M>(s) : encode_block_rgb<M>(s);
 }
 
 }  // namespace
