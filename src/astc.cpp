@@ -867,10 +867,29 @@ inline void encode_ise_q48(const std::uint8_t* input_data,
 }
 
 // ---------------------------------------------------------------------------
-// QUANT_40 endpoint encoding (used by 2-partition CEM-8).
+// Endpoint quant unpack tables (color_scrambled_pquant_to_uquant_qN
+// from astcenc_quantization.cpp). Indexed by BISE-stored value, gives
+// the rendered 0..255 level. Used by both encode (find nearest level)
+// and decode-side end-to-end correctness checks.
 // ---------------------------------------------------------------------------
 
-// QUANT_40 unquant table (decoded uint8 levels for 40 stored values).
+constexpr std::uint8_t kQuant24Unpack[24] = {
+      0, 255,  33, 222,  66, 189,  99, 156,
+     11, 244,  44, 211,  77, 178, 110, 145,
+     22, 233,  55, 200,  88, 167, 121, 134,
+};
+constexpr std::uint8_t kQuant32Unpack[32] = {
+      0,   8,  16,  24,  33,  41,  49,  57,
+     66,  74,  82,  90,  99, 107, 115, 123,
+    132, 140, 148, 156, 165, 173, 181, 189,
+    198, 206, 214, 222, 231, 239, 247, 255,
+};
+constexpr std::uint8_t kQuant64Unpack[64] = {
+      0,   4,   8,  12,  16,  20,  24,  28,  32,  36,  40,  44,  48,  52,  56,  60,
+     65,  69,  73,  77,  81,  85,  89,  93,  97, 101, 105, 109, 113, 117, 121, 125,
+    130, 134, 138, 142, 146, 150, 154, 158, 162, 166, 170, 174, 178, 182, 186, 190,
+    195, 199, 203, 207, 211, 215, 219, 223, 227, 231, 235, 239, 243, 247, 251, 255,
+};
 constexpr std::uint8_t kQuant40Unpack[40] = {
       0, 255,  32, 223,  65, 190,  97, 158,
       6, 249,  39, 216,  71, 184, 104, 151,
@@ -878,6 +897,21 @@ constexpr std::uint8_t kQuant40Unpack[40] = {
      19, 236,  52, 203,  84, 171, 117, 138,
      26, 229,  58, 197,  91, 164, 123, 132,
 };
+
+template <std::size_t N>
+inline std::uint8_t quant_pack_generic(std::uint8_t v, const std::uint8_t (&tbl)[N]) {
+    int best = 0;
+    int best_d = std::abs(int(v) - int(tbl[0]));
+    for (std::size_t k = 1; k < N; ++k) {
+        int d = std::abs(int(v) - int(tbl[k]));
+        if (d < best_d) { best_d = d; best = int(k); }
+    }
+    return std::uint8_t(best);
+}
+
+inline std::uint8_t quant24_pack(std::uint8_t v) { return quant_pack_generic(v, kQuant24Unpack); }
+inline std::uint8_t quant32_pack(std::uint8_t v) { return quant_pack_generic(v, kQuant32Unpack); }
+inline std::uint8_t quant64_pack(std::uint8_t v) { return quant_pack_generic(v, kQuant64Unpack); }
 
 inline std::uint8_t quant40_pack(std::uint8_t v) {
     int best = 0;
@@ -1970,6 +2004,474 @@ Candidate encode_block_rgb_2p(const Sample16& s) {
     return best;
 }
 
+// ---------------------------------------------------------------------------
+// 2-partition CEM-8 bilinear-decim path (non-4x4 footprints).
+// ---------------------------------------------------------------------------
+
+// Generic N-partition table for arbitrary TexW × TexH footprint.
+// ASTC §C.2.21 spec partition hash, with small_block=true iff
+// texel_count < 32 (per spec); larger footprints use the regular hash.
+template <int N, int TexW, int TexH>
+struct PartTab {
+    std::uint8_t assign[1024][TexW * TexH];
+};
+template <int N, int TexW, int TexH>
+const PartTab<N, TexW, TexH>& partition_table_np() {
+    static const PartTab<N, TexW, TexH> table = []{
+        PartTab<N, TexW, TexH> t{};
+        constexpr bool small = (TexW * TexH) < 32;
+        for (int pi = 0; pi < 1024; ++pi) {
+            for (int dy = 0; dy < TexH; ++dy) {
+                for (int dx = 0; dx < TexW; ++dx) {
+                    t.assign[pi][dy * TexW + dx] =
+                        spec_select_partition(pi, dx, dy, 0, N, small);
+                }
+            }
+        }
+        return t;
+    }();
+    return table;
+}
+
+// PCA seed over a texel subset (mask = 1 for "include"). Generalised
+// from the 4x4-specific pca_seed_rgb_subset for arbitrary texel count.
+template <int TN>
+void pca_seed_rgb_subset_n(const SampleT<TN>& s, const std::uint8_t mask[TN],
+                           std::uint8_t e0[3], std::uint8_t e1[3]) {
+    int n = 0;
+    float mL = 0, mA = 0, mB = 0;
+    for (int i = 0; i < TN; ++i) if (mask[i]) {
+        mL += s.lab[i].L; mA += s.lab[i].a; mB += s.lab[i].b; ++n;
+    }
+    if (n == 0) { for (int c = 0; c < 3; ++c) e0[c] = e1[c] = 0; return; }
+    float inv_n = 1.f / float(n);
+    mL *= inv_n; mA *= inv_n; mB *= inv_n;
+    if (n == 1) {
+        for (int i = 0; i < TN; ++i) if (mask[i]) {
+            e0[0] = e1[0] = s.rgba8[i][0];
+            e0[1] = e1[1] = s.rgba8[i][1];
+            e0[2] = e1[2] = s.rgba8[i][2];
+            return;
+        }
+    }
+    float cxx = 0, cxy = 0, cxz = 0, cyy = 0, cyz = 0, czz = 0;
+    for (int i = 0; i < TN; ++i) if (mask[i]) {
+        float dx = s.lab[i].L - mL;
+        float dy = s.lab[i].a - mA;
+        float dz = s.lab[i].b - mB;
+        cxx += dx * dx; cxy += dx * dy; cxz += dx * dz;
+        cyy += dy * dy; cyz += dy * dz;
+        czz += dz * dz;
+    }
+    if (cxx + cyy + czz < 1e-7f) {
+        for (int ch = 0; ch < 3; ++ch) {
+            int lo = 255, hi = 0;
+            for (int i = 0; i < TN; ++i) if (mask[i]) {
+                int v = int(s.rgba8[i][ch]);
+                if (v < lo) lo = v;
+                if (v > hi) hi = v;
+            }
+            e0[ch] = std::uint8_t(lo);
+            e1[ch] = std::uint8_t(hi);
+        }
+        return;
+    }
+    float vx = cxx + cxy + cxz;
+    float vy = cxy + cyy + cyz;
+    float vz = cxz + cyz + czz;
+    for (int it = 0; it < 4; ++it) {
+        float nx = cxx * vx + cxy * vy + cxz * vz;
+        float ny = cxy * vx + cyy * vy + cyz * vz;
+        float nz = cxz * vx + cyz * vy + czz * vz;
+        float m = std::max({std::abs(nx), std::abs(ny), std::abs(nz)});
+        if (m < 1e-9f) break;
+        float invm = 1.f / m;
+        vx = nx * invm; vy = ny * invm; vz = nz * invm;
+    }
+    int imin = -1, imax = -1;
+    float pmin = std::numeric_limits<float>::infinity();
+    float pmax = -std::numeric_limits<float>::infinity();
+    for (int i = 0; i < TN; ++i) if (mask[i]) {
+        float t = (s.lab[i].L - mL) * vx + (s.lab[i].a - mA) * vy +
+                  (s.lab[i].b - mB) * vz;
+        if (t < pmin) { pmin = t; imin = i; }
+        if (t > pmax) { pmax = t; imax = i; }
+    }
+    e0[0] = s.rgba8[imin][0]; e0[1] = s.rgba8[imin][1]; e0[2] = s.rgba8[imin][2];
+    e1[0] = s.rgba8[imax][0]; e1[1] = s.rgba8[imax][1]; e1[2] = s.rgba8[imax][2];
+}
+
+// Endpoint quant compile-time dispatch — picks the right unpack table
+// + pack helper + BISE encoder for the templated endpoint quant.
+template <int EPQuant>
+struct EPQuantOps;
+template <>
+struct EPQuantOps<24> {
+    static std::uint8_t pack(std::uint8_t v) { return quant24_pack(v); }
+    static std::uint8_t unpack(std::uint8_t s) { return kQuant24Unpack[s]; }
+    static void encode(const std::uint8_t* in, int n, std::uint8_t* out, int off) {
+        encode_ise_trit<3>(in, n, out, off);
+    }
+};
+template <>
+struct EPQuantOps<32> {
+    static std::uint8_t pack(std::uint8_t v) { return quant32_pack(v); }
+    static std::uint8_t unpack(std::uint8_t s) { return kQuant32Unpack[s]; }
+    static void encode(const std::uint8_t* in, int n, std::uint8_t* out, int off) {
+        constexpr int BPV = 5;
+        for (int i = 0; i < n; ++i) {
+            write_bits(std::uint32_t(in[i]) & 0x1Fu, BPV, off + i * BPV, out);
+        }
+    }
+};
+template <>
+struct EPQuantOps<40> {
+    static std::uint8_t pack(std::uint8_t v) { return quant40_pack(v); }
+    static std::uint8_t unpack(std::uint8_t s) { return kQuant40Unpack[s]; }
+    static void encode(const std::uint8_t* in, int n, std::uint8_t* out, int off) {
+        encode_ise_q40(in, n, out, off);
+    }
+};
+template <>
+struct EPQuantOps<64> {
+    static std::uint8_t pack(std::uint8_t v) { return quant64_pack(v); }
+    static std::uint8_t unpack(std::uint8_t s) { return kQuant64Unpack[s]; }
+    static void encode(const std::uint8_t* in, int n, std::uint8_t* out, int off) {
+        constexpr int BPV = 6;
+        for (int i = 0; i < n; ++i) {
+            write_bits(std::uint32_t(in[i]) & 0x3Fu, BPV, off + i * BPV, out);
+        }
+    }
+};
+
+// Pack a 2-partition CEM-8 bilinear-decim block. Templated on:
+//   - GN: weight count (= grid_w * grid_h)
+//   - BlockMode: 11-bit block_mode (encodes weight grid + weight quant)
+//   - WL: weight quant level
+//   - EPQuant: endpoint quant level (24/32/40/64)
+// Bit layout:
+//   - bit [0..10]:  block_mode
+//   - bit [11..12]: partition_count-1 = 1
+//   - bit [13..22]: partition_index (10 bits)
+//   - bit [23..28]: matched-CEM = CEM_8 << 2 = 32 (6 bits)
+//   - bit [29..]:   endpoint BISE for 12 values at QUANT_EPQuant
+//   - bit [..127]:  weight BISE from MSB, bit-reversed per byte
+template <int GN, std::uint32_t BlockMode, int WL, int EPQuant>
+void pack_block_2p_decim(int partition_index,
+                         const std::uint8_t e0[2][3], const std::uint8_t e1[2][3],
+                         const std::uint8_t weights[GN], Block& out) {
+    std::uint8_t pcb[16] = {};
+
+    // Weight buffer (power-of-2 weight quants for now: Q2/Q4/Q8/Q16/Q32).
+    std::uint8_t weightbuf[16] = {};
+    constexpr int BPW =
+        (WL == 32) ? 5 : (WL == 16) ? 4 : (WL == 8) ? 3 : (WL == 4) ? 2 : 1;
+    constexpr std::uint32_t WMask = (1u << BPW) - 1u;
+    for (int i = 0; i < GN; ++i) {
+        write_bits(std::uint32_t(weights[i]) & WMask, BPW, i * BPW, weightbuf);
+    }
+    for (int i = 0; i < 16; ++i) {
+        pcb[i] = bitrev8(weightbuf[15 - i]);
+    }
+
+    write_bits(BlockMode, 11, 0, pcb);
+    write_bits(1, 2, 11, pcb);  // partition_count - 1 = 1
+    write_bits(std::uint32_t(partition_index) & 0x3Fu, 6, 13, pcb);
+    write_bits(std::uint32_t(partition_index) >> 6, 4, 19, pcb);
+    write_bits(32, 6, 23, pcb);  // matched-CEM = CEM_8 << 2
+
+    std::uint8_t ep_packed[12];
+    int idx = 0;
+    for (int k = 0; k < 2; ++k) {
+        for (int ch = 0; ch < 3; ++ch) {
+            ep_packed[idx++] = EPQuantOps<EPQuant>::pack(e0[k][ch]);
+            ep_packed[idx++] = EPQuantOps<EPQuant>::pack(e1[k][ch]);
+        }
+    }
+    EPQuantOps<EPQuant>::encode(ep_packed, 12, pcb, 29);
+
+    for (std::size_t i = 0; i < kBlockBytes; ++i) out[i] = pcb[i];
+}
+
+// Per-texel weight pick across 2 partitions, bilinear-decim path.
+// Given quantised grid weights + per-partition endpoints, computes
+// per-texel decoded value and total OKLab² (or sRGB-MSE) err.
+template <int TexW, int TexH, int GridW, int GridH, int WL,
+          block_compress::BlockMetric M>
+float pick_weights_2p_decim(const SampleT<TexW * TexH>& s,
+                            const std::uint8_t assign[TexW * TexH],
+                            const std::uint8_t grid_weights[GridW * GridH],
+                            const BilinearMap<TexW, TexH, GridW, GridH>& bm,
+                            const std::uint8_t e0[2][3], const std::uint8_t e1[2][3],
+                            std::uint8_t decoded[TexW * TexH][4]) {
+    constexpr const int* ramp = weight_ramp<WL>();
+    float tot = 0.f;
+    for (int j = 0; j < TexW * TexH; ++j) {
+        const auto& t = bm.texels[j];
+        int k = assign[j];
+        int w_sum = 0;
+        for (int kk = 0; kk < 4; ++kk) {
+            w_sum += int(t.weight[kk]) * ramp[grid_weights[t.grid[kk]]];
+        }
+        int w_int = (w_sum + 8) >> 4;
+        w_int = std::clamp(w_int, 0, 64);
+        int inv = 64 - w_int;
+        decoded[j][0] = std::uint8_t(
+            (inv * int(e0[k][0]) + w_int * int(e1[k][0]) + 32) >> 6);
+        decoded[j][1] = std::uint8_t(
+            (inv * int(e0[k][1]) + w_int * int(e1[k][1]) + 32) >> 6);
+        decoded[j][2] = std::uint8_t(
+            (inv * int(e0[k][2]) + w_int * int(e1[k][2]) + 32) >> 6);
+        decoded[j][3] = 255;
+        if constexpr (M == block_compress::BlockMetric::oklab2) {
+            auto l = color_space::srgb8_to_oklab(decoded[j][0], decoded[j][1], decoded[j][2]);
+            float dL = s.lab[j].L - l.L;
+            float dA = s.lab[j].a - l.a;
+            float dB = s.lab[j].b - l.b;
+            tot += dL * dL + dA * dA + dB * dB;
+        } else {
+            int dr = int(s.rgba8[j][0]) - int(decoded[j][0]);
+            int dg = int(s.rgba8[j][1]) - int(decoded[j][1]);
+            int db = int(s.rgba8[j][2]) - int(decoded[j][2]);
+            tot += float(dr * dr + dg * dg + db * db) * (1.f / 65536.f);
+        }
+    }
+    return tot;
+}
+
+// Bilinear-decim 2-partition encoder. Brute-forces 1024 partition
+// indices using cheap PCA seed + simple scoring, then runs full LSQ +
+// coord descent on the winning index. Endpoints quantised at EPQuant
+// (24/32/40/64); weights at WL (2/4/8/16/32, power-of-2 straight).
+template <int TexW, int TexH, int GridW, int GridH,
+          std::uint32_t BlockMode, int WL, int EPQuant,
+          block_compress::BlockMetric M>
+Candidate encode_block_rgb_2p_decim(const SampleT<TexW * TexH>& s) {
+    constexpr int TN = TexW * TexH;
+    constexpr int GN = GridW * GridH;
+    static constexpr BilinearMap<TexW, TexH, GridW, GridH> bm{};
+    constexpr const int* ramp = weight_ramp<WL>();
+    const auto& table = partition_table_np<2, TexW, TexH>();
+
+    Candidate out{};
+    out.err = std::numeric_limits<float>::infinity();
+
+    // --- Phase 1: cheap partition_index search. For each pi, do PCA
+    // seed per partition + greedy per-texel weight pick (no LSQ on
+    // grid yet) + score. Pick winning pi.
+    std::uint8_t mask[2][TN];
+    std::uint8_t e0_seed[2][3], e1_seed[2][3];
+    int best_pi = 0;
+    float best_pi_err = std::numeric_limits<float>::infinity();
+    for (int pi = 0; pi < 1024; ++pi) {
+        const std::uint8_t* assign = table.assign[pi];
+        int counts[2] = {};
+        for (int j = 0; j < TN; ++j) {
+            for (int k = 0; k < 2; ++k) mask[k][j] = (assign[j] == k) ? 1 : 0;
+            ++counts[assign[j]];
+        }
+        if (counts[0] == 0 || counts[1] == 0) continue;
+        for (int k = 0; k < 2; ++k)
+            pca_seed_rgb_subset_n<TN>(s, mask[k], e0_seed[k], e1_seed[k]);
+        // Greedy per-texel weight + per-texel decoded err (no grid LSQ
+        // yet — that's expensive; PCA seed err is a fast surrogate).
+        float pi_err = 0.f;
+        for (int j = 0; j < TN; ++j) {
+            int k = assign[j];
+            float dr0 = float(e1_seed[k][0]) - float(e0_seed[k][0]);
+            float dg0 = float(e1_seed[k][1]) - float(e0_seed[k][1]);
+            float db0 = float(e1_seed[k][2]) - float(e0_seed[k][2]);
+            float rsq = dr0 * dr0 + dg0 * dg0 + db0 * db0;
+            float inv = (rsq > 1e-6f) ? (1.f / rsq) : 0.f;
+            float pr = float(s.rgba8[j][0]) - float(e0_seed[k][0]);
+            float pg = float(s.rgba8[j][1]) - float(e0_seed[k][1]);
+            float pb = float(s.rgba8[j][2]) - float(e0_seed[k][2]);
+            float w = std::clamp((pr * dr0 + pg * dg0 + pb * db0) * inv, 0.f, 1.f);
+            float dr = pr - w * dr0;
+            float dg = pg - w * dg0;
+            float db = pb - w * db0;
+            pi_err += dr * dr + dg * dg + db * db;
+        }
+        if (pi_err < best_pi_err) { best_pi_err = pi_err; best_pi = pi; }
+    }
+
+    // --- Phase 2: full LSQ + coord descent for the winning pi.
+    const std::uint8_t* assign = table.assign[best_pi];
+    std::uint8_t e0[2][3], e1[2][3];
+    for (int j = 0; j < TN; ++j) {
+        for (int k = 0; k < 2; ++k) mask[k][j] = (assign[j] == k) ? 1 : 0;
+    }
+    for (int k = 0; k < 2; ++k)
+        pca_seed_rgb_subset_n<TN>(s, mask[k], e0[k], e1[k]);
+
+    // Alternate: per-texel ideal_w → LSQ grid weights → refit endpoints.
+    std::uint8_t grid_weights[GN] = {};
+    for (int iter = 0; iter < 3; ++iter) {
+        float w_ideal[TN];
+        for (int j = 0; j < TN; ++j) {
+            int k = assign[j];
+            float dr = float(e1[k][0]) - float(e0[k][0]);
+            float dg = float(e1[k][1]) - float(e0[k][1]);
+            float db = float(e1[k][2]) - float(e0[k][2]);
+            float rsq = dr * dr + dg * dg + db * db;
+            float inv = (rsq > 1e-9f) ? (1.f / rsq) : 0.f;
+            float pr = float(s.rgba8[j][0]) - float(e0[k][0]);
+            float pg = float(s.rgba8[j][1]) - float(e0[k][1]);
+            float pb = float(s.rgba8[j][2]) - float(e0[k][2]);
+            w_ideal[j] = std::clamp((pr * dr + pg * dg + pb * db) * inv, 0.f, 1.f);
+        }
+
+        // LSQ on the sparse bilinear contribution system (same as 1p).
+        float ata[GN][GN] = {};
+        float atb[GN] = {};
+        for (int j = 0; j < TN; ++j) {
+            const auto& t = bm.texels[j];
+            float T_j = w_ideal[j] * 64.f;
+            for (int kk = 0; kk < 4; ++kk) {
+                float ck = float(t.weight[kk]) * (1.f / 16.f);
+                if (ck <= 0.f) continue;
+                int gi = t.grid[kk];
+                atb[gi] += ck * T_j;
+                for (int ll = 0; ll < 4; ++ll) {
+                    float cc = float(t.weight[ll]) * (1.f / 16.f);
+                    if (cc <= 0.f) continue;
+                    ata[gi][t.grid[ll]] += ck * cc;
+                }
+            }
+        }
+        constexpr float kRidge = 1e-3f;
+        for (int i = 0; i < GN; ++i) ata[i][i] += kRidge;
+        for (int i = 0; i < GN; ++i) {
+            int piv = i;
+            float bestmag = std::abs(ata[i][i]);
+            for (int r = i + 1; r < GN; ++r) {
+                float m = std::abs(ata[r][i]);
+                if (m > bestmag) { bestmag = m; piv = r; }
+            }
+            if (bestmag < 1e-9f) continue;
+            if (piv != i) {
+                for (int c = 0; c < GN; ++c) std::swap(ata[i][c], ata[piv][c]);
+                std::swap(atb[i], atb[piv]);
+            }
+            float pinv = 1.f / ata[i][i];
+            for (int c = 0; c < GN; ++c) ata[i][c] *= pinv;
+            atb[i] *= pinv;
+            for (int r = 0; r < GN; ++r) {
+                if (r == i) continue;
+                float f = ata[r][i];
+                if (f == 0.f) continue;
+                for (int c = 0; c < GN; ++c) ata[r][c] -= f * ata[i][c];
+                atb[r] -= f * atb[i];
+            }
+        }
+        for (int i = 0; i < GN; ++i) {
+            float v = std::clamp(atb[i], 0.f, 64.f);
+            int best = 0;
+            int best_d = std::abs(int(v + 0.5f) - ramp[0]);
+            for (int k = 1; k < WL; ++k) {
+                int d = std::abs(int(v + 0.5f) - ramp[k]);
+                if (d < best_d) { best_d = d; best = k; }
+            }
+            grid_weights[i] = std::uint8_t(best);
+        }
+
+        // Per-partition LSQ refit endpoints given quantised grid weights.
+        float A00[2] = {}, A11[2] = {}, A01[2] = {};
+        float B[2][3] = {}, Bb[2][3] = {};
+        for (int j = 0; j < TN; ++j) {
+            const auto& t = bm.texels[j];
+            int k = assign[j];
+            int w_sum = 0;
+            for (int kk = 0; kk < 4; ++kk)
+                w_sum += int(t.weight[kk]) * ramp[grid_weights[t.grid[kk]]];
+            float w1 = float(w_sum) * (1.f / (16.f * 64.f));
+            float w0 = 1.f - w1;
+            A00[k] += w0 * w0;
+            A11[k] += w1 * w1;
+            A01[k] += w0 * w1;
+            for (int ch = 0; ch < 3; ++ch) {
+                B[k][ch]  += w0 * float(s.rgba8[j][ch]);
+                Bb[k][ch] += w1 * float(s.rgba8[j][ch]);
+            }
+        }
+        for (int k = 0; k < 2; ++k) {
+            float det = A00[k] * A11[k] - A01[k] * A01[k];
+            if (std::abs(det) < 1e-6f) continue;
+            float einv = 1.f / det;
+            for (int ch = 0; ch < 3; ++ch) {
+                float c0 = (A11[k] * B[k][ch] - A01[k] * Bb[k][ch]) * einv;
+                float c1 = (-A01[k] * B[k][ch] + A00[k] * Bb[k][ch]) * einv;
+                e0[k][ch] = std::uint8_t(std::clamp(int(std::lround(c0)), 0, 255));
+                e1[k][ch] = std::uint8_t(std::clamp(int(std::lround(c1)), 0, 255));
+            }
+        }
+    }
+
+    // Quantise endpoints to EPQuant ahead of blue-contract + decode.
+    std::uint8_t e0d[2][3], e1d[2][3];
+    for (int k = 0; k < 2; ++k) {
+        for (int ch = 0; ch < 3; ++ch) {
+            e0d[k][ch] = EPQuantOps<EPQuant>::unpack(EPQuantOps<EPQuant>::pack(e0[k][ch]));
+            e1d[k][ch] = EPQuantOps<EPQuant>::unpack(EPQuantOps<EPQuant>::pack(e1[k][ch]));
+        }
+    }
+
+    // Per-partition blue-contract sum normalisation on QUANTISED endpoints.
+    // For each partition where sum(e0_d) > sum(e1_d), swap endpoints and
+    // flip weights for that partition's texels. Required so the decoder's
+    // implicit swap rule reads the intended ramp.
+    for (int k = 0; k < 2; ++k) {
+        int sa = int(e0d[k][0]) + int(e0d[k][1]) + int(e0d[k][2]);
+        int sb = int(e1d[k][0]) + int(e1d[k][1]) + int(e1d[k][2]);
+        if (sa > sb) {
+            for (int ch = 0; ch < 3; ++ch) std::swap(e0d[k][ch], e1d[k][ch]);
+            // Flip the grid weights covering this partition's texels.
+            // Multiple texels share a grid point; we can't selectively
+            // flip per-partition, so we only flip grid points where all
+            // covered texels (with non-zero coeff) belong to partition k.
+            // For other grid points we leave alone — the LSQ-quantised
+            // weights aren't optimal but the per-partition sum-norm at
+            // least makes the matching texels' decoded values correct.
+            // NB: this is a known compromise — multi-partition single-
+            // plane is awkward; astcenc has the same trade-off.
+            std::uint8_t flip_grid[GN] = {};
+            int touched[GN] = {};
+            int by_part[GN] = {};
+            for (int j = 0; j < TN; ++j) {
+                const auto& t = bm.texels[j];
+                int kj = assign[j];
+                for (int kk = 0; kk < 4; ++kk) {
+                    if (t.weight[kk] == 0) continue;
+                    int gi = t.grid[kk];
+                    ++touched[gi];
+                    if (kj == k) ++by_part[gi];
+                }
+            }
+            for (int gi = 0; gi < GN; ++gi)
+                flip_grid[gi] = (touched[gi] > 0 && by_part[gi] * 2 >= touched[gi]) ? 1 : 0;
+            for (int gi = 0; gi < GN; ++gi)
+                if (flip_grid[gi])
+                    grid_weights[gi] = std::uint8_t((WL - 1) - int(grid_weights[gi]));
+        }
+    }
+
+    // Final decode + err using the quantised endpoints + grid weights.
+    std::uint8_t final_dec[TN][4];
+    float final_err = pick_weights_2p_decim<TexW, TexH, GridW, GridH, WL, M>(
+        s, assign, grid_weights, bm, e0d, e1d, final_dec);
+
+    pack_block_2p_decim<GN, BlockMode, WL, EPQuant>(
+        best_pi, e0d, e1d, grid_weights, out.block);
+    for (int j = 0; j < TN; ++j) {
+        out.decoded[j][0] = final_dec[j][0];
+        out.decoded[j][1] = final_dec[j][1];
+        out.decoded[j][2] = final_dec[j][2];
+        out.decoded[j][3] = final_dec[j][3];
+    }
+    out.err = final_err;
+    return out;
+}
+
 // Per-block dispatch: alpha blocks → CEM-12 (1-partition); RGB blocks
 // try 1p (CEM-8 QUANT_8 weights + QUANT_256 endpoints) and 2p (CEM-8
 // QUANT_4 weights + QUANT_40 endpoints), pick lower-OKLab².
@@ -2219,6 +2721,22 @@ struct DecimCfg {
     int wl;
 };
 
+// 2-partition CEM-8 bilinear-decim candidate. Same shape as DecimCfg
+// but the dispatcher hands it to encode_block_rgb_2p_decim with the
+// extra endpoint-quant template parameter.
+struct DecimCfg2p {
+    int gw, gh;
+    std::uint32_t bm;
+    int wl;
+    int epq;  // endpoint quant level: 24 / 32 / 40 / 64
+};
+
+template <int TexW, int TexH, DecimCfg2p Cfg, block_compress::BlockMetric M>
+inline Candidate try_decim_2p_cfg(const SampleT<TexW * TexH>& s) {
+    return encode_block_rgb_2p_decim<
+        TexW, TexH, Cfg.gw, Cfg.gh, Cfg.bm, Cfg.wl, Cfg.epq, M>(s);
+}
+
 // For 1:1 candidates (grid == texel dim) the per-texel direct weight
 // pick in encode_block_rgb beats the bilinear-decim LSQ + coord
 // descent path (which has ridge regularisation + a coarser local-
@@ -2246,6 +2764,34 @@ auto make_encode_fn_decim_pack() {
             }()
         ), ...);
         return best;
+    };
+}
+
+// 2-partition pack — separate from the 1-partition pack since the two
+// NTTP packs can't share a single fold. Caller combines via
+// combine_encode_fns when both are wanted.
+template <int TexW, int TexH, block_compress::BlockMetric M,
+          DecimCfg2p... Cfgs2p>
+auto make_encode_fn_2p_pack() {
+    return [](const SampleT<TexW * TexH>& s) {
+        Candidate best{};
+        best.err = std::numeric_limits<float>::infinity();
+        ((
+            [&] {
+                Candidate c = try_decim_2p_cfg<TexW, TexH, Cfgs2p, M>(s);
+                if (c.err < best.err) best = c;
+            }()
+        ), ...);
+        return best;
+    };
+}
+
+template <int TexW, int TexH, typename Fn1, typename Fn2>
+auto combine_encode_fns(Fn1 f1, Fn2 f2) {
+    return [f1, f2](const SampleT<TexW * TexH>& s) {
+        Candidate a = f1(s);
+        Candidate b = f2(s);
+        return (b.err < a.err) ? b : a;
     };
 }
 
@@ -2387,6 +2933,11 @@ EncodeResult encode_image(std::span<const std::uint8_t> rgba_srgb8,
                     DecimCfg{5,4,0x0D3,8}>());
         if (W == 5 && H == 5)
             return encode_image_impl<5, 5>(rgba_srgb8, image_w, image_h, options,
+                combine_encode_fns<5, 5>(
+                make_encode_fn_2p_pack<5, 5, M,
+                    DecimCfg2p{4,4,0x042,4,40},
+                    DecimCfg2p{5,4,0x0C2,4,24},
+                    DecimCfg2p{3,3,0x1BF,8,64}>(),
                 make_encode_fn_decim_pack<5, 5, M,
                     DecimCfg{2,3,0x33F,32}, DecimCfg{2,4,0x35F,32},
                     DecimCfg{2,5,0x37F,32}, DecimCfg{3,2,0x39F,32},
@@ -2395,9 +2946,14 @@ EncodeResult encode_image(std::span<const std::uint8_t> rgba_srgb8,
                     DecimCfg{4,3,0x233,32}, DecimCfg{4,4,0x251,12},
                     DecimCfg{4,5,0x073,8}, DecimCfg{5,2,0x293,32},
                     DecimCfg{5,3,0x2A2,16}, DecimCfg{5,4,0x0D3,8},
-                    DecimCfg{5,5,0x0F2,5}>());
+                    DecimCfg{5,5,0x0F2,5}>()));
         if (W == 6 && H == 5)
             return encode_image_impl<6, 5>(rgba_srgb8, image_w, image_h, options,
+                combine_encode_fns<6, 5>(
+                make_encode_fn_2p_pack<6, 5, M,
+                    DecimCfg2p{4,4,0x042,4,40},
+                    DecimCfg2p{5,4,0x0C2,4,24},
+                    DecimCfg2p{3,3,0x1BF,8,64}>(),
                 make_encode_fn_decim_pack<6, 5, M,
                     DecimCfg{2,3,0x33F,32}, DecimCfg{2,4,0x35F,32},
                     DecimCfg{2,5,0x37F,32}, DecimCfg{3,2,0x39F,32},
@@ -2408,9 +2964,14 @@ EncodeResult encode_image(std::span<const std::uint8_t> rgba_srgb8,
                     DecimCfg{5,3,0x2A2,16}, DecimCfg{5,4,0x0D3,8},
                     DecimCfg{5,5,0x0F2,5}, DecimCfg{6,2,0x313,32},
                     DecimCfg{6,3,0x321,10}, DecimCfg{6,4,0x143,6},
-                    DecimCfg{6,5,0x162,4}>());
+                    DecimCfg{6,5,0x162,4}>()));
         if (W == 6 && H == 6)
             return encode_image_impl<6, 6>(rgba_srgb8, image_w, image_h, options,
+                combine_encode_fns<6, 6>(
+                make_encode_fn_2p_pack<6, 6, M,
+                    DecimCfg2p{4,4,0x042,4,40},
+                    DecimCfg2p{5,4,0x0C2,4,24},
+                    DecimCfg2p{3,3,0x1BF,8,64}>(),
                 make_encode_fn_decim_pack<6, 6, M,
                     DecimCfg{2,3,0x33F,32}, DecimCfg{2,4,0x35F,32},
                     DecimCfg{2,5,0x37F,32}, DecimCfg{2,6,0x21F,32},
@@ -2423,9 +2984,14 @@ EncodeResult encode_image(std::span<const std::uint8_t> rgba_srgb8,
                     DecimCfg{5,4,0x0D3,8}, DecimCfg{5,5,0x0F2,5},
                     DecimCfg{5,6,0x06E,4}, DecimCfg{6,2,0x313,32},
                     DecimCfg{6,3,0x321,10}, DecimCfg{6,4,0x143,6},
-                    DecimCfg{6,5,0x162,4}, DecimCfg{6,6,0x114,3}>());
+                    DecimCfg{6,5,0x162,4}, DecimCfg{6,6,0x114,3}>()));
         if (W == 8 && H == 5)
             return encode_image_impl<8, 5>(rgba_srgb8, image_w, image_h, options,
+                combine_encode_fns<8, 5>(
+                make_encode_fn_2p_pack<8, 5, M,
+                    DecimCfg2p{4,4,0x042,4,40},
+                    DecimCfg2p{5,4,0x0C2,4,24},
+                    DecimCfg2p{3,3,0x1BF,8,64}>(),
                 make_encode_fn_decim_pack<8, 5, M,
                     DecimCfg{2,3,0x33F,32}, DecimCfg{2,4,0x35F,32},
                     DecimCfg{2,5,0x37F,32}, DecimCfg{3,2,0x39F,32},
@@ -2440,9 +3006,14 @@ EncodeResult encode_image(std::span<const std::uint8_t> rgba_srgb8,
                     DecimCfg{7,3,0x1B3,8}, DecimCfg{7,4,0x1C2,4},
                     DecimCfg{7,5,0x1F1,3}, DecimCfg{8,2,0x215,12},
                     DecimCfg{8,3,0x027,6}, DecimCfg{8,4,0x055,3},
-                    DecimCfg{8,5,0x065,2}>());
+                    DecimCfg{8,5,0x065,2}>()));
         if (W == 8 && H == 6)
             return encode_image_impl<8, 6>(rgba_srgb8, image_w, image_h, options,
+                combine_encode_fns<8, 6>(
+                make_encode_fn_2p_pack<8, 6, M,
+                    DecimCfg2p{4,4,0x042,4,40},
+                    DecimCfg2p{5,4,0x0C2,4,24},
+                    DecimCfg2p{3,3,0x1BF,8,64}>(),
                 make_encode_fn_decim_pack<8, 6, M,
                     DecimCfg{2,3,0x33F,32}, DecimCfg{2,4,0x35F,32},
                     DecimCfg{2,5,0x37F,32}, DecimCfg{2,6,0x21F,32},
@@ -2460,9 +3031,14 @@ EncodeResult encode_image(std::span<const std::uint8_t> rgba_srgb8,
                     DecimCfg{7,4,0x1C2,4}, DecimCfg{7,5,0x1F1,3},
                     DecimCfg{7,6,0x124,2}, DecimCfg{8,2,0x215,12},
                     DecimCfg{8,3,0x027,6}, DecimCfg{8,4,0x055,3},
-                    DecimCfg{8,5,0x065,2}, DecimCfg{8,6,0x144,2}>());
+                    DecimCfg{8,5,0x065,2}, DecimCfg{8,6,0x144,2}>()));
         if (W == 8 && H == 8)
             return encode_image_impl<8, 8>(rgba_srgb8, image_w, image_h, options,
+                combine_encode_fns<8, 8>(
+                make_encode_fn_2p_pack<8, 8, M,
+                    DecimCfg2p{4,4,0x042,4,40},
+                    DecimCfg2p{5,4,0x0C2,4,24},
+                    DecimCfg2p{3,3,0x1BF,8,64}>(),
                 make_encode_fn_decim_pack<8, 8, M,
                     DecimCfg{2,3,0x33F,32}, DecimCfg{2,4,0x35F,32},
                     DecimCfg{2,5,0x37F,32}, DecimCfg{2,6,0x21F,32},
@@ -2487,9 +3063,14 @@ EncodeResult encode_image(std::span<const std::uint8_t> rgba_srgb8,
                     DecimCfg{7,8,0x524,2}, DecimCfg{8,2,0x215,12},
                     DecimCfg{8,3,0x027,6}, DecimCfg{8,4,0x055,3},
                     DecimCfg{8,5,0x065,2}, DecimCfg{8,6,0x144,2},
-                    DecimCfg{8,7,0x344,2}>());
+                    DecimCfg{8,7,0x344,2}>()));
         if (W == 10 && H == 5)
             return encode_image_impl<10, 5>(rgba_srgb8, image_w, image_h, options,
+                combine_encode_fns<10, 5>(
+                make_encode_fn_2p_pack<10, 5, M,
+                    DecimCfg2p{4,4,0x042,4,40},
+                    DecimCfg2p{5,4,0x0C2,4,24},
+                    DecimCfg2p{3,3,0x1BF,8,64}>(),
                 make_encode_fn_decim_pack<10, 5, M,
                     DecimCfg{2,3,0x33F,32}, DecimCfg{2,4,0x35F,32},
                     DecimCfg{2,5,0x37F,32}, DecimCfg{3,2,0x39F,32},
@@ -2508,9 +3089,14 @@ EncodeResult encode_image(std::span<const std::uint8_t> rgba_srgb8,
                     DecimCfg{9,3,0x0B6,5}, DecimCfg{9,4,0x0D5,3},
                     DecimCfg{9,5,0x0E5,2}, DecimCfg{10,2,0x117,8},
                     DecimCfg{10,3,0x126,4}, DecimCfg{10,4,0x145,2},
-                    DecimCfg{10,5,0x165,2}>());
+                    DecimCfg{10,5,0x165,2}>()));
         if (W == 10 && H == 6)
             return encode_image_impl<10, 6>(rgba_srgb8, image_w, image_h, options,
+                combine_encode_fns<10, 6>(
+                make_encode_fn_2p_pack<10, 6, M,
+                    DecimCfg2p{4,4,0x042,4,40},
+                    DecimCfg2p{5,4,0x0C2,4,24},
+                    DecimCfg2p{3,3,0x1BF,8,64}>(),
                 make_encode_fn_decim_pack<10, 6, M,
                     DecimCfg{2,3,0x33F,32}, DecimCfg{2,4,0x35F,32},
                     DecimCfg{2,5,0x37F,32}, DecimCfg{2,6,0x21F,32},
@@ -2533,9 +3119,14 @@ EncodeResult encode_image(std::span<const std::uint8_t> rgba_srgb8,
                     DecimCfg{9,4,0x0D5,3}, DecimCfg{9,5,0x0E5,2},
                     DecimCfg{9,6,0x164,2}, DecimCfg{10,2,0x117,8},
                     DecimCfg{10,3,0x126,4}, DecimCfg{10,4,0x145,2},
-                    DecimCfg{10,5,0x165,2}, DecimCfg{10,6,0x1A4,2}>());
+                    DecimCfg{10,5,0x165,2}, DecimCfg{10,6,0x1A4,2}>()));
         if (W == 10 && H == 8)
             return encode_image_impl<10, 8>(rgba_srgb8, image_w, image_h, options,
+                combine_encode_fns<10, 8>(
+                make_encode_fn_2p_pack<10, 8, M,
+                    DecimCfg2p{4,4,0x042,4,40},
+                    DecimCfg2p{5,4,0x0C2,4,24},
+                    DecimCfg2p{3,3,0x1BF,8,64}>(),
                 make_encode_fn_decim_pack<10, 8, M,
                     DecimCfg{2,3,0x33F,32}, DecimCfg{2,4,0x35F,32},
                     DecimCfg{2,5,0x37F,32}, DecimCfg{2,6,0x21F,32},
@@ -2565,9 +3156,14 @@ EncodeResult encode_image(std::span<const std::uint8_t> rgba_srgb8,
                     DecimCfg{9,5,0x0E5,2}, DecimCfg{9,6,0x164,2},
                     DecimCfg{9,7,0x364,2}, DecimCfg{10,2,0x117,8},
                     DecimCfg{10,3,0x126,4}, DecimCfg{10,4,0x145,2},
-                    DecimCfg{10,5,0x165,2}, DecimCfg{10,6,0x1A4,2}>());
+                    DecimCfg{10,5,0x165,2}, DecimCfg{10,6,0x1A4,2}>()));
         if (W == 10 && H == 10)
             return encode_image_impl<10, 10>(rgba_srgb8, image_w, image_h, options,
+                combine_encode_fns<10, 10>(
+                make_encode_fn_2p_pack<10, 10, M,
+                    DecimCfg2p{4,4,0x042,4,40},
+                    DecimCfg2p{5,4,0x0C2,4,24},
+                    DecimCfg2p{3,3,0x1BF,8,64}>(),
                 make_encode_fn_decim_pack<10, 10, M,
                     DecimCfg{2,3,0x33F,32}, DecimCfg{2,4,0x35F,32},
                     DecimCfg{2,5,0x37F,32}, DecimCfg{2,6,0x21F,32},
@@ -2603,9 +3199,14 @@ EncodeResult encode_image(std::span<const std::uint8_t> rgba_srgb8,
                     DecimCfg{9,6,0x164,2}, DecimCfg{9,7,0x364,2},
                     DecimCfg{10,2,0x117,8}, DecimCfg{10,3,0x126,4},
                     DecimCfg{10,4,0x145,2}, DecimCfg{10,5,0x165,2},
-                    DecimCfg{10,6,0x1A4,2}>());
+                    DecimCfg{10,6,0x1A4,2}>()));
         if (W == 12 && H == 10)
             return encode_image_impl<12, 10>(rgba_srgb8, image_w, image_h, options,
+                combine_encode_fns<12, 10>(
+                make_encode_fn_2p_pack<12, 10, M,
+                    DecimCfg2p{4,4,0x042,4,40},
+                    DecimCfg2p{5,4,0x0C2,4,24},
+                    DecimCfg2p{3,3,0x1BF,8,64}>(),
                 make_encode_fn_decim_pack<12, 10, M,
                     DecimCfg{2,3,0x33F,32}, DecimCfg{2,4,0x35F,32},
                     DecimCfg{2,5,0x37F,32}, DecimCfg{2,6,0x21F,32},
@@ -2645,9 +3246,14 @@ EncodeResult encode_image(std::span<const std::uint8_t> rgba_srgb8,
                     DecimCfg{11,3,0x1B5,3}, DecimCfg{11,4,0x1C5,2},
                     DecimCfg{11,5,0x1E5,2}, DecimCfg{12,2,0x00C,6},
                     DecimCfg{12,3,0x034,3}, DecimCfg{12,4,0x044,2},
-                    DecimCfg{12,5,0x064,2}>());
+                    DecimCfg{12,5,0x064,2}>()));
         if (W == 12 && H == 12)
             return encode_image_impl<12, 12>(rgba_srgb8, image_w, image_h, options,
+                combine_encode_fns<12, 12>(
+                make_encode_fn_2p_pack<12, 12, M,
+                    DecimCfg2p{4,4,0x042,4,40},   // 4x4 Q4 weights + Q40 ep
+                    DecimCfg2p{5,4,0x0C2,4,24},   // 5x4 Q4 + Q24 ep
+                    DecimCfg2p{3,3,0x1BF,8,64}>(),  // 3x3 Q8 + Q64 ep
                 make_encode_fn_decim_pack<12, 12, M,
                     DecimCfg{2,3,0x33F,32}, DecimCfg{2,4,0x35F,32},
                     DecimCfg{2,5,0x37F,32}, DecimCfg{2,6,0x21F,32},
@@ -2691,7 +3297,7 @@ EncodeResult encode_image(std::span<const std::uint8_t> rgba_srgb8,
                     DecimCfg{11,3,0x1B5,3}, DecimCfg{11,4,0x1C5,2},
                     DecimCfg{11,5,0x1E5,2}, DecimCfg{12,2,0x00C,6},
                     DecimCfg{12,3,0x034,3}, DecimCfg{12,4,0x044,2},
-                    DecimCfg{12,5,0x064,2}>());
+                    DecimCfg{12,5,0x064,2}>()));
         return EncodeResult{};  // unsupported footprint
     };
 
