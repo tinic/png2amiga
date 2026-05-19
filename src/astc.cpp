@@ -1338,6 +1338,40 @@ Candidate encode_block_rgb_decim(const SampleT<TexW * TexH>& s) {
         if (!improved) break;
     }
 
+    // 5b. Final endpoint refit using the coord-descent-improved
+    //     grid weights — the prior LSQ refit only saw the naive-
+    //     quantization weights, not the post-descent ones.
+    {
+        float A00 = 0, A11 = 0, A01 = 0;
+        float B[3] = {}, Bb[3] = {};
+        for (int j = 0; j < TN; ++j) {
+            const auto& t = bm.texels[j];
+            int w_sum = 0;
+            for (int k = 0; k < 4; ++k) {
+                w_sum += int(t.weight[k]) * ramp[grid_weights[t.grid[k]]];
+            }
+            float w1 = float(w_sum) * (1.f / (16.f * 64.f));
+            float w0 = 1.f - w1;
+            A00 += w0 * w0;
+            A11 += w1 * w1;
+            A01 += w0 * w1;
+            for (int ch = 0; ch < 3; ++ch) {
+                B[ch]  += w0 * float(s.rgba8[j][ch]);
+                Bb[ch] += w1 * float(s.rgba8[j][ch]);
+            }
+        }
+        float det = A00 * A11 - A01 * A01;
+        if (std::abs(det) >= 1e-6f) {
+            float einv = 1.f / det;
+            for (int ch = 0; ch < 3; ++ch) {
+                float c0 = (A11 * B[ch] - A01 * Bb[ch]) * einv;
+                float c1 = (-A01 * B[ch] + A00 * Bb[ch]) * einv;
+                e0[ch] = std::uint8_t(std::clamp(int(std::lround(c0)), 0, 255));
+                e1[ch] = std::uint8_t(std::clamp(int(std::lround(c1)), 0, 255));
+            }
+        }
+    }
+
     // 6. Blue-contract sum normalisation on the refitted endpoints.
     int s0 = int(e0[0]) + int(e0[1]) + int(e0[2]);
     int s1 = int(e1[0]) + int(e1[1]) + int(e1[2]);
