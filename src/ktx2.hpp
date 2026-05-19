@@ -46,12 +46,36 @@ enum class VkFormat : std::uint32_t {
     bc7_srgb_block = 146,           // VK_FORMAT_BC7_SRGB_BLOCK
     etc2_r8g8b8_unorm_block = 147,  // VK_FORMAT_ETC2_R8G8B8_UNORM_BLOCK
     etc2_r8g8b8_srgb_block = 148,   // VK_FORMAT_ETC2_R8G8B8_SRGB_BLOCK
-    // ASTC LDR sRGB block formats — wired in for the planned ASTC port,
-    // not yet emitted by any encoder in this project.
+    // ASTC LDR 2D block formats — all 14 footprints, unorm + sRGB pair each.
+    // Block-size order matches the VK_FORMAT_ASTC_* enum numbering.
+    astc_4x4_unorm_block = 157,
     astc_4x4_srgb_block = 158,
+    astc_5x4_unorm_block = 159,
+    astc_5x4_srgb_block = 160,
+    astc_5x5_unorm_block = 161,
     astc_5x5_srgb_block = 162,
+    astc_6x5_unorm_block = 163,
+    astc_6x5_srgb_block = 164,
+    astc_6x6_unorm_block = 165,
     astc_6x6_srgb_block = 166,
+    astc_8x5_unorm_block = 167,
+    astc_8x5_srgb_block = 168,
+    astc_8x6_unorm_block = 169,
+    astc_8x6_srgb_block = 170,
+    astc_8x8_unorm_block = 171,
     astc_8x8_srgb_block = 172,
+    astc_10x5_unorm_block = 173,
+    astc_10x5_srgb_block = 174,
+    astc_10x6_unorm_block = 175,
+    astc_10x6_srgb_block = 176,
+    astc_10x8_unorm_block = 177,
+    astc_10x8_srgb_block = 178,
+    astc_10x10_unorm_block = 179,
+    astc_10x10_srgb_block = 180,
+    astc_12x10_unorm_block = 181,
+    astc_12x10_srgb_block = 182,
+    astc_12x12_unorm_block = 183,
+    astc_12x12_srgb_block = 184,
 };
 
 // Texel block dimensions (the compressed block's pixel footprint).

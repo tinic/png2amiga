@@ -83,16 +83,15 @@ void write_u64_at(std::vector<std::uint8_t>& out, std::size_t at, std::uint64_t 
 }
 
 bool is_srgb_transfer(VkFormat fmt) {
+    auto v = static_cast<std::uint32_t>(fmt);
+    // ASTC sRGB formats: odd value in the ASTC range [157, 184].
+    if (v >= 157 && v <= 184) return (v & 1u) == 0u;
     switch (fmt) {
     case VkFormat::bc1_rgb_srgb_block:
     case VkFormat::bc2_srgb_block:
     case VkFormat::bc3_srgb_block:
     case VkFormat::bc7_srgb_block:
     case VkFormat::etc2_r8g8b8_srgb_block:
-    case VkFormat::astc_4x4_srgb_block:
-    case VkFormat::astc_5x5_srgb_block:
-    case VkFormat::astc_6x6_srgb_block:
-    case VkFormat::astc_8x8_srgb_block:
         return true;
     case VkFormat::bc1_rgb_unorm_block:
     case VkFormat::bc2_unorm_block:
@@ -121,13 +120,14 @@ std::uint32_t color_model_for(VkFormat fmt) {
     case VkFormat::etc2_r8g8b8_srgb_block:
     case VkFormat::etc2_r8g8b8_unorm_block:
         return kModelEtc2;
-    case VkFormat::astc_4x4_srgb_block:
-    case VkFormat::astc_5x5_srgb_block:
-    case VkFormat::astc_6x6_srgb_block:
-    case VkFormat::astc_8x8_srgb_block:
-        return kModelAstc;
-    default:
+    default: {
+        // All ASTC LDR 2D formats share the same color model. Other
+        // formats fall back to ETC2 — they're not currently emitted
+        // by any encoder path here.
+        auto v = static_cast<std::uint32_t>(fmt);
+        if (v >= 157 && v <= 184) return kModelAstc;
         return kModelEtc2;
+    }
     }
 }
 
@@ -145,8 +145,12 @@ std::uint8_t channel_type_for(VkFormat fmt) {
     case VkFormat::bc7_srgb_block:
     case VkFormat::bc7_unorm_block:
         return kBc7ChannelColor;
-    default:
+    default: {
+        // KHR_DF_CHANNEL_ASTC_DATA = 0 for all ASTC LDR 2D formats.
+        auto v = static_cast<std::uint32_t>(fmt);
+        if (v >= 157 && v <= 184) return 0;
         return kEtc2ChannelColor;
+    }
     }
 }
 
