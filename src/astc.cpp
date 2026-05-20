@@ -997,6 +997,25 @@ constexpr std::uint8_t kQuant64Unpack[64] = {
     130, 134, 138, 142, 146, 150, 154, 158, 162, 166, 170, 174, 178, 182, 186, 190,
     195, 199, 203, 207, 211, 215, 219, 223, 227, 231, 235, 239, 243, 247, 251, 255,
 };
+constexpr std::uint8_t kQuant80Unpack[80] = {
+      0, 255,  16, 239,  32, 223,  48, 207,  64, 191,  80, 175,  96, 159, 112, 143,
+      3, 252,  19, 236,  35, 220,  51, 204,  67, 188,  83, 172, 100, 155, 116, 139,
+      6, 249,  22, 233,  38, 217,  54, 201,  71, 184,  87, 168, 103, 152, 119, 136,
+      9, 246,  25, 230,  42, 213,  58, 197,  74, 181,  90, 165, 106, 149, 122, 133,
+     13, 242,  29, 226,  45, 210,  61, 194,  77, 178,  93, 162, 109, 146, 125, 130,
+};
+constexpr std::uint8_t kQuant160Unpack[160] = {
+      0, 255,   8, 247,  16, 239,  24, 231,  32, 223,  40, 215,  48, 207,  56, 199,
+     64, 191,  72, 183,  80, 175,  88, 167,  96, 159, 104, 151, 112, 143, 120, 135,
+      1, 254,   9, 246,  17, 238,  25, 230,  33, 222,  41, 214,  49, 206,  57, 198,
+     65, 190,  73, 182,  81, 174,  89, 166,  97, 158, 105, 150, 113, 142, 121, 134,
+      3, 252,  11, 244,  19, 236,  27, 228,  35, 220,  43, 212,  51, 204,  59, 196,
+     67, 188,  75, 180,  83, 172,  91, 164,  99, 156, 107, 148, 115, 140, 123, 132,
+      4, 251,  12, 243,  20, 235,  28, 227,  36, 219,  44, 211,  52, 203,  60, 195,
+     68, 187,  76, 179,  84, 171,  92, 163, 100, 155, 108, 147, 116, 139, 124, 131,
+      6, 249,  14, 241,  22, 233,  30, 225,  38, 217,  46, 209,  54, 201,  62, 193,
+     70, 185,  78, 177,  86, 169,  94, 161, 102, 153, 110, 145, 118, 137, 126, 129,
+};
 constexpr std::uint8_t kQuant96Unpack[96] = {
       0, 255,   8, 247,  16, 239,  24, 231,  32, 223,  40, 215,  48, 207,  56, 199,
      64, 191,  72, 183,  80, 175,  88, 167,  96, 159, 104, 151, 112, 143, 120, 135,
@@ -1051,8 +1070,10 @@ inline std::uint8_t quant_pack_generic(std::uint8_t v, const std::uint8_t (&tbl)
 inline std::uint8_t quant24_pack(std::uint8_t v) { return quant_pack_generic(v, kQuant24Unpack); }
 inline std::uint8_t quant32_pack(std::uint8_t v) { return quant_pack_generic(v, kQuant32Unpack); }
 inline std::uint8_t quant64_pack(std::uint8_t v) { return quant_pack_generic(v, kQuant64Unpack); }
+inline std::uint8_t quant80_pack(std::uint8_t v)  { return quant_pack_generic(v, kQuant80Unpack); }
 inline std::uint8_t quant96_pack(std::uint8_t v)  { return quant_pack_generic(v, kQuant96Unpack); }
 inline std::uint8_t quant128_pack(std::uint8_t v) { return quant_pack_generic(v, kQuant128Unpack); }
+inline std::uint8_t quant160_pack(std::uint8_t v) { return quant_pack_generic(v, kQuant160Unpack); }
 inline std::uint8_t quant192_pack(std::uint8_t v) { return quant_pack_generic(v, kQuant192Unpack); }
 
 inline std::uint8_t quant40_pack(std::uint8_t v) {
@@ -2810,11 +2831,35 @@ struct EPQuantOps<64> {
     }
 };
 template <>
+struct EPQuantOps<48> {
+    static std::uint8_t pack(std::uint8_t v) { return quant48_pack(v); }
+    static std::uint8_t unpack(std::uint8_t s) { return kQuant48Unpack[s]; }
+    static void encode(const std::uint8_t* in, int n, std::uint8_t* out, int off) {
+        encode_ise_trit<4>(in, n, out, off);
+    }
+};
+template <>
+struct EPQuantOps<80> {
+    static std::uint8_t pack(std::uint8_t v) { return quant80_pack(v); }
+    static std::uint8_t unpack(std::uint8_t s) { return kQuant80Unpack[s]; }
+    static void encode(const std::uint8_t* in, int n, std::uint8_t* out, int off) {
+        encode_ise_quint<4>(in, n, out, off);
+    }
+};
+template <>
 struct EPQuantOps<96> {
     static std::uint8_t pack(std::uint8_t v) { return quant96_pack(v); }
     static std::uint8_t unpack(std::uint8_t s) { return kQuant96Unpack[s]; }
     static void encode(const std::uint8_t* in, int n, std::uint8_t* out, int off) {
         encode_ise_trit<5>(in, n, out, off);
+    }
+};
+template <>
+struct EPQuantOps<160> {
+    static std::uint8_t pack(std::uint8_t v) { return quant160_pack(v); }
+    static std::uint8_t unpack(std::uint8_t s) { return kQuant160Unpack[s]; }
+    static void encode(const std::uint8_t* in, int n, std::uint8_t* out, int off) {
+        encode_ise_quint<5>(in, n, out, off);
     }
 };
 template <>
@@ -3832,10 +3877,22 @@ EncodeResult encode_image(std::span<const std::uint8_t> rgba_srgb8,
                     DecimCfg{4,5,0x073,8}, DecimCfg{5,2,0x293,32},
                     DecimCfg{5,3,0x2A2,16}, DecimCfg{5,4,0x0D3,8},
                     DecimCfg{5,5,0x0F2,5},
-                    // Tighter-endpoint candidates: free weight bits for finer ramps.
-                    DecimCfg{4,4,0x242,16, 8, 192},  // 4x4 Q16 = 64wb → Q192
-                    DecimCfg{5,5,0x0F3,8,  8, 64},   // 5x5 Q8  = 75wb → Q64
-                    DecimCfg{5,3,0x2A3,24, 8, 128}>()));
+                    // Tighter-endpoint candidates (enumerated):
+                                        DecimCfg{3,5,0x3FE,20, 8, 192},
+                    DecimCfg{3,5,0x3EF,24, 8, 128},
+                    DecimCfg{3,5,0x3FF,32, 8, 64},
+                    DecimCfg{4,4,0x242,16, 8, 192},
+                    DecimCfg{4,4,0x252,20, 8, 96},
+                    DecimCfg{4,4,0x243,24, 8, 64},
+                    DecimCfg{4,5,0x261,10, 8, 160},
+                    DecimCfg{4,5,0x271,12, 8, 80},
+                    DecimCfg{5,3,0x2B2,20, 8, 192},
+                    DecimCfg{5,3,0x2A3,24, 8, 128},
+                    DecimCfg{5,3,0x2B3,32, 8, 64},
+                    DecimCfg{5,4,0x2C1,10, 8, 160},
+                    DecimCfg{5,4,0x2D1,12, 8, 80},
+                    DecimCfg{5,5,0x0E3,6, 8, 192},
+                    DecimCfg{5,5,0x0F3,8, 8, 64}>()));
         if (W == 6 && H == 5)
             return encode_image_impl<6, 5>(rgba_srgb8, image_w, image_h, options,
                 combine_encode_fns<6, 5>(
@@ -3855,11 +3912,26 @@ EncodeResult encode_image(std::span<const std::uint8_t> rgba_srgb8,
                     DecimCfg{5,5,0x0F2,5}, DecimCfg{6,2,0x313,32},
                     DecimCfg{6,3,0x321,10}, DecimCfg{6,4,0x143,6},
                     DecimCfg{6,5,0x162,4},
-                    // Tighter-endpoint candidates: free weight bits for finer ramps.
-                    DecimCfg{4,4,0x242,16, 8, 192},  // 4x4 Q16 = 64wb → Q192
-                    DecimCfg{6,5,0x172,5,  8, 96},   // 6x5 Q5  = 70wb → Q96
-                    DecimCfg{5,5,0x0F3,8,  8, 64},   // 5x5 Q8  = 75wb → Q64
-                    DecimCfg{5,3,0x2A3,24, 8, 128}>()));
+                    // Tighter-endpoint candidates (enumerated):
+                                        DecimCfg{3,5,0x3FE,20, 8, 192},
+                    DecimCfg{3,5,0x3EF,24, 8, 128},
+                    DecimCfg{3,5,0x3FF,32, 8, 64},
+                    DecimCfg{4,4,0x242,16, 8, 192},
+                    DecimCfg{4,4,0x252,20, 8, 96},
+                    DecimCfg{4,4,0x243,24, 8, 64},
+                    DecimCfg{4,5,0x261,10, 8, 160},
+                    DecimCfg{4,5,0x271,12, 8, 80},
+                    DecimCfg{5,3,0x2B2,20, 8, 192},
+                    DecimCfg{5,3,0x2A3,24, 8, 128},
+                    DecimCfg{5,3,0x2B3,32, 8, 64},
+                    DecimCfg{5,4,0x2C1,10, 8, 160},
+                    DecimCfg{5,4,0x2D1,12, 8, 80},
+                    DecimCfg{5,5,0x0E3,6, 8, 192},
+                    DecimCfg{5,5,0x0F3,8, 8, 64},
+                    DecimCfg{6,3,0x331,12, 8, 192},
+                    DecimCfg{6,3,0x322,16, 8, 80},
+                    DecimCfg{6,4,0x153,8, 8, 80},
+                    DecimCfg{6,5,0x172,5, 8, 96}>()));
         if (W == 6 && H == 6)
             return encode_image_impl<6, 6>(rgba_srgb8, image_w, image_h, options,
                 combine_encode_fns<6, 6>(
@@ -3881,11 +3953,31 @@ EncodeResult encode_image(std::span<const std::uint8_t> rgba_srgb8,
                     DecimCfg{5,6,0x06E,4}, DecimCfg{6,2,0x313,32},
                     DecimCfg{6,3,0x321,10}, DecimCfg{6,4,0x143,6},
                     DecimCfg{6,5,0x162,4}, DecimCfg{6,6,0x114,3},
-                    // Tighter-endpoint candidates: free weight bits for finer ramps.
-                    DecimCfg{4,4,0x242,16, 8, 192},  // 4x4 Q16 = 64wb → Q192
-                    DecimCfg{6,5,0x172,5,  8, 96},   // 6x5 Q5  = 70wb → Q96
-                    DecimCfg{5,5,0x0F3,8,  8, 64},   // 5x5 Q8  = 75wb → Q64
-                    DecimCfg{5,3,0x2A3,24, 8, 128}>()));
+                    // Tighter-endpoint candidates (enumerated):
+                                        DecimCfg{3,5,0x3FE,20, 8, 192},
+                    DecimCfg{3,5,0x3EF,24, 8, 128},
+                    DecimCfg{3,5,0x3FF,32, 8, 64},
+                    DecimCfg{3,6,0x23D,12, 8, 192},
+                    DecimCfg{3,6,0x22E,16, 8, 80},
+                    DecimCfg{4,4,0x242,16, 8, 192},
+                    DecimCfg{4,4,0x252,20, 8, 96},
+                    DecimCfg{4,4,0x243,24, 8, 64},
+                    DecimCfg{4,5,0x261,10, 8, 160},
+                    DecimCfg{4,5,0x271,12, 8, 80},
+                    DecimCfg{4,6,0x05F,8, 8, 80},
+                    DecimCfg{5,3,0x2B2,20, 8, 192},
+                    DecimCfg{5,3,0x2A3,24, 8, 128},
+                    DecimCfg{5,3,0x2B3,32, 8, 64},
+                    DecimCfg{5,4,0x2C1,10, 8, 160},
+                    DecimCfg{5,4,0x2D1,12, 8, 80},
+                    DecimCfg{5,5,0x0E3,6, 8, 192},
+                    DecimCfg{5,5,0x0F3,8, 8, 64},
+                    DecimCfg{5,6,0x07E,5, 8, 96},
+                    DecimCfg{6,3,0x331,12, 8, 192},
+                    DecimCfg{6,3,0x322,16, 8, 80},
+                    DecimCfg{6,4,0x153,8, 8, 80},
+                    DecimCfg{6,5,0x172,5, 8, 96},
+                    DecimCfg{6,6,0x108,4, 8, 80}>()));
         if (W == 8 && H == 5)
             return encode_image_impl<8, 5>(rgba_srgb8, image_w, image_h, options,
                 combine_encode_fns<8, 5>(
@@ -3909,11 +4001,39 @@ EncodeResult encode_image(std::span<const std::uint8_t> rgba_srgb8,
                     DecimCfg{7,5,0x1F1,3}, DecimCfg{8,2,0x215,12},
                     DecimCfg{8,3,0x027,6}, DecimCfg{8,4,0x055,3},
                     DecimCfg{8,5,0x065,2},
-                    // Tighter-endpoint candidates: free weight bits for finer ramps.
-                    DecimCfg{4,4,0x242,16, 8, 192},  // 4x4 Q16 = 64wb → Q192
-                    DecimCfg{6,5,0x172,5,  8, 96},   // 6x5 Q5  = 70wb → Q96
-                    DecimCfg{5,5,0x0F3,8,  8, 64},   // 5x5 Q8  = 75wb → Q64
-                    DecimCfg{5,3,0x2A3,24, 8, 128}>()));
+                    // Tighter-endpoint candidates (enumerated):
+                                        DecimCfg{3,5,0x3FE,20, 8, 192},
+                    DecimCfg{3,5,0x3EF,24, 8, 128},
+                    DecimCfg{3,5,0x3FF,32, 8, 64},
+                    DecimCfg{4,4,0x242,16, 8, 192},
+                    DecimCfg{4,4,0x252,20, 8, 96},
+                    DecimCfg{4,4,0x243,24, 8, 64},
+                    DecimCfg{4,5,0x261,10, 8, 160},
+                    DecimCfg{4,5,0x271,12, 8, 80},
+                    DecimCfg{5,3,0x2B2,20, 8, 192},
+                    DecimCfg{5,3,0x2A3,24, 8, 128},
+                    DecimCfg{5,3,0x2B3,32, 8, 64},
+                    DecimCfg{5,4,0x2C1,10, 8, 160},
+                    DecimCfg{5,4,0x2D1,12, 8, 80},
+                    DecimCfg{5,5,0x0E3,6, 8, 192},
+                    DecimCfg{5,5,0x0F3,8, 8, 64},
+                    DecimCfg{6,3,0x331,12, 8, 192},
+                    DecimCfg{6,3,0x322,16, 8, 80},
+                    DecimCfg{6,4,0x153,8, 8, 80},
+                    DecimCfg{6,5,0x172,5, 8, 96},
+                    DecimCfg{7,2,0x383,24, 8, 192},
+                    DecimCfg{7,2,0x393,32, 8, 96},
+                    DecimCfg{7,3,0x3A1,10, 8, 96},
+                    DecimCfg{7,4,0x1D2,5, 8, 160},
+                    DecimCfg{7,4,0x1C3,6, 8, 80},
+                    DecimCfg{7,5,0x1E2,4, 8, 96},
+                    DecimCfg{8,2,0x206,16, 8, 192},
+                    DecimCfg{8,2,0x216,20, 8, 96},
+                    DecimCfg{8,2,0x207,24, 8, 64},
+                    DecimCfg{8,3,0x037,8, 8, 80},
+                    DecimCfg{8,4,0x046,4, 8, 192},
+                    DecimCfg{8,4,0x056,5, 8, 64},
+                    DecimCfg{8,5,0x075,3, 8, 192}>()));
         if (W == 8 && H == 6)
             return encode_image_impl<8, 6>(rgba_srgb8, image_w, image_h, options,
                 combine_encode_fns<8, 6>(
@@ -3940,11 +4060,45 @@ EncodeResult encode_image(std::span<const std::uint8_t> rgba_srgb8,
                     DecimCfg{7,6,0x124,2}, DecimCfg{8,2,0x215,12},
                     DecimCfg{8,3,0x027,6}, DecimCfg{8,4,0x055,3},
                     DecimCfg{8,5,0x065,2}, DecimCfg{8,6,0x144,2},
-                    // Tighter-endpoint candidates: free weight bits for finer ramps.
-                    DecimCfg{4,4,0x242,16, 8, 192},  // 4x4 Q16 = 64wb → Q192
-                    DecimCfg{6,5,0x172,5,  8, 96},   // 6x5 Q5  = 70wb → Q96
-                    DecimCfg{5,5,0x0F3,8,  8, 64},   // 5x5 Q8  = 75wb → Q64
-                    DecimCfg{5,3,0x2A3,24, 8, 128}>()));
+                    // Tighter-endpoint candidates (enumerated):
+                                        DecimCfg{3,5,0x3FE,20, 8, 192},
+                    DecimCfg{3,5,0x3EF,24, 8, 128},
+                    DecimCfg{3,5,0x3FF,32, 8, 64},
+                    DecimCfg{3,6,0x23D,12, 8, 192},
+                    DecimCfg{3,6,0x22E,16, 8, 80},
+                    DecimCfg{4,4,0x242,16, 8, 192},
+                    DecimCfg{4,4,0x252,20, 8, 96},
+                    DecimCfg{4,4,0x243,24, 8, 64},
+                    DecimCfg{4,5,0x261,10, 8, 160},
+                    DecimCfg{4,5,0x271,12, 8, 80},
+                    DecimCfg{4,6,0x05F,8, 8, 80},
+                    DecimCfg{5,3,0x2B2,20, 8, 192},
+                    DecimCfg{5,3,0x2A3,24, 8, 128},
+                    DecimCfg{5,3,0x2B3,32, 8, 64},
+                    DecimCfg{5,4,0x2C1,10, 8, 160},
+                    DecimCfg{5,4,0x2D1,12, 8, 80},
+                    DecimCfg{5,5,0x0E3,6, 8, 192},
+                    DecimCfg{5,5,0x0F3,8, 8, 64},
+                    DecimCfg{5,6,0x07E,5, 8, 96},
+                    DecimCfg{6,3,0x331,12, 8, 192},
+                    DecimCfg{6,3,0x322,16, 8, 80},
+                    DecimCfg{6,4,0x153,8, 8, 80},
+                    DecimCfg{6,5,0x172,5, 8, 96},
+                    DecimCfg{6,6,0x108,4, 8, 80},
+                    DecimCfg{7,2,0x383,24, 8, 192},
+                    DecimCfg{7,2,0x393,32, 8, 96},
+                    DecimCfg{7,3,0x3A1,10, 8, 96},
+                    DecimCfg{7,4,0x1D2,5, 8, 160},
+                    DecimCfg{7,4,0x1C3,6, 8, 80},
+                    DecimCfg{7,5,0x1E2,4, 8, 96},
+                    DecimCfg{7,6,0x134,3, 8, 128},
+                    DecimCfg{8,2,0x206,16, 8, 192},
+                    DecimCfg{8,2,0x216,20, 8, 96},
+                    DecimCfg{8,2,0x207,24, 8, 64},
+                    DecimCfg{8,3,0x037,8, 8, 80},
+                    DecimCfg{8,4,0x046,4, 8, 192},
+                    DecimCfg{8,4,0x056,5, 8, 64},
+                    DecimCfg{8,5,0x075,3, 8, 192}>()));
         if (W == 8 && H == 8)
             return encode_image_impl<8, 8>(rgba_srgb8, image_w, image_h, options,
                 combine_encode_fns<8, 8>(
@@ -3978,11 +4132,60 @@ EncodeResult encode_image(std::span<const std::uint8_t> rgba_srgb8,
                     DecimCfg{8,3,0x027,6}, DecimCfg{8,4,0x055,3},
                     DecimCfg{8,5,0x065,2}, DecimCfg{8,6,0x144,2},
                     DecimCfg{8,7,0x344,2},
-                    // Tighter-endpoint candidates: free weight bits for finer ramps.
-                    DecimCfg{4,4,0x242,16, 8, 192},  // 4x4 Q16 = 64wb → Q192
-                    DecimCfg{6,5,0x172,5,  8, 96},   // 6x5 Q5  = 70wb → Q96
-                    DecimCfg{5,5,0x0F3,8,  8, 64},   // 5x5 Q8  = 75wb → Q64
-                    DecimCfg{5,3,0x2A3,24, 8, 128}>()));
+                    // Tighter-endpoint candidates (enumerated):
+                                        DecimCfg{2,7,0x28F,24, 8, 192},
+                    DecimCfg{2,7,0x29F,32, 8, 96},
+                    DecimCfg{2,8,0x20A,16, 8, 192},
+                    DecimCfg{2,8,0x21A,20, 8, 96},
+                    DecimCfg{2,8,0x20B,24, 8, 64},
+                    DecimCfg{3,5,0x3FE,20, 8, 192},
+                    DecimCfg{3,5,0x3EF,24, 8, 128},
+                    DecimCfg{3,5,0x3FF,32, 8, 64},
+                    DecimCfg{3,6,0x23D,12, 8, 192},
+                    DecimCfg{3,6,0x22E,16, 8, 80},
+                    DecimCfg{3,7,0x2AD,10, 8, 96},
+                    DecimCfg{3,8,0x03B,8, 8, 80},
+                    DecimCfg{4,4,0x242,16, 8, 192},
+                    DecimCfg{4,4,0x252,20, 8, 96},
+                    DecimCfg{4,4,0x243,24, 8, 64},
+                    DecimCfg{4,5,0x261,10, 8, 160},
+                    DecimCfg{4,5,0x271,12, 8, 80},
+                    DecimCfg{4,6,0x05F,8, 8, 80},
+                    DecimCfg{4,7,0x0DE,5, 8, 160},
+                    DecimCfg{4,7,0x0CF,6, 8, 80},
+                    DecimCfg{4,8,0x04A,4, 8, 192},
+                    DecimCfg{4,8,0x05A,5, 8, 64},
+                    DecimCfg{5,3,0x2B2,20, 8, 192},
+                    DecimCfg{5,3,0x2A3,24, 8, 128},
+                    DecimCfg{5,3,0x2B3,32, 8, 64},
+                    DecimCfg{5,4,0x2C1,10, 8, 160},
+                    DecimCfg{5,4,0x2D1,12, 8, 80},
+                    DecimCfg{5,5,0x0E3,6, 8, 192},
+                    DecimCfg{5,5,0x0F3,8, 8, 64},
+                    DecimCfg{5,6,0x07E,5, 8, 96},
+                    DecimCfg{5,7,0x0EE,4, 8, 96},
+                    DecimCfg{5,8,0x079,3, 8, 192},
+                    DecimCfg{6,3,0x331,12, 8, 192},
+                    DecimCfg{6,3,0x322,16, 8, 80},
+                    DecimCfg{6,4,0x153,8, 8, 80},
+                    DecimCfg{6,5,0x172,5, 8, 96},
+                    DecimCfg{6,6,0x108,4, 8, 80},
+                    DecimCfg{6,7,0x314,3, 8, 128},
+                    DecimCfg{7,2,0x383,24, 8, 192},
+                    DecimCfg{7,2,0x393,32, 8, 96},
+                    DecimCfg{7,3,0x3A1,10, 8, 96},
+                    DecimCfg{7,4,0x1D2,5, 8, 160},
+                    DecimCfg{7,4,0x1C3,6, 8, 80},
+                    DecimCfg{7,5,0x1E2,4, 8, 96},
+                    DecimCfg{7,6,0x134,3, 8, 128},
+                    DecimCfg{8,2,0x206,16, 8, 192},
+                    DecimCfg{8,2,0x216,20, 8, 96},
+                    DecimCfg{8,2,0x207,24, 8, 64},
+                    DecimCfg{8,3,0x037,8, 8, 80},
+                    DecimCfg{8,4,0x046,4, 8, 192},
+                    DecimCfg{8,4,0x056,5, 8, 64},
+                    DecimCfg{8,5,0x075,3, 8, 192},
+                    DecimCfg{8,8,0x544,2, 8, 192}>()));
         if (W == 10 && H == 5)
             return encode_image_impl<10, 5>(rgba_srgb8, image_w, image_h, options,
                 combine_encode_fns<10, 5>(
@@ -4010,11 +4213,48 @@ EncodeResult encode_image(std::span<const std::uint8_t> rgba_srgb8,
                     DecimCfg{9,5,0x0E5,2}, DecimCfg{10,2,0x117,8},
                     DecimCfg{10,3,0x126,4}, DecimCfg{10,4,0x145,2},
                     DecimCfg{10,5,0x165,2},
-                    // Tighter-endpoint candidates: free weight bits for finer ramps.
-                    DecimCfg{4,4,0x242,16, 8, 192},  // 4x4 Q16 = 64wb → Q192
-                    DecimCfg{6,5,0x172,5,  8, 96},   // 6x5 Q5  = 70wb → Q96
-                    DecimCfg{5,5,0x0F3,8,  8, 64},   // 5x5 Q8  = 75wb → Q64
-                    DecimCfg{5,3,0x2A3,24, 8, 128}>()));
+                    // Tighter-endpoint candidates (enumerated):
+                                        DecimCfg{3,5,0x3FE,20, 8, 192},
+                    DecimCfg{3,5,0x3EF,24, 8, 128},
+                    DecimCfg{3,5,0x3FF,32, 8, 64},
+                    DecimCfg{4,4,0x242,16, 8, 192},
+                    DecimCfg{4,4,0x252,20, 8, 96},
+                    DecimCfg{4,4,0x243,24, 8, 64},
+                    DecimCfg{4,5,0x261,10, 8, 160},
+                    DecimCfg{4,5,0x271,12, 8, 80},
+                    DecimCfg{5,3,0x2B2,20, 8, 192},
+                    DecimCfg{5,3,0x2A3,24, 8, 128},
+                    DecimCfg{5,3,0x2B3,32, 8, 64},
+                    DecimCfg{5,4,0x2C1,10, 8, 160},
+                    DecimCfg{5,4,0x2D1,12, 8, 80},
+                    DecimCfg{5,5,0x0E3,6, 8, 192},
+                    DecimCfg{5,5,0x0F3,8, 8, 64},
+                    DecimCfg{6,3,0x331,12, 8, 192},
+                    DecimCfg{6,3,0x322,16, 8, 80},
+                    DecimCfg{6,4,0x153,8, 8, 80},
+                    DecimCfg{6,5,0x172,5, 8, 96},
+                    DecimCfg{7,2,0x383,24, 8, 192},
+                    DecimCfg{7,2,0x393,32, 8, 96},
+                    DecimCfg{7,3,0x3A1,10, 8, 96},
+                    DecimCfg{7,4,0x1D2,5, 8, 160},
+                    DecimCfg{7,4,0x1C3,6, 8, 80},
+                    DecimCfg{7,5,0x1E2,4, 8, 96},
+                    DecimCfg{8,2,0x206,16, 8, 192},
+                    DecimCfg{8,2,0x216,20, 8, 96},
+                    DecimCfg{8,2,0x207,24, 8, 64},
+                    DecimCfg{8,3,0x037,8, 8, 80},
+                    DecimCfg{8,4,0x046,4, 8, 192},
+                    DecimCfg{8,4,0x056,5, 8, 64},
+                    DecimCfg{8,5,0x075,3, 8, 192},
+                    DecimCfg{9,2,0x295,12, 8, 192},
+                    DecimCfg{9,2,0x286,16, 8, 80},
+                    DecimCfg{9,3,0x0A7,6, 8, 96},
+                    DecimCfg{9,4,0x0C6,4, 8, 80},
+                    DecimCfg{9,5,0x0F5,3, 8, 80},
+                    DecimCfg{10,2,0x305,10, 8, 160},
+                    DecimCfg{10,2,0x315,12, 8, 80},
+                    DecimCfg{10,3,0x136,5, 8, 96},
+                    DecimCfg{10,4,0x155,3, 8, 192}>()));
         if (W == 10 && H == 6)
             return encode_image_impl<10, 6>(rgba_srgb8, image_w, image_h, options,
                 combine_encode_fns<10, 6>(
@@ -4046,11 +4286,54 @@ EncodeResult encode_image(std::span<const std::uint8_t> rgba_srgb8,
                     DecimCfg{9,6,0x164,2}, DecimCfg{10,2,0x117,8},
                     DecimCfg{10,3,0x126,4}, DecimCfg{10,4,0x145,2},
                     DecimCfg{10,5,0x165,2}, DecimCfg{10,6,0x1A4,2},
-                    // Tighter-endpoint candidates: free weight bits for finer ramps.
-                    DecimCfg{4,4,0x242,16, 8, 192},  // 4x4 Q16 = 64wb → Q192
-                    DecimCfg{6,5,0x172,5,  8, 96},   // 6x5 Q5  = 70wb → Q96
-                    DecimCfg{5,5,0x0F3,8,  8, 64},   // 5x5 Q8  = 75wb → Q64
-                    DecimCfg{5,3,0x2A3,24, 8, 128}>()));
+                    // Tighter-endpoint candidates (enumerated):
+                                        DecimCfg{3,5,0x3FE,20, 8, 192},
+                    DecimCfg{3,5,0x3EF,24, 8, 128},
+                    DecimCfg{3,5,0x3FF,32, 8, 64},
+                    DecimCfg{3,6,0x23D,12, 8, 192},
+                    DecimCfg{3,6,0x22E,16, 8, 80},
+                    DecimCfg{4,4,0x242,16, 8, 192},
+                    DecimCfg{4,4,0x252,20, 8, 96},
+                    DecimCfg{4,4,0x243,24, 8, 64},
+                    DecimCfg{4,5,0x261,10, 8, 160},
+                    DecimCfg{4,5,0x271,12, 8, 80},
+                    DecimCfg{4,6,0x05F,8, 8, 80},
+                    DecimCfg{5,3,0x2B2,20, 8, 192},
+                    DecimCfg{5,3,0x2A3,24, 8, 128},
+                    DecimCfg{5,3,0x2B3,32, 8, 64},
+                    DecimCfg{5,4,0x2C1,10, 8, 160},
+                    DecimCfg{5,4,0x2D1,12, 8, 80},
+                    DecimCfg{5,5,0x0E3,6, 8, 192},
+                    DecimCfg{5,5,0x0F3,8, 8, 64},
+                    DecimCfg{5,6,0x07E,5, 8, 96},
+                    DecimCfg{6,3,0x331,12, 8, 192},
+                    DecimCfg{6,3,0x322,16, 8, 80},
+                    DecimCfg{6,4,0x153,8, 8, 80},
+                    DecimCfg{6,5,0x172,5, 8, 96},
+                    DecimCfg{6,6,0x108,4, 8, 80},
+                    DecimCfg{7,2,0x383,24, 8, 192},
+                    DecimCfg{7,2,0x393,32, 8, 96},
+                    DecimCfg{7,3,0x3A1,10, 8, 96},
+                    DecimCfg{7,4,0x1D2,5, 8, 160},
+                    DecimCfg{7,4,0x1C3,6, 8, 80},
+                    DecimCfg{7,5,0x1E2,4, 8, 96},
+                    DecimCfg{7,6,0x134,3, 8, 128},
+                    DecimCfg{8,2,0x206,16, 8, 192},
+                    DecimCfg{8,2,0x216,20, 8, 96},
+                    DecimCfg{8,2,0x207,24, 8, 64},
+                    DecimCfg{8,3,0x037,8, 8, 80},
+                    DecimCfg{8,4,0x046,4, 8, 192},
+                    DecimCfg{8,4,0x056,5, 8, 64},
+                    DecimCfg{8,5,0x075,3, 8, 192},
+                    DecimCfg{9,2,0x295,12, 8, 192},
+                    DecimCfg{9,2,0x286,16, 8, 80},
+                    DecimCfg{9,3,0x0A7,6, 8, 96},
+                    DecimCfg{9,4,0x0C6,4, 8, 80},
+                    DecimCfg{9,5,0x0F5,3, 8, 80},
+                    DecimCfg{10,2,0x305,10, 8, 160},
+                    DecimCfg{10,2,0x315,12, 8, 80},
+                    DecimCfg{10,3,0x136,5, 8, 96},
+                    DecimCfg{10,4,0x155,3, 8, 192}>()));
         if (W == 10 && H == 8)
             return encode_image_impl<10, 8>(rgba_srgb8, image_w, image_h, options,
                 combine_encode_fns<10, 8>(
@@ -4089,11 +4372,69 @@ EncodeResult encode_image(std::span<const std::uint8_t> rgba_srgb8,
                     DecimCfg{9,7,0x364,2}, DecimCfg{10,2,0x117,8},
                     DecimCfg{10,3,0x126,4}, DecimCfg{10,4,0x145,2},
                     DecimCfg{10,5,0x165,2}, DecimCfg{10,6,0x1A4,2},
-                    // Tighter-endpoint candidates: free weight bits for finer ramps.
-                    DecimCfg{4,4,0x242,16, 8, 192},  // 4x4 Q16 = 64wb → Q192
-                    DecimCfg{6,5,0x172,5,  8, 96},   // 6x5 Q5  = 70wb → Q96
-                    DecimCfg{5,5,0x0F3,8,  8, 64},   // 5x5 Q8  = 75wb → Q64
-                    DecimCfg{5,3,0x2A3,24, 8, 128}>()));
+                    // Tighter-endpoint candidates (enumerated):
+                                        DecimCfg{2,7,0x28F,24, 8, 192},
+                    DecimCfg{2,7,0x29F,32, 8, 96},
+                    DecimCfg{2,8,0x20A,16, 8, 192},
+                    DecimCfg{2,8,0x21A,20, 8, 96},
+                    DecimCfg{2,8,0x20B,24, 8, 64},
+                    DecimCfg{3,5,0x3FE,20, 8, 192},
+                    DecimCfg{3,5,0x3EF,24, 8, 128},
+                    DecimCfg{3,5,0x3FF,32, 8, 64},
+                    DecimCfg{3,6,0x23D,12, 8, 192},
+                    DecimCfg{3,6,0x22E,16, 8, 80},
+                    DecimCfg{3,7,0x2AD,10, 8, 96},
+                    DecimCfg{3,8,0x03B,8, 8, 80},
+                    DecimCfg{4,4,0x242,16, 8, 192},
+                    DecimCfg{4,4,0x252,20, 8, 96},
+                    DecimCfg{4,4,0x243,24, 8, 64},
+                    DecimCfg{4,5,0x261,10, 8, 160},
+                    DecimCfg{4,5,0x271,12, 8, 80},
+                    DecimCfg{4,6,0x05F,8, 8, 80},
+                    DecimCfg{4,7,0x0DE,5, 8, 160},
+                    DecimCfg{4,7,0x0CF,6, 8, 80},
+                    DecimCfg{4,8,0x04A,4, 8, 192},
+                    DecimCfg{4,8,0x05A,5, 8, 64},
+                    DecimCfg{5,3,0x2B2,20, 8, 192},
+                    DecimCfg{5,3,0x2A3,24, 8, 128},
+                    DecimCfg{5,3,0x2B3,32, 8, 64},
+                    DecimCfg{5,4,0x2C1,10, 8, 160},
+                    DecimCfg{5,4,0x2D1,12, 8, 80},
+                    DecimCfg{5,5,0x0E3,6, 8, 192},
+                    DecimCfg{5,5,0x0F3,8, 8, 64},
+                    DecimCfg{5,6,0x07E,5, 8, 96},
+                    DecimCfg{5,7,0x0EE,4, 8, 96},
+                    DecimCfg{5,8,0x079,3, 8, 192},
+                    DecimCfg{6,3,0x331,12, 8, 192},
+                    DecimCfg{6,3,0x322,16, 8, 80},
+                    DecimCfg{6,4,0x153,8, 8, 80},
+                    DecimCfg{6,5,0x172,5, 8, 96},
+                    DecimCfg{6,6,0x108,4, 8, 80},
+                    DecimCfg{6,7,0x314,3, 8, 128},
+                    DecimCfg{7,2,0x383,24, 8, 192},
+                    DecimCfg{7,2,0x393,32, 8, 96},
+                    DecimCfg{7,3,0x3A1,10, 8, 96},
+                    DecimCfg{7,4,0x1D2,5, 8, 160},
+                    DecimCfg{7,4,0x1C3,6, 8, 80},
+                    DecimCfg{7,5,0x1E2,4, 8, 96},
+                    DecimCfg{7,6,0x134,3, 8, 128},
+                    DecimCfg{8,2,0x206,16, 8, 192},
+                    DecimCfg{8,2,0x216,20, 8, 96},
+                    DecimCfg{8,2,0x207,24, 8, 64},
+                    DecimCfg{8,3,0x037,8, 8, 80},
+                    DecimCfg{8,4,0x046,4, 8, 192},
+                    DecimCfg{8,4,0x056,5, 8, 64},
+                    DecimCfg{8,5,0x075,3, 8, 192},
+                    DecimCfg{8,8,0x544,2, 8, 192},
+                    DecimCfg{9,2,0x295,12, 8, 192},
+                    DecimCfg{9,2,0x286,16, 8, 80},
+                    DecimCfg{9,3,0x0A7,6, 8, 96},
+                    DecimCfg{9,4,0x0C6,4, 8, 80},
+                    DecimCfg{9,5,0x0F5,3, 8, 80},
+                    DecimCfg{10,2,0x305,10, 8, 160},
+                    DecimCfg{10,2,0x315,12, 8, 80},
+                    DecimCfg{10,3,0x136,5, 8, 96},
+                    DecimCfg{10,4,0x155,3, 8, 192}>()));
         if (W == 10 && H == 10)
             return encode_image_impl<10, 10>(rgba_srgb8, image_w, image_h, options,
                 combine_encode_fns<10, 10>(
@@ -4138,11 +4479,78 @@ EncodeResult encode_image(std::span<const std::uint8_t> rgba_srgb8,
                     DecimCfg{10,2,0x117,8}, DecimCfg{10,3,0x126,4},
                     DecimCfg{10,4,0x145,2}, DecimCfg{10,5,0x165,2},
                     DecimCfg{10,6,0x1A4,2},
-                    // Tighter-endpoint candidates: free weight bits for finer ramps.
-                    DecimCfg{4,4,0x242,16, 8, 192},  // 4x4 Q16 = 64wb → Q192
-                    DecimCfg{6,5,0x172,5,  8, 96},   // 6x5 Q5  = 70wb → Q96
-                    DecimCfg{5,5,0x0F3,8,  8, 64},   // 5x5 Q8  = 75wb → Q64
-                    DecimCfg{5,3,0x2A3,24, 8, 128}>()));
+                    // Tighter-endpoint candidates (enumerated):
+                                        DecimCfg{2,7,0x28F,24, 8, 192},
+                    DecimCfg{2,7,0x29F,32, 8, 96},
+                    DecimCfg{2,8,0x20A,16, 8, 192},
+                    DecimCfg{2,8,0x21A,20, 8, 96},
+                    DecimCfg{2,8,0x20B,24, 8, 64},
+                    DecimCfg{2,9,0x299,12, 8, 192},
+                    DecimCfg{2,9,0x28A,16, 8, 80},
+                    DecimCfg{2,10,0x309,10, 8, 160},
+                    DecimCfg{2,10,0x319,12, 8, 80},
+                    DecimCfg{3,5,0x3FE,20, 8, 192},
+                    DecimCfg{3,5,0x3EF,24, 8, 128},
+                    DecimCfg{3,5,0x3FF,32, 8, 64},
+                    DecimCfg{3,6,0x23D,12, 8, 192},
+                    DecimCfg{3,6,0x22E,16, 8, 80},
+                    DecimCfg{3,7,0x2AD,10, 8, 96},
+                    DecimCfg{3,8,0x03B,8, 8, 80},
+                    DecimCfg{3,9,0x0AB,6, 8, 96},
+                    DecimCfg{3,10,0x13A,5, 8, 96},
+                    DecimCfg{4,4,0x242,16, 8, 192},
+                    DecimCfg{4,4,0x252,20, 8, 96},
+                    DecimCfg{4,4,0x243,24, 8, 64},
+                    DecimCfg{4,5,0x261,10, 8, 160},
+                    DecimCfg{4,5,0x271,12, 8, 80},
+                    DecimCfg{4,6,0x05F,8, 8, 80},
+                    DecimCfg{4,7,0x0DE,5, 8, 160},
+                    DecimCfg{4,7,0x0CF,6, 8, 80},
+                    DecimCfg{4,8,0x04A,4, 8, 192},
+                    DecimCfg{4,8,0x05A,5, 8, 64},
+                    DecimCfg{4,9,0x0CA,4, 8, 80},
+                    DecimCfg{4,10,0x159,3, 8, 192},
+                    DecimCfg{5,3,0x2B2,20, 8, 192},
+                    DecimCfg{5,3,0x2A3,24, 8, 128},
+                    DecimCfg{5,3,0x2B3,32, 8, 64},
+                    DecimCfg{5,4,0x2C1,10, 8, 160},
+                    DecimCfg{5,4,0x2D1,12, 8, 80},
+                    DecimCfg{5,5,0x0E3,6, 8, 192},
+                    DecimCfg{5,5,0x0F3,8, 8, 64},
+                    DecimCfg{5,6,0x07E,5, 8, 96},
+                    DecimCfg{5,7,0x0EE,4, 8, 96},
+                    DecimCfg{5,8,0x079,3, 8, 192},
+                    DecimCfg{5,9,0x0F9,3, 8, 80},
+                    DecimCfg{6,3,0x331,12, 8, 192},
+                    DecimCfg{6,3,0x322,16, 8, 80},
+                    DecimCfg{6,4,0x153,8, 8, 80},
+                    DecimCfg{6,5,0x172,5, 8, 96},
+                    DecimCfg{6,6,0x108,4, 8, 80},
+                    DecimCfg{6,7,0x314,3, 8, 128},
+                    DecimCfg{7,2,0x383,24, 8, 192},
+                    DecimCfg{7,2,0x393,32, 8, 96},
+                    DecimCfg{7,3,0x3A1,10, 8, 96},
+                    DecimCfg{7,4,0x1D2,5, 8, 160},
+                    DecimCfg{7,4,0x1C3,6, 8, 80},
+                    DecimCfg{7,5,0x1E2,4, 8, 96},
+                    DecimCfg{7,6,0x134,3, 8, 128},
+                    DecimCfg{8,2,0x206,16, 8, 192},
+                    DecimCfg{8,2,0x216,20, 8, 96},
+                    DecimCfg{8,2,0x207,24, 8, 64},
+                    DecimCfg{8,3,0x037,8, 8, 80},
+                    DecimCfg{8,4,0x046,4, 8, 192},
+                    DecimCfg{8,4,0x056,5, 8, 64},
+                    DecimCfg{8,5,0x075,3, 8, 192},
+                    DecimCfg{8,8,0x544,2, 8, 192},
+                    DecimCfg{9,2,0x295,12, 8, 192},
+                    DecimCfg{9,2,0x286,16, 8, 80},
+                    DecimCfg{9,3,0x0A7,6, 8, 96},
+                    DecimCfg{9,4,0x0C6,4, 8, 80},
+                    DecimCfg{9,5,0x0F5,3, 8, 80},
+                    DecimCfg{10,2,0x305,10, 8, 160},
+                    DecimCfg{10,2,0x315,12, 8, 80},
+                    DecimCfg{10,3,0x136,5, 8, 96},
+                    DecimCfg{10,4,0x155,3, 8, 192}>()));
         if (W == 12 && H == 10)
             return encode_image_impl<12, 10>(rgba_srgb8, image_w, image_h, options,
                 combine_encode_fns<12, 10>(
@@ -4191,11 +4599,84 @@ EncodeResult encode_image(std::span<const std::uint8_t> rgba_srgb8,
                     DecimCfg{11,5,0x1E5,2}, DecimCfg{12,2,0x00C,6},
                     DecimCfg{12,3,0x034,3}, DecimCfg{12,4,0x044,2},
                     DecimCfg{12,5,0x064,2},
-                    // Tighter-endpoint candidates: free weight bits for finer ramps.
-                    DecimCfg{4,4,0x242,16, 8, 192},  // 4x4 Q16 = 64wb → Q192
-                    DecimCfg{6,5,0x172,5,  8, 96},   // 6x5 Q5  = 70wb → Q96
-                    DecimCfg{5,5,0x0F3,8,  8, 64},   // 5x5 Q8  = 75wb → Q64
-                    DecimCfg{5,3,0x2A3,24, 8, 128}>()));
+                    // Tighter-endpoint candidates (enumerated):
+                                        DecimCfg{2,7,0x28F,24, 8, 192},
+                    DecimCfg{2,7,0x29F,32, 8, 96},
+                    DecimCfg{2,8,0x20A,16, 8, 192},
+                    DecimCfg{2,8,0x21A,20, 8, 96},
+                    DecimCfg{2,8,0x20B,24, 8, 64},
+                    DecimCfg{2,9,0x299,12, 8, 192},
+                    DecimCfg{2,9,0x28A,16, 8, 80},
+                    DecimCfg{2,10,0x309,10, 8, 160},
+                    DecimCfg{2,10,0x319,12, 8, 80},
+                    DecimCfg{3,5,0x3FE,20, 8, 192},
+                    DecimCfg{3,5,0x3EF,24, 8, 128},
+                    DecimCfg{3,5,0x3FF,32, 8, 64},
+                    DecimCfg{3,6,0x23D,12, 8, 192},
+                    DecimCfg{3,6,0x22E,16, 8, 80},
+                    DecimCfg{3,7,0x2AD,10, 8, 96},
+                    DecimCfg{3,8,0x03B,8, 8, 80},
+                    DecimCfg{3,9,0x0AB,6, 8, 96},
+                    DecimCfg{3,10,0x13A,5, 8, 96},
+                    DecimCfg{4,4,0x242,16, 8, 192},
+                    DecimCfg{4,4,0x252,20, 8, 96},
+                    DecimCfg{4,4,0x243,24, 8, 64},
+                    DecimCfg{4,5,0x261,10, 8, 160},
+                    DecimCfg{4,5,0x271,12, 8, 80},
+                    DecimCfg{4,6,0x05F,8, 8, 80},
+                    DecimCfg{4,7,0x0DE,5, 8, 160},
+                    DecimCfg{4,7,0x0CF,6, 8, 80},
+                    DecimCfg{4,8,0x04A,4, 8, 192},
+                    DecimCfg{4,8,0x05A,5, 8, 64},
+                    DecimCfg{4,9,0x0CA,4, 8, 80},
+                    DecimCfg{4,10,0x159,3, 8, 192},
+                    DecimCfg{5,3,0x2B2,20, 8, 192},
+                    DecimCfg{5,3,0x2A3,24, 8, 128},
+                    DecimCfg{5,3,0x2B3,32, 8, 64},
+                    DecimCfg{5,4,0x2C1,10, 8, 160},
+                    DecimCfg{5,4,0x2D1,12, 8, 80},
+                    DecimCfg{5,5,0x0E3,6, 8, 192},
+                    DecimCfg{5,5,0x0F3,8, 8, 64},
+                    DecimCfg{5,6,0x07E,5, 8, 96},
+                    DecimCfg{5,7,0x0EE,4, 8, 96},
+                    DecimCfg{5,8,0x079,3, 8, 192},
+                    DecimCfg{5,9,0x0F9,3, 8, 80},
+                    DecimCfg{6,3,0x331,12, 8, 192},
+                    DecimCfg{6,3,0x322,16, 8, 80},
+                    DecimCfg{6,4,0x153,8, 8, 80},
+                    DecimCfg{6,5,0x172,5, 8, 96},
+                    DecimCfg{6,6,0x108,4, 8, 80},
+                    DecimCfg{6,7,0x314,3, 8, 128},
+                    DecimCfg{7,2,0x383,24, 8, 192},
+                    DecimCfg{7,2,0x393,32, 8, 96},
+                    DecimCfg{7,3,0x3A1,10, 8, 96},
+                    DecimCfg{7,4,0x1D2,5, 8, 160},
+                    DecimCfg{7,4,0x1C3,6, 8, 80},
+                    DecimCfg{7,5,0x1E2,4, 8, 96},
+                    DecimCfg{7,6,0x134,3, 8, 128},
+                    DecimCfg{8,2,0x206,16, 8, 192},
+                    DecimCfg{8,2,0x216,20, 8, 96},
+                    DecimCfg{8,2,0x207,24, 8, 64},
+                    DecimCfg{8,3,0x037,8, 8, 80},
+                    DecimCfg{8,4,0x046,4, 8, 192},
+                    DecimCfg{8,4,0x056,5, 8, 64},
+                    DecimCfg{8,5,0x075,3, 8, 192},
+                    DecimCfg{8,8,0x544,2, 8, 192},
+                    DecimCfg{9,2,0x295,12, 8, 192},
+                    DecimCfg{9,2,0x286,16, 8, 80},
+                    DecimCfg{9,3,0x0A7,6, 8, 96},
+                    DecimCfg{9,4,0x0C6,4, 8, 80},
+                    DecimCfg{9,5,0x0F5,3, 8, 80},
+                    DecimCfg{10,2,0x305,10, 8, 160},
+                    DecimCfg{10,2,0x315,12, 8, 80},
+                    DecimCfg{10,3,0x136,5, 8, 96},
+                    DecimCfg{10,4,0x155,3, 8, 192},
+                    DecimCfg{11,2,0x197,8, 8, 160},
+                    DecimCfg{11,2,0x385,10, 8, 64},
+                    DecimCfg{11,3,0x1A6,4, 8, 160},
+                    DecimCfg{11,4,0x1D5,3, 8, 96},
+                    DecimCfg{12,2,0x01C,8, 8, 80},
+                    DecimCfg{12,3,0x028,4, 8, 80}>()));
         if (W == 12 && H == 12)
             return encode_image_impl<12, 12>(rgba_srgb8, image_w, image_h, options,
                 combine_encode_fns<12, 12>(
@@ -4248,13 +4729,90 @@ EncodeResult encode_image(std::span<const std::uint8_t> rgba_srgb8,
                     DecimCfg{11,5,0x1E5,2}, DecimCfg{12,2,0x00C,6},
                     DecimCfg{12,3,0x034,3}, DecimCfg{12,4,0x044,2},
                     DecimCfg{12,5,0x064,2},
-                    // Tighter-endpoint candidates: free weight bits for
-                    // finer ramps. Decoder auto-picks EPQuant from the
-                    // post-(header + weight) budget; encoder must match.
-                    DecimCfg{4,4,0x242,16, 8, 192},  // 4x4 Q16 = 64wb → Q192 (46eb)
-                    DecimCfg{6,5,0x172,5,  8, 96},   // 6x5 Q5  = 70wb → Q96  (40eb)
-                    DecimCfg{5,5,0x0F3,8,  8, 64},   // 5x5 Q8  = 75wb → Q64  (36eb)
-                    DecimCfg{5,3,0x2A3,24, 8, 128}>()));  // 5x3 Q24 = 69wb → Q128 (42eb)
+                    // Tighter-endpoint candidates (enumerated):
+                                        DecimCfg{2,7,0x28F,24, 8, 192},
+                    DecimCfg{2,7,0x29F,32, 8, 96},
+                    DecimCfg{2,8,0x20A,16, 8, 192},
+                    DecimCfg{2,8,0x21A,20, 8, 96},
+                    DecimCfg{2,8,0x20B,24, 8, 64},
+                    DecimCfg{2,9,0x299,12, 8, 192},
+                    DecimCfg{2,9,0x28A,16, 8, 80},
+                    DecimCfg{2,10,0x309,10, 8, 160},
+                    DecimCfg{2,10,0x319,12, 8, 80},
+                    DecimCfg{2,11,0x19B,8, 8, 160},
+                    DecimCfg{2,11,0x389,10, 8, 64},
+                    DecimCfg{2,12,0x09C,8, 8, 80},
+                    DecimCfg{3,5,0x3FE,20, 8, 192},
+                    DecimCfg{3,5,0x3EF,24, 8, 128},
+                    DecimCfg{3,5,0x3FF,32, 8, 64},
+                    DecimCfg{3,6,0x23D,12, 8, 192},
+                    DecimCfg{3,6,0x22E,16, 8, 80},
+                    DecimCfg{3,7,0x2AD,10, 8, 96},
+                    DecimCfg{3,8,0x03B,8, 8, 80},
+                    DecimCfg{3,9,0x0AB,6, 8, 96},
+                    DecimCfg{3,10,0x13A,5, 8, 96},
+                    DecimCfg{3,11,0x1AA,4, 8, 160},
+                    DecimCfg{3,12,0x0A8,4, 8, 80},
+                    DecimCfg{4,4,0x242,16, 8, 192},
+                    DecimCfg{4,4,0x252,20, 8, 96},
+                    DecimCfg{4,4,0x243,24, 8, 64},
+                    DecimCfg{4,5,0x261,10, 8, 160},
+                    DecimCfg{4,5,0x271,12, 8, 80},
+                    DecimCfg{4,6,0x05F,8, 8, 80},
+                    DecimCfg{4,7,0x0DE,5, 8, 160},
+                    DecimCfg{4,7,0x0CF,6, 8, 80},
+                    DecimCfg{4,8,0x04A,4, 8, 192},
+                    DecimCfg{4,8,0x05A,5, 8, 64},
+                    DecimCfg{4,9,0x0CA,4, 8, 80},
+                    DecimCfg{4,10,0x159,3, 8, 192},
+                    DecimCfg{4,11,0x1D9,3, 8, 96},
+                    DecimCfg{5,3,0x2B2,20, 8, 192},
+                    DecimCfg{5,3,0x2A3,24, 8, 128},
+                    DecimCfg{5,3,0x2B3,32, 8, 64},
+                    DecimCfg{5,4,0x2C1,10, 8, 160},
+                    DecimCfg{5,4,0x2D1,12, 8, 80},
+                    DecimCfg{5,5,0x0E3,6, 8, 192},
+                    DecimCfg{5,5,0x0F3,8, 8, 64},
+                    DecimCfg{5,6,0x07E,5, 8, 96},
+                    DecimCfg{5,7,0x0EE,4, 8, 96},
+                    DecimCfg{5,8,0x079,3, 8, 192},
+                    DecimCfg{5,9,0x0F9,3, 8, 80},
+                    DecimCfg{6,3,0x331,12, 8, 192},
+                    DecimCfg{6,3,0x322,16, 8, 80},
+                    DecimCfg{6,4,0x153,8, 8, 80},
+                    DecimCfg{6,5,0x172,5, 8, 96},
+                    DecimCfg{6,6,0x108,4, 8, 80},
+                    DecimCfg{6,7,0x314,3, 8, 128},
+                    DecimCfg{7,2,0x383,24, 8, 192},
+                    DecimCfg{7,2,0x393,32, 8, 96},
+                    DecimCfg{7,3,0x3A1,10, 8, 96},
+                    DecimCfg{7,4,0x1D2,5, 8, 160},
+                    DecimCfg{7,4,0x1C3,6, 8, 80},
+                    DecimCfg{7,5,0x1E2,4, 8, 96},
+                    DecimCfg{7,6,0x134,3, 8, 128},
+                    DecimCfg{8,2,0x206,16, 8, 192},
+                    DecimCfg{8,2,0x216,20, 8, 96},
+                    DecimCfg{8,2,0x207,24, 8, 64},
+                    DecimCfg{8,3,0x037,8, 8, 80},
+                    DecimCfg{8,4,0x046,4, 8, 192},
+                    DecimCfg{8,4,0x056,5, 8, 64},
+                    DecimCfg{8,5,0x075,3, 8, 192},
+                    DecimCfg{8,8,0x544,2, 8, 192},
+                    DecimCfg{9,2,0x295,12, 8, 192},
+                    DecimCfg{9,2,0x286,16, 8, 80},
+                    DecimCfg{9,3,0x0A7,6, 8, 96},
+                    DecimCfg{9,4,0x0C6,4, 8, 80},
+                    DecimCfg{9,5,0x0F5,3, 8, 80},
+                    DecimCfg{10,2,0x305,10, 8, 160},
+                    DecimCfg{10,2,0x315,12, 8, 80},
+                    DecimCfg{10,3,0x136,5, 8, 96},
+                    DecimCfg{10,4,0x155,3, 8, 192},
+                    DecimCfg{11,2,0x197,8, 8, 160},
+                    DecimCfg{11,2,0x385,10, 8, 64},
+                    DecimCfg{11,3,0x1A6,4, 8, 160},
+                    DecimCfg{11,4,0x1D5,3, 8, 96},
+                    DecimCfg{12,2,0x01C,8, 8, 80},
+                    DecimCfg{12,3,0x028,4, 8, 80}>()));  // 5x3 Q24 = 69wb → Q128 (42eb)
                     // (encode_block_rgb_cem0 / _cem1 / _cem6) but not
                     // wired into the candidate list. At QUANT_256 endpoints,
                     // every CEM-0 candidate that fits the 95-bit weight
