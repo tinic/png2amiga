@@ -83,16 +83,26 @@ for bm in range(2048):
 
 footprints = [(5,5),(6,5),(6,6),(8,5),(8,6),(8,8),(10,5),(10,6),(10,8),(10,10),(12,10),(12,12)]
 
-# For each footprint: candidates with weight_bits in [64, 75] (tighter EPQ band,
-# EPQuant in [Q64, Q192]; below 64 already in Q256 pack; above 75 too coarse).
+# Per-footprint tighter-EPQ band. The 1p exhaustive pack already covers
+# wb <= 63 at QUANT_256, so these candidates free weight bits for finer
+# grids by tightening endpoint quant. Band lower bound is wb 64 (epq Q192).
+# Upper bound is per-footprint: most footprints run to wb 83 (epq down to
+# Q24), but the 8x* cluster (8x5/8x6/8x8) caps at wb 75 (epq >= Q64) —
+# beyond that the coarse-endpoint candidates win on OKLab² but BAND on
+# SSIMULACRA2 (regress -0.10 to -0.31). Big footprints gain +0.4 to +1.5
+# S2 from the full extension.
+WB_MAX = {(8, 5): 75, (8, 6): 75, (8, 8): 75}
+EPQ_FLOOR = 24
+
 for (fw, fh) in footprints:
     cands = []
     seen = set()
+    wb_max = WB_MAX.get((fw, fh), 83)
     for (gw, gh, qm), (wb, bm) in modes.items():
         if gw > fw or gh > fh: continue
-        if wb < 64 or wb > 75: continue
+        if wb < 64 or wb > wb_max: continue
         epq = pick_epq(wb)
-        if epq is None or epq < 64: continue
+        if epq is None or epq < EPQ_FLOOR: continue
         # dedup by (gw, gh, qm)
         k = (gw, gh, qm)
         if k in seen: continue
