@@ -3925,7 +3925,13 @@ EncodeResult encode_image(std::span<const std::uint8_t> rgba_srgb8,
                     DecimCfg{3,4,0x3DF,32}, DecimCfg{4,2,0x213,32},
                     DecimCfg{4,3,0x233,32}, DecimCfg{4,4,0x251,12},
                     DecimCfg{5,2,0x293,32}, DecimCfg{5,3,0x2A2,16},
-                    DecimCfg{5,4,0x0D3,8}>()));
+                    DecimCfg{5,4,0x0D3,8},
+                    // Tighter-endpoint band (free weight bits for finer grids):
+                    DecimCfg{4,4,0x242,16, 8, 192}, DecimCfg{4,4,0x252,20, 8, 96},
+                    DecimCfg{4,4,0x243,24, 8, 64},  DecimCfg{4,4,0x253,32, 8, 32},
+                    DecimCfg{5,3,0x2B2,20, 8, 192}, DecimCfg{5,3,0x2A3,24, 8, 128},
+                    DecimCfg{5,3,0x2B3,32, 8, 64},  DecimCfg{5,4,0x2C1,10, 8, 160},
+                    DecimCfg{5,4,0x2D1,12, 8, 80},  DecimCfg{5,4,0x2C2,16, 8, 32}>()));
         if (W == 5 && H == 5)
             return encode_image_impl<5, 5>(rgba_srgb8, image_w, image_h, options,
                 combine_encode_fns<5, 5>(

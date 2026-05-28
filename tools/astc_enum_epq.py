@@ -81,7 +81,7 @@ for bm in range(2048):
     if key not in modes or wb < modes[key][0]:
         modes[key] = (wb, bm)
 
-footprints = [(4,4),(5,5),(6,5),(6,6),(8,5),(8,6),(8,8),(10,5),(10,6),(10,8),(10,10),(12,10),(12,12)]
+footprints = [(4,4),(5,4),(5,5),(6,5),(6,6),(8,5),(8,6),(8,8),(10,5),(10,6),(10,8),(10,10),(12,10),(12,12)]
 
 # Per-footprint tighter-EPQ band. The 1p exhaustive pack already covers
 # wb <= 63 at QUANT_256, so these candidates free weight bits for finer
