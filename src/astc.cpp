@@ -3857,22 +3857,46 @@ EncodeResult encode_image(std::span<const std::uint8_t> rgba_srgb8,
         if (W == 4 && H == 4)
             return encode_image_impl<4, 4>(rgba_srgb8, image_w, image_h, options,
                                            make_encode_fn_4x4<M>());
-        // Non-4x4 / non-5x4 dispatch: per-footprint exhaustive search
-        // over every valid 2D block_mode whose (grid, weight_quant)
-        // fits 6-endpoint CEM-8 QUANT_256 (weight_bits ≤ 63). Each
-        // candidate runs encode_block_rgb_decim and contributes to the
-        // per-block min-err pick. Candidate lists generated from a
-        // port of astcenc_block_sizes.cpp:decode_block_mode_2d — see
-        // tools/enum_astc_modes.py for the regen script.
+        // Non-4x4 dispatch: per-footprint exhaustive search over every
+        // valid 2D block_mode whose (grid, weight_quant) fits 6-endpoint
+        // CEM-8 QUANT_256 (weight_bits ≤ 63). Each candidate runs
+        // encode_block_rgb_decim and contributes to the per-block min-err
+        // pick. Candidate lists generated from a port of
+        // astcenc_block_sizes.cpp:decode_block_mode_2d — see
+        // tools/enum_astc_modes.py for the regen script. 2-partition
+        // candidate lists come from tools/astc_enum_2p.py.
         if (W == 5 && H == 4)
             return encode_image_impl<5, 4>(rgba_srgb8, image_w, image_h, options,
+                combine_encode_fns<5, 4>(
+                make_encode_fn_2p_pack<5, 4, M,
+                    DecimCfg2p{2,3,0x32E,16,64},
+                    DecimCfg2p{2,3,0x33F,32,48},
+                    DecimCfg2p{2,4,0x15F,8,64},
+                    DecimCfg2p{2,4,0x34E,16,40},
+                    DecimCfg2p{2,4,0x35F,32,24},
+                    DecimCfg2p{3,2,0x38E,16,64},
+                    DecimCfg2p{3,2,0x39F,32,48},
+                    DecimCfg2p{3,3,0x1BF,8,64},
+                    DecimCfg2p{3,3,0x3AE,16,32},
+                    DecimCfg2p{3,4,0x1CE,4,64},
+                    DecimCfg2p{3,4,0x1DF,8,32},
+                    DecimCfg2p{4,2,0x013,8,64},
+                    DecimCfg2p{4,2,0x202,16,40},
+                    DecimCfg2p{4,2,0x213,32,24},
+                    DecimCfg2p{4,3,0x022,4,64},
+                    DecimCfg2p{4,3,0x033,8,32},
+                    DecimCfg2p{4,4,0x042,4,40},
+                    DecimCfg2p{5,2,0x093,8,48},
+                    DecimCfg2p{5,2,0x282,16,24},
+                    DecimCfg2p{5,3,0x0A2,4,48},
+                    DecimCfg2p{5,4,0x0C2,4,24}>(),
                 make_encode_fn_decim_pack<5, 4, M,
                     DecimCfg{2,3,0x33F,32}, DecimCfg{2,4,0x35F,32},
                     DecimCfg{3,2,0x39F,32}, DecimCfg{3,3,0x3BF,32},
                     DecimCfg{3,4,0x3DF,32}, DecimCfg{4,2,0x213,32},
                     DecimCfg{4,3,0x233,32}, DecimCfg{4,4,0x251,12},
                     DecimCfg{5,2,0x293,32}, DecimCfg{5,3,0x2A2,16},
-                    DecimCfg{5,4,0x0D3,8}>());
+                    DecimCfg{5,4,0x0D3,8}>()));
         if (W == 5 && H == 5)
             return encode_image_impl<5, 5>(rgba_srgb8, image_w, image_h, options,
                 combine_encode_fns<5, 5>(
