@@ -62,21 +62,26 @@ Defaults defaults_for(const Context& ctx) {
     if (ctx.mode == amiga::Mode::bc2) return Defaults{0.40f, 0.35f};
     if (ctx.mode == amiga::Mode::bc3) return Defaults{0.50f, 0.35f};
     if (ctx.mode == amiga::Mode::bc7) return Defaults{0.75f, 0.35f};
-    // ASTC: matches BC7 (similar OKLab² + LSQ shape; sweep TBD).
+    // ASTC: per-footprint block-ED strength from a 10-image DIV2K @ 256w
+    // sweep vs astcenc -medium (the flat 0.75 inherited from BC7 was
+    // mistuned for the coarse-weight-grid footprints). Pattern: small/mid
+    // footprints absorb full diffusion (0.75); larger/coarser grids can't
+    // soak the cross-block residual cleanly and want progressively less
+    // (10x8/10x10/12x12 → 0; 8x5/10x6/12x10 → 0.25; 6x6/10x5 → 0.5).
     if (ctx.mode == amiga::Mode::astc_4x4) return Defaults{0.75f, 0.35f};
     if (ctx.mode == amiga::Mode::astc_5x4) return Defaults{0.75f, 0.35f};
     if (ctx.mode == amiga::Mode::astc_5x5) return Defaults{0.75f, 0.35f};
     if (ctx.mode == amiga::Mode::astc_6x5) return Defaults{0.75f, 0.35f};
-    if (ctx.mode == amiga::Mode::astc_6x6) return Defaults{0.75f, 0.35f};
-    if (ctx.mode == amiga::Mode::astc_8x5) return Defaults{0.75f, 0.35f};
+    if (ctx.mode == amiga::Mode::astc_6x6) return Defaults{0.50f, 0.35f};
+    if (ctx.mode == amiga::Mode::astc_8x5) return Defaults{0.25f, 0.35f};
     if (ctx.mode == amiga::Mode::astc_8x6) return Defaults{0.75f, 0.35f};
     if (ctx.mode == amiga::Mode::astc_8x8) return Defaults{0.75f, 0.35f};
-    if (ctx.mode == amiga::Mode::astc_10x5) return Defaults{0.75f, 0.35f};
-    if (ctx.mode == amiga::Mode::astc_10x6) return Defaults{0.75f, 0.35f};
-    if (ctx.mode == amiga::Mode::astc_10x8) return Defaults{0.75f, 0.35f};
-    if (ctx.mode == amiga::Mode::astc_10x10) return Defaults{0.75f, 0.35f};
-    if (ctx.mode == amiga::Mode::astc_12x10) return Defaults{0.75f, 0.35f};
-    if (ctx.mode == amiga::Mode::astc_12x12) return Defaults{0.75f, 0.35f};
+    if (ctx.mode == amiga::Mode::astc_10x5) return Defaults{0.50f, 0.35f};
+    if (ctx.mode == amiga::Mode::astc_10x6) return Defaults{0.25f, 0.35f};
+    if (ctx.mode == amiga::Mode::astc_10x8) return Defaults{0.00f, 0.35f};
+    if (ctx.mode == amiga::Mode::astc_10x10) return Defaults{0.00f, 0.35f};
+    if (ctx.mode == amiga::Mode::astc_12x10) return Defaults{0.25f, 0.35f};
+    if (ctx.mode == amiga::Mode::astc_12x12) return Defaults{0.00f, 0.35f};
 
     // ---- Palette-aware ordered methods: per-(method, mode, depth)
     // optimal strength against SSIMULACRA2.
