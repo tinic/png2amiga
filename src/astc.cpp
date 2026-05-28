@@ -3125,21 +3125,33 @@ float pick_weights_2p_decim(const SampleT<TexW * TexH>& s,
     return tot;
 }
 
+// Number of top partition candidates (ranked by the PCA surrogate)
+// carried into the full 2p encode. The surrogate (PCA seed + ideal-weight
+// residual, no decimation / endpoint quant) can mis-rank the true
+// post-quant best, so we hedge by trying the top-K with full encode and
+// taking min-err — astcenc -medium does the analogous thing with its top-2
+// partition candidates. Cost scales the 2p sweep linearly in K.
+constexpr int kTop2pPartitions = 4;
+
 // Phase 1 of the 2-partition encode: cheap brute-force over all 1024
 // partition indices using a PCA seed + per-texel ideal-weight residual
 // surrogate. The surrogate is grid- and quant-INDEPENDENT (it uses full
 // per-texel ideal weights, no decimation, no endpoint quant), so the
-// winning partition index is identical across every (grid, weight_quant,
-// EPQuant) candidate. Compute it ONCE per block and reuse it for the
-// whole 2p candidate sweep.
-template <int TexW, int TexH>
-int find_best_2p_partition(const SampleT<TexW * TexH>& s) {
+// winning partition ranking is identical across every (grid, weight_quant,
+// EPQuant) candidate. Compute it ONCE per block and reuse the top-K for
+// the whole 2p candidate sweep. Fills out[0..K) with the K lowest-err
+// partition indices, ascending.
+template <int TexW, int TexH, int K>
+void find_best_2p_partitions(const SampleT<TexW * TexH>& s, int out[K]) {
     constexpr int TN = TexW * TexH;
     const auto& table = partition_table_np<2, TexW, TexH>();
     std::uint8_t mask[2][TN];
     std::uint8_t e0_seed[2][3], e1_seed[2][3];
-    int best_pi = 0;
-    float best_pi_err = std::numeric_limits<float>::infinity();
+    float bestErr[K];
+    for (int i = 0; i < K; ++i) {
+        bestErr[i] = std::numeric_limits<float>::infinity();
+        out[i] = 0;
+    }
     for (int pi = 0; pi < 1024; ++pi) {
         const std::uint8_t* assign = table.assign[pi];
         int counts[2] = {};
@@ -3167,13 +3179,21 @@ int find_best_2p_partition(const SampleT<TexW * TexH>& s) {
             float db = pb - w * db0;
             pi_err += dr * dr + dg * dg + db * db;
         }
-        if (pi_err < best_pi_err) { best_pi_err = pi_err; best_pi = pi; }
+        if (pi_err < bestErr[K - 1]) {
+            int p = K - 1;
+            while (p > 0 && pi_err < bestErr[p - 1]) {
+                bestErr[p] = bestErr[p - 1];
+                out[p] = out[p - 1];
+                --p;
+            }
+            bestErr[p] = pi_err;
+            out[p] = pi;
+        }
     }
-    return best_pi;
 }
 
-// Bilinear-decim 2-partition encoder (phase 2). Given the winning
-// partition index (from find_best_2p_partition), runs full LSQ + coord
+// Bilinear-decim 2-partition encoder (phase 2). Given a chosen
+// partition index (from find_best_2p_partitions), runs full LSQ + coord
 // descent on it. Endpoints quantised at EPQuant (24..256); weights at WL
 // (2/4/8/16/32, power-of-2 straight). Tries CEM-8 and CEM-9, picks lower.
 template <int TexW, int TexH, int GridW, int GridH,
@@ -3696,15 +3716,20 @@ auto make_encode_fn_2p_pack() {
     return [](const SampleT<TexW * TexH>& s) {
         Candidate best{};
         best.err = std::numeric_limits<float>::infinity();
-        // The 1024-partition search is grid/quant-independent — run it
-        // once and reuse the winning index for every 2p candidate.
-        int best_pi = find_best_2p_partition<TexW, TexH>(s);
-        ((
-            [&] {
-                Candidate c = try_decim_2p_cfg<TexW, TexH, Cfgs2p, M>(s, best_pi);
-                if (c.err < best.err) best = c;
-            }()
-        ), ...);
+        // The 1024-partition surrogate is grid/quant-independent — run it
+        // once and carry the top-K partition indices into the full 2p
+        // candidate sweep (the surrogate can mis-rank the post-quant best).
+        int pis[kTop2pPartitions];
+        find_best_2p_partitions<TexW, TexH, kTop2pPartitions>(s, pis);
+        for (int pidx = 0; pidx < kTop2pPartitions; ++pidx) {
+            const int best_pi = pis[pidx];
+            ((
+                [&] {
+                    Candidate c = try_decim_2p_cfg<TexW, TexH, Cfgs2p, M>(s, best_pi);
+                    if (c.err < best.err) best = c;
+                }()
+            ), ...);
+        }
         return best;
     };
 }
