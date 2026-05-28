@@ -80,7 +80,7 @@ for bm in range(2048):
     if key not in modes or bm < modes[key]:
         modes[key] = bm
 
-footprints = [(5,4),(5,5),(6,5),(6,6),(8,5),(8,6),(8,8),
+footprints = [(4,4),(5,4),(5,5),(6,5),(6,6),(8,5),(8,6),(8,8),
               (10,5),(10,6),(10,8),(10,10),(12,10),(12,12)]
 
 EPQ_FLOOR = 24

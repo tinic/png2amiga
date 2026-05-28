@@ -3409,24 +3409,9 @@ Candidate encode_block_rgb_2p_decim(const SampleT<TexW * TexH>& s, int best_pi) 
 //
 // 4-partition CEM-8 is INFEASIBLE — ASTC color_integer_count caps at
 // 18 vs 4 × 6 = 24 — would require CEM-6 (base+scale).
-// 4x4 dispatch — alpha + 2-partition specialisations all live in the
-// 4x4 path because their partition tables / endpoint quants are sized
-// to the 16-texel footprint.
-template <block_compress::BlockMetric M>
-Candidate encode_block_4x4(const Sample16& s) {
-    bool any_alpha = false;
-    for (int i = 0; i < 16; ++i) {
-        if (s.alpha[i] != 255) { any_alpha = true; break; }
-    }
-    if (any_alpha) {
-        Candidate sp = encode_block_rgba<M>(s);
-        Candidate dp = encode_block_rgba_dual<M>(s);
-        return (dp.err < sp.err) ? dp : sp;
-    }
-    Candidate one = encode_block_rgb<4, 4, kBlockModeRgb4x4, 8, M>(s);
-    Candidate two = encode_block_rgb_2p<M>(s);
-    return (two.err < one.err) ? two : one;
-}
+// The 4x4 opaque dispatch lives in make_encode_fn_4x4_exhaustive (defined
+// after the pack helpers it depends on); alpha + 2-partition
+// specialisations are sized to the 16-texel footprint there.
 
 // Generic non-4x4 dispatch — 1-partition CEM-8 RGB only. Alpha gets
 // the same RGB encoding (alpha is dropped from the encode but preserved
@@ -3439,8 +3424,9 @@ Candidate encode_block_wh(const SampleT<W * H>& s) {
 }  // namespace
 
 // Shared block-loop kernel — templated on the per-block encoder. The
-// 4x4 path passes encode_block_4x4 (which itself tries 1p + 2p +
-// RGBA); other footprints pass encode_block_wh<W,H,Mode>.
+// 4x4 path passes make_encode_fn_4x4_exhaustive (alpha → RGBA single +
+// dual; opaque → 1p decim pack + 2p pack); other footprints pass
+// make_encode_fn_decim_pack / combine_encode_fns(2p, 1p).
 namespace {
 
 template <int W, int H, typename EncodeBlockFn>
@@ -3567,11 +3553,6 @@ struct FootprintSpec {
 template <int W2, int H2, std::uint32_t BM2, int WL2, block_compress::BlockMetric M>
 auto make_encode_fn() {
     return [](const SampleT<W2 * H2>& s) { return encode_block_wh<W2, H2, BM2, WL2, M>(s); };
-}
-
-template <block_compress::BlockMetric M>
-auto make_encode_fn_4x4() {
-    return [](const Sample16& s) { return encode_block_4x4<M>(s); };
 }
 
 // Bilinear-decimation encode lambda factory. Block dim is TexW × TexH;
@@ -3737,6 +3718,54 @@ auto combine_encode_fns(Fn1 f1, Fn2 f2) {
     };
 }
 
+// 4x4 exhaustive dispatch. The phase-1 4x4 path tried just two opaque
+// candidates (1:1 Q8 CEM-8 + the hand-tuned 2p), while every other
+// footprint got the full exhaustive enumeration (decim grids + tighter-
+// endpoint band + generalised 2p pack) in later phases. This brings 4x4
+// to parity: opaque blocks run the original hand-tuned 2p (proven
+// baseline) PLUS the 1p decim pack (base QUANT_256 grids + tighter-EPQ
+// candidates) PLUS the generalised 2p pack, min-err pick. Alpha blocks
+// keep the RGBA single + dual-plane path unchanged. Candidate lists from
+// tools/astc_enum_modes.py, astc_enum_epq.py, astc_enum_2p.py.
+template <block_compress::BlockMetric M>
+auto make_encode_fn_4x4_exhaustive() {
+    auto fn1p = make_encode_fn_decim_pack<4, 4, M,
+        DecimCfg{2,3,0x33F,32}, DecimCfg{2,4,0x35F,32},
+        DecimCfg{3,2,0x39F,32}, DecimCfg{3,3,0x3BF,32},
+        DecimCfg{3,4,0x3DF,32}, DecimCfg{4,2,0x213,32},
+        DecimCfg{4,3,0x233,32}, DecimCfg{4,4,0x251,12},
+        // Tighter-endpoint band (finer weight quant on the 1:1 grid):
+        DecimCfg{4,4,0x242,16, 8, 192}, DecimCfg{4,4,0x252,20, 8, 96},
+        DecimCfg{4,4,0x243,24, 8, 64},  DecimCfg{4,4,0x253,32, 8, 32}>();
+    auto fn2p = make_encode_fn_2p_pack<4, 4, M,
+        DecimCfg2p{2,3,0x32E,16,64}, DecimCfg2p{2,3,0x33F,32,48},
+        DecimCfg2p{2,4,0x15F,8,64},  DecimCfg2p{2,4,0x34E,16,40},
+        DecimCfg2p{2,4,0x35F,32,24}, DecimCfg2p{3,2,0x38E,16,64},
+        DecimCfg2p{3,2,0x39F,32,48}, DecimCfg2p{3,3,0x1BF,8,64},
+        DecimCfg2p{3,3,0x3AE,16,32}, DecimCfg2p{3,4,0x1CE,4,64},
+        DecimCfg2p{3,4,0x1DF,8,32},  DecimCfg2p{4,2,0x013,8,64},
+        DecimCfg2p{4,2,0x202,16,40}, DecimCfg2p{4,2,0x213,32,24},
+        DecimCfg2p{4,3,0x022,4,64},  DecimCfg2p{4,3,0x033,8,32},
+        DecimCfg2p{4,4,0x042,4,40}>();
+    return [fn1p, fn2p](const Sample16& s) {
+        bool any_alpha = false;
+        for (int i = 0; i < 16; ++i) {
+            if (s.alpha[i] != 255) { any_alpha = true; break; }
+        }
+        if (any_alpha) {
+            Candidate sp = encode_block_rgba<M>(s);
+            Candidate dp = encode_block_rgba_dual<M>(s);
+            return (dp.err < sp.err) ? dp : sp;
+        }
+        Candidate best = encode_block_rgb_2p<M>(s);  // hand-tuned 2p baseline
+        Candidate a = fn1p(s);
+        if (a.err < best.err) best = a;
+        Candidate b = fn2p(s);
+        if (b.err < best.err) best = b;
+        return best;
+    };
+}
+
 // 1:1 + three decim hybrid.
 template <int TexW, int TexH,
           std::uint32_t BM_11, int WL_11,
@@ -3856,7 +3885,7 @@ EncodeResult encode_image(std::span<const std::uint8_t> rgba_srgb8,
     auto run = [&]<block_compress::BlockMetric M>() -> EncodeResult {
         if (W == 4 && H == 4)
             return encode_image_impl<4, 4>(rgba_srgb8, image_w, image_h, options,
-                                           make_encode_fn_4x4<M>());
+                                           make_encode_fn_4x4_exhaustive<M>());
         // Non-4x4 dispatch: per-footprint exhaustive search over every
         // valid 2D block_mode whose (grid, weight_quant) fits 6-endpoint
         // CEM-8 QUANT_256 (weight_bits ≤ 63). Each candidate runs
