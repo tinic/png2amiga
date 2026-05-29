@@ -6755,6 +6755,7 @@ int run_astc(Config cfg) {
     // ED (per-texel high-freq injection hurts their already-good fit).
     aopts.pixel_ed = (cfg.mode == amiga::Mode::astc_10x5 ||
                       cfg.mode == amiga::Mode::astc_10x6 ||
+                      cfg.mode == amiga::Mode::astc_10x8 ||
                       cfg.mode == amiga::Mode::astc_6x6);
 
     auto enc = astc::encode_image(rgba_srgb8, W, H, aopts);
