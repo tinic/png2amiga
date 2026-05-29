@@ -3131,7 +3131,7 @@ float pick_weights_2p_decim(const SampleT<TexW * TexH>& s,
 // post-quant best, so we hedge by trying the top-K with full encode and
 // taking min-err — astcenc -medium does the analogous thing with its top-2
 // partition candidates. Cost scales the 2p sweep linearly in K.
-constexpr int kTop2pPartitions = 4;
+constexpr int kTop2pPartitions = 32;
 
 // Phase 1 of the 2-partition encode: cheap brute-force over all 1024
 // partition indices using a PCA seed + per-texel ideal-weight residual
