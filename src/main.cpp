@@ -6748,6 +6748,14 @@ int run_astc(Config cfg) {
         ? cfg.dither_strength
         : dither_tuning::defaults_for({cfg.mode, 8, false, false, false}).strength;
     aopts.block_ed.method = cfg.dither_method;
+    // Per-texel (vs per-block mean) error diffusion wins on the wide/coarse
+    // footprints where a single-gradient block can't absorb the mean shift
+    // and the boundary error profile matters — validated train + held-out on
+    // 10x5/10x6/6x6 (10-image DIV2K @256w). Fine footprints keep block-grid
+    // ED (per-texel high-freq injection hurts their already-good fit).
+    aopts.pixel_ed = (cfg.mode == amiga::Mode::astc_10x5 ||
+                      cfg.mode == amiga::Mode::astc_10x6 ||
+                      cfg.mode == amiga::Mode::astc_6x6);
 
     auto enc = astc::encode_image(rgba_srgb8, W, H, aopts);
     if (enc.blocks.empty()) {

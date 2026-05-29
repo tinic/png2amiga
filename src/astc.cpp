@@ -3483,6 +3483,14 @@ EncodeResult encode_image_impl(std::span<const std::uint8_t> rgba_srgb8,
 
     const bool use_block_ed = options.block_ed.strength > 0.0f;
     auto ed_kernel = dither::error_diffusion_kernel(options.block_ed.method);
+    // Per-TEXEL error diffusion across blocks (options.pixel_ed) instead of
+    // the per-block mean-residual grid ED. Carries the full spatial residual
+    // at texel granularity (raster order, the same dither kernel applied in
+    // texels), so the error profile along block boundaries is preserved
+    // rather than smeared to a uniform block shift. Forces non-serpentine
+    // raster for a consistent diffusion axis. Wins on wide/coarse footprints
+    // (single-gradient blocks); the caller enables it only there.
+    const bool pixel_ed = use_block_ed && !ed_kernel.empty() && options.pixel_ed;
 
     int n_strips = int(std::max(std::thread::hardware_concurrency(), 1u));
     n_strips = std::min(n_strips, res.block_rows);
@@ -3500,25 +3508,75 @@ EncodeResult encode_image_impl(std::span<const std::uint8_t> rgba_srgb8,
             res.block_cols, by_hi - by_lo);
         for (auto& v : err_carry.as_span()) v = {0.f, 0.f, 0.f};
 
+        // Per-texel error buffer for the pixel-ED path: pad_w × strip-height
+        // in texels, OKLab, zero-initialised. Indexed (gy_local*pw + gx).
+        const int strip_h_px = (by_hi - by_lo) * H;
+        std::vector<color_space::OKLab> tex_err;
+        if (pixel_ed) tex_err.assign(pw * std::size_t(strip_h_px), {0.f, 0.f, 0.f});
+
         SampleT<N> s{};
         float strip_err = 0.0f;
 
         for (int by = by_lo; by < by_hi; ++by) {
             const int local_by = by - by_lo;
-            bool reverse_row = use_block_ed && options.block_ed.serpentine &&
-                               (local_by & 1);
+            bool reverse_row = use_block_ed && !pixel_ed &&
+                               options.block_ed.serpentine && (local_by & 1);
             int bx_start = reverse_row ? res.block_cols - 1 : 0;
             int bx_end = reverse_row ? -1 : res.block_cols;
             int bx_step = reverse_row ? -1 : 1;
             for (int bx = bx_start; bx != bx_end; bx += bx_step) {
                 color_space::OKLab shift =
-                    use_block_ed ? err_carry[bx, local_by]
-                                 : color_space::OKLab{0.f, 0.f, 0.f};
+                    (use_block_ed && !pixel_ed) ? err_carry[bx, local_by]
+                                                : color_space::OKLab{0.f, 0.f, 0.f};
                 load_sample<W, H>(s, padded, pw, bx * W, by * H, shift);
+
+                if (pixel_ed) {
+                    // Add the carried per-texel error to each texel's OKLab
+                    // scoring target (the coord-descent / selection metric).
+                    for (int dy = 0; dy < H; ++dy) {
+                        for (int dx = 0; dx < W; ++dx) {
+                            std::size_t ti =
+                                std::size_t(local_by * H + dy) * pw + std::size_t(bx * W + dx);
+                            const auto& e = tex_err[ti];
+                            int i = dy * W + dx;
+                            s.lab[i].L += e.L;
+                            s.lab[i].a += e.a;
+                            s.lab[i].b += e.b;
+                        }
+                    }
+                }
 
                 Candidate c = encode_block_fn(s);
 
-                if (use_block_ed && !ed_kernel.empty()) {
+                if (pixel_ed) {
+                    // Diffuse each texel's residual (shifted target − decoded)
+                    // to neighbour texels via the dither kernel, in texels.
+                    const float clamp_v = options.block_ed.error_clamp;
+                    auto cl = [&](float v) { return std::clamp(v, -clamp_v, clamp_v); };
+                    for (int dy = 0; dy < H; ++dy) {
+                        for (int dx = 0; dx < W; ++dx) {
+                            int i = dy * W + dx;
+                            auto dec = color_space::srgb8_to_oklab(
+                                c.decoded[i][0], c.decoded[i][1], c.decoded[i][2]);
+                            color_space::OKLab r{s.lab[i].L - dec.L,
+                                                 s.lab[i].a - dec.a,
+                                                 s.lab[i].b - dec.b};
+                            int gx = bx * W + dx;
+                            int gy = local_by * H + dy;
+                            for (const auto& k : ed_kernel) {
+                                int nx = gx + k.dx;
+                                int ny = gy + k.dy;
+                                if (nx < 0 || ny < 0 || nx >= int(pw) || ny >= strip_h_px)
+                                    continue;
+                                float w = k.weight * options.block_ed.strength;
+                                auto& t = tex_err[std::size_t(ny) * pw + std::size_t(nx)];
+                                t.L += cl(r.L * w);
+                                t.a += cl(r.a * w);
+                                t.b += cl(r.b * w);
+                            }
+                        }
+                    }
+                } else if (use_block_ed && !ed_kernel.empty()) {
                     float tL = 0.f, ta = 0.f, tb = 0.f;
                     float dL = 0.f, da = 0.f, db = 0.f;
                     for (int i = 0; i < N; ++i) {

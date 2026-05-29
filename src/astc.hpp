@@ -33,6 +33,11 @@ struct Options {
     block_compress::BlockMetric metric = block_compress::BlockMetric::oklab2;
     int effort = 1;
     block_compress::BlockGridEdOptions block_ed;
+    // Per-TEXEL error diffusion across blocks instead of the per-block
+    // mean-residual grid ED. Wins on wide/coarse footprints (single-
+    // gradient blocks) where the mean shift smears the boundary error;
+    // loses on fine footprints. Set per-footprint by the caller.
+    bool pixel_ed = false;
 };
 
 struct EncodeResult {
