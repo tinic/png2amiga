@@ -2460,17 +2460,44 @@ InlineImageProtocol detect_inline_image_protocol() {
     // build 3.4.0+ (~2020).
     auto lc_terminal = std::getenv("LC_TERMINAL");    // NOLINT(concurrency-mt-unsafe)
 
-    // Kitty / Ghostty — both speak the Kitty graphics protocol.
+    // Kitty / Ghostty / WezTerm — all speak the Kitty graphics protocol.
     if (contains(term, "kitty")) return InlineImageProtocol::kitty;
     if (contains(term, "ghostty")) return InlineImageProtocol::kitty;
+    if (contains(term, "wezterm")) return InlineImageProtocol::kitty;
     if (set("KITTY_WINDOW_ID")) return InlineImageProtocol::kitty;
     if (eq(term_program, "ghostty")) return InlineImageProtocol::kitty;
     if (set("GHOSTTY_RESOURCES_DIR")) return InlineImageProtocol::kitty;
+    // WezTerm leaves TERM at xterm-256color by default, so key off its
+    // own markers: TERM_PROGRAM=WezTerm and the always-exported
+    // WEZTERM_PANE / WEZTERM_EXECUTABLE pane vars.
+    if (eq(term_program, "WezTerm")) return InlineImageProtocol::kitty;
+    if (set("WEZTERM_PANE")) return InlineImageProtocol::kitty;
+    if (set("WEZTERM_EXECUTABLE")) return InlineImageProtocol::kitty;
 
     // iTerm.app — OSC 1337. TERM_PROGRAM is set locally; LC_TERMINAL
     // is what survives an SSH hop. Both should match "iTerm2"-ish.
     if (eq(term_program, "iTerm.app")) return InlineImageProtocol::iterm;
     if (eq(lc_terminal,  "iTerm2"))    return InlineImageProtocol::iterm;
+
+    // Warp — speaks both the Kitty graphics protocol and iTerm2 OSC 1337
+    // (gated behind a "Kitty/iTerm Images" feature flag the user must
+    // enable; off by default). We emit OSC 1337: it's a single
+    // self-contained escape, sidestepping Warp's file/shm-oriented kitty
+    // transmission path. TERM stays xterm-256color, so key off
+    // TERM_PROGRAM=WarpTerminal (set on macOS, Linux, and Windows builds).
+    if (eq(term_program, "WarpTerminal")) return InlineImageProtocol::iterm;
+
+    // Hyper (Electron, xterm.js) — implements the iTerm2 inline-image
+    // protocol. TERM_PROGRAM=Hyper on current builds; older builds used
+    // HyperTerm.
+    if (eq(term_program, "Hyper"))     return InlineImageProtocol::iterm;
+    if (eq(term_program, "HyperTerm")) return InlineImageProtocol::iterm;
+
+    // Rio (GPU, Win/Mac/Linux) — supports sixel, kitty, and iTerm2. We
+    // emit OSC 1337 for the same reason as Warp: one self-contained
+    // escape. Rio sets TERM_PROGRAM=rio and TERM=rio.
+    if (eq(term_program, "rio")) return InlineImageProtocol::iterm;
+    if (contains(term, "rio"))   return InlineImageProtocol::iterm;
 
     // Windows Terminal — sixel since 1.22. WT_SESSION is set on every
     // pane; we don't probe DA1 because the env var is sufficient and
@@ -2482,6 +2509,22 @@ InlineImageProtocol detect_inline_image_protocol() {
     // every integrated-terminal session (including SSH-remote panes via
     // the Remote-SSH extension's env injection).
     if (eq(term_program, "vscode")) return InlineImageProtocol::sixel;
+
+    // Sixel-family terminals. Each of these supports sixel reliably; we
+    // prefer sixel here even where a terminal also has partial kitty
+    // support (e.g. Konsole), since its sixel path is the mature one.
+    //   Konsole (KDE)  — KONSOLE_VERSION is exported in every session.
+    //   foot (Wayland) — TERM is "foot" / "foot-extra".
+    //   Contour        — TERM is "contour"; also sets TERM_PROGRAM.
+    //   mlterm         — exports MLTERM=<version>; TERM is "mlterm".
+    //   mintty         — Cygwin/MSYS2/Git-Bash on Windows; TERM_PROGRAM=mintty.
+    if (set("KONSOLE_VERSION"))         return InlineImageProtocol::sixel;
+    if (contains(term, "foot"))         return InlineImageProtocol::sixel;
+    if (contains(term, "contour"))      return InlineImageProtocol::sixel;
+    if (eq(term_program, "contour"))    return InlineImageProtocol::sixel;
+    if (set("MLTERM"))                  return InlineImageProtocol::sixel;
+    if (contains(term, "mlterm"))       return InlineImageProtocol::sixel;
+    if (eq(term_program, "mintty"))     return InlineImageProtocol::sixel;
 
     return InlineImageProtocol::none;
 }
