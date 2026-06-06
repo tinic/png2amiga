@@ -1466,6 +1466,45 @@ sys.exit(0 if got==expect else (print(f'expected {expect}, got {got}') or 1))"
                              PROPERTIES DEPENDS "smoke-snes-${ext}")
     endforeach()
 
+    # Game Boy Advance bitmap modes — mode3/mode5 (16bpp direct: .png + .h),
+    # mode4 (8bpp paletted: .bin → companion .pal, + .h).
+    set(gba_outputs
+        "mode3.png|--mode gba-mode3"
+        "mode3.h|--mode gba-mode3 --symbol gba3_test"
+        "mode4.bin|--mode gba-mode4"
+        "mode4.h|--mode gba-mode4 --symbol gba4_test"
+        "mode5.png|--mode gba-mode5"
+        "mode5.h|--mode gba-mode5 --symbol gba5_test"
+    )
+    foreach(spec ${gba_outputs})
+        string(REPLACE "|" ";" spec_parts ${spec})
+        list(GET spec_parts 0 ext)
+        list(GET spec_parts 1 mode_args)
+        separate_arguments(mode_args UNIX_COMMAND "${mode_args}")
+        add_test(
+            NAME "smoke-gba-${ext}"
+            COMMAND png2amiga ${mode_args}
+                    ${PNG2AMIGA_TEST_INPUT}
+                    ${CMAKE_BINARY_DIR}/smoke-gba.${ext}
+        )
+        add_test(
+            NAME "smoke-gba-${ext}-exists"
+            COMMAND ${CMAKE_COMMAND} -E sha256sum
+                    ${CMAKE_BINARY_DIR}/smoke-gba.${ext}
+        )
+        set_tests_properties("smoke-gba-${ext}-exists"
+                             PROPERTIES DEPENDS "smoke-gba-${ext}")
+    endforeach()
+
+    # GBA mode4 .bin must write a companion .pal (256 × u16 LE BGR555).
+    add_test(
+        NAME "smoke-gba-mode4-pal-exists"
+        COMMAND ${CMAKE_COMMAND} -E sha256sum
+                ${CMAKE_BINARY_DIR}/smoke-gba.mode4.pal
+    )
+    set_tests_properties("smoke-gba-mode4-pal-exists"
+                         PROPERTIES DEPENDS "smoke-gba-mode4.bin")
+
     # C64 — every (mode, output-format) combo we promise. Bitmap modes:
     # PNG preview, .raw bytes, .prg displayer; .koa for multicolor only;
     # .hir for hires only. Charset modes: PNG, .raw, .h header. PETSCII
@@ -1530,6 +1569,9 @@ sys.exit(0 if got==expect else (print(f'expected {expect}, got {got}') or 1))"
         "c64-afli|--mode c64-afli"
         "c64-petscii|--mode c64-petscii"
         "c64-charset-hires|--mode c64-charset-hires"
+        "gba-mode3|--mode gba-mode3"
+        "gba-mode4|--mode gba-mode4"
+        "gba-mode5|--mode gba-mode5"
     )
     foreach(spec ${no_output_modes})
         string(REPLACE "|" ";" parts ${spec})
@@ -2081,6 +2123,12 @@ sys.exit(0 if got==expect else (print(f'expected {expect}, got {got}') or 1))"
         COMMAND ${_equiv_chk} --in ${_pal_makena_in} -- --mode snes-mode7-direct)
     add_test(NAME "api-equiv-snes-256"
         COMMAND ${_equiv_chk} --in ${_pal_makena_in} -- --mode snes-mode7-256)
+    add_test(NAME "api-equiv-gba-mode3"
+        COMMAND ${_equiv_chk} --in ${_pal_makena_in} -- --mode gba-mode3)
+    add_test(NAME "api-equiv-gba-mode4"
+        COMMAND ${_equiv_chk} --in ${_pal_makena_in} -- --mode gba-mode4)
+    add_test(NAME "api-equiv-gba-mode5"
+        COMMAND ${_equiv_chk} --in ${_pal_makena_in} -- --mode gba-mode5)
     add_test(NAME "api-equiv-c64-multicolor"
         COMMAND ${_equiv_chk} --in ${_pal_makena_in} -- --mode c64-multicolor)
     add_test(NAME "api-equiv-c64-hires"

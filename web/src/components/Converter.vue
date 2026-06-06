@@ -15,7 +15,7 @@ import {
   CHIPSETS, DITHER_METHODS, ALPHA_DITHER_METHODS, isNonSquareDither,
   SLIDERS, CGA_TEXT_METRICS, CGA_TEXT_KERNELS, C64_PALETTES, C64_METRICS, c64PaletteRgb, EXAMPLES, examplesForChipset,
   defaultOptions, isHamMode, hamType, isEhbMode, isAtariMode,
-  isDosMode, isVgaMode, isEgaMode, isSnesMode, isSnesDirectMode, isGenesisMode, isC64Mode, isC64CharsetMode, isCgaMode, isCgaText, isTileFreeformMode, isFixedBufferMode, isInterlaceMode, modePar,
+  isDosMode, isVgaMode, isEgaMode, isSnesMode, isSnesDirectMode, isGenesisMode, isGbaMode, isGbaDirectMode, isC64Mode, isC64CharsetMode, isCgaMode, isCgaText, isTileFreeformMode, isFixedBufferMode, isInterlaceMode, modePar,
   maxDepth, defaultDepth, effectiveChipset, previewScale,
   modesForChipset,
 } from '../lib/options.js'
@@ -697,10 +697,13 @@ const groupedDitherOptions = computed(() => {
   // SNES Mode 7 Direct has no palette table at all → yliluoma family
   // has nothing to mix. HAM does support the family (ham.cpp's per-
   // pixel reachable set), so only Mode 7 Direct hides it now.
-  const hide_yliluoma = isSnesDirectMode(options.mode)
+  // GBA direct modes (mode3/mode5) are gated exactly like SNES Mode 7
+  // Direct: 16bpp BGR555 grid, no palette table → yliluoma has nothing
+  // to mix and DBS has no indices to sweep.
+  const hide_yliluoma = isSnesDirectMode(options.mode) || isGbaDirectMode(options.mode)
   // DBS sweeps palette indices and so doesn't apply in HAM (no fixed
-  // palette) or SNES Mode 7 Direct (RGB443 grid quantisation).
-  const hide_dbs = ht !== null || isSnesDirectMode(options.mode)
+  // palette) or the direct grid modes (BGR555 / RGB443 grid quantisation).
+  const hide_dbs = ht !== null || isSnesDirectMode(options.mode) || isGbaDirectMode(options.mode)
   return DITHER_METHODS
     .map(g => ({
       label: g.group,
@@ -948,6 +951,15 @@ function maybeFallbackSnesDirectDither(mode: string): void {
   }
 }
 
+function maybeFallbackGbaDirectDither(mode: string): void {
+  // GBA direct modes (mode3/mode5) are 16bpp BGR555 with no palette
+  // table — same gating as SNES Mode 7 Direct. Snap any yliluoma
+  // selection back to F-S.
+  if (isGbaDirectMode(mode) && YLIL_FAMILY.has(options.dither)) {
+    options.dither = 'floyd-steinberg'
+  }
+}
+
 // Genesis prefers opt-checker by default: its 2×2-phase threshold aligns
 // with 8-pixel tile boundaries so tile dedup survives (~40% on photos).
 // Error-diffusion methods (FS, atkinson, etc.) destroy dedup → blow the
@@ -965,6 +977,7 @@ watch(() => options.mode, (mode, oldMode) => {
   clampDepthForMode(mode)
   maybeFallbackHamDither(mode)
   maybeFallbackSnesDirectDither(mode)
+  maybeFallbackGbaDirectDither(mode)
   maybeSelectGenesisDither(mode, oldMode)
   syncNativeParToMode(mode, oldMode)
   // Resize toggle is only meaningful for non-fixed-buffer modes (Amiga
@@ -2738,8 +2751,17 @@ async function loadExample(example: typeof EXAMPLES[number]) {
               <Button label="raw" icon="pi pi-download" class="flex-1" severity="secondary" :disabled="!imageBytes || converting" @click="downloadRaw"
                 title="Download raw bytes: 16 KB tilemap (128×128, u8 tile index) + tile data (unique × 64) + 256×3-byte sRGB palette (256 mode only)." />
             </div>
+            <!-- Game Boy Advance export: PNG + devkitARM-style .h header.
+                 mode4's single .h carries both indices and the BGR555
+                 palette, so PNG + .h is sufficient in the browser. -->
+            <div v-if="isGbaMode(options.mode)" class="flex gap-2">
+              <Button label="png" icon="pi pi-download" class="flex-1" :disabled="!imageBytes || converting" @click="downloadPNG"
+                title="Download the converted image as a PNG preview file." />
+              <Button label="h" icon="pi pi-download" class="flex-1" severity="secondary" :disabled="!imageBytes || converting" @click="downloadHeader"
+                title="Download a GBA C header: Bitmap[] of BGR555 words (Mode 3/5) or 8bpp indices + Pal[256] (Mode 4), with Width / Height / BitmapLen defines." />
+            </div>
             <!-- Amiga export buttons -->
-            <div v-if="!isAtariMode(options.mode) && !isDosMode(options.mode) && !isSnesMode(options.mode) && !isGenesisMode(options.mode) && !isC64Mode(options.mode)" class="flex gap-2">
+            <div v-if="!isAtariMode(options.mode) && !isDosMode(options.mode) && !isSnesMode(options.mode) && !isGenesisMode(options.mode) && !isC64Mode(options.mode) && !isGbaMode(options.mode)" class="flex gap-2">
               <Button label="png" icon="pi pi-download" class="flex-1" :disabled="!imageBytes || converting" @click="downloadPNG"
                 title="Download the converted image as a PNG preview file." />
               <Button label="iff" icon="pi pi-download" class="flex-1" :disabled="!imageBytes || converting" @click="downloadIFF"
@@ -2749,7 +2771,7 @@ async function loadExample(example: typeof EXAMPLES[number]) {
               <Button label="adf" icon="pi pi-download" class="flex-1" :disabled="!imageBytes || converting" @click="compileAndDownload('adf')"
                 title="Download bootable Amiga floppy disk image (ADF)." />
             </div>
-            <div v-if="!isAtariMode(options.mode) && !isDosMode(options.mode) && !isSnesMode(options.mode) && !isGenesisMode(options.mode) && !isC64Mode(options.mode)" class="flex gap-2">
+            <div v-if="!isAtariMode(options.mode) && !isDosMode(options.mode) && !isSnesMode(options.mode) && !isGenesisMode(options.mode) && !isC64Mode(options.mode) && !isGbaMode(options.mode)" class="flex gap-2">
               <Button label="exe" icon="pi pi-download" class="flex-1" severity="secondary" :disabled="!imageBytes || converting" @click="compileAndDownload('exe')"
                 title="Download compiled AmigaOS executable. Click left mouse button to exit." />
               <Button label="cpp" icon="pi pi-download" class="flex-1" severity="secondary" :disabled="!imageBytes || converting" @click="downloadViewer"

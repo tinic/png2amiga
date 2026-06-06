@@ -64,6 +64,11 @@ optional Shadow/Highlight extension. 4 palette lines × 16 BGR333,
 Color (BBGGGRRR) variants. Affine-transformable 8bpp BG1, ≤256
 unique 8×8 tiles via greedy distance-merging when content overflows.
 
+**Game Boy Advance**: Mode 3 (240×160 16bpp BGR555 direct), Mode 4
+(240×160 8bpp + 256-color BGR555 palette), and Mode 5 (160×128 16bpp
+BGR555 direct). PNG preview + devkitARM/grit-style `.h` header +
+raw `.bin` (Mode 4 also writes a companion `.pal`).
+
 **Palette quantizers**: GPU-accelerated parallel-restart Lloyd
 k-means in OKLab on Apple GPU (default for AGA / VGA when Xcode's
 Metal toolchain is available; mean ΔS2 +2.6..+3.4 vs pngquant on
@@ -181,6 +186,11 @@ Pre-built Linux / macOS / Windows binaries are attached to each
 
 # SNES Mode 7 (256-color palette + tilemap + tile data)
 ./build/png2amiga --mode snes-mode7-256 input.png output.bin
+
+# Game Boy Advance
+./build/png2amiga --mode gba-mode3 input.png output.h          # 16bpp BGR555 bitmap header
+./build/png2amiga --mode gba-mode4 input.png output.bin        # 8bpp indices + companion .pal
+./build/png2amiga --mode gba-mode5 input.png output.png        # 160×128 preview
 ```
 
 Run `./build/png2amiga --help` for the full flag reference.
@@ -222,6 +232,21 @@ Run `./build/png2amiga --help` for the full flag reference.
 
 `--native-par` letterboxes/pillarboxes the source into the fixed DOS
 buffer; the default is to stretch-fill.
+
+## Game Boy Advance Modes
+
+| Mode | Resolution | Colors | Notes |
+|------|-----------|--------|-------|
+| `gba-mode3` | 240×160 | 32768 | 16bpp BGR555 direct color (one word per pixel, no palette) |
+| `gba-mode4` | 240×160 | 256 | 8bpp paletted + 256-entry BGR555 palette |
+| `gba-mode5` | 160×128 | 32768 | 16bpp BGR555 direct color (smaller buffer, hardware-scaled) |
+
+Output: PNG preview (always) + devkitARM/grit-style C header (`.h`,
+`const unsigned short`/`const unsigned char` arrays with element-count
+sizes) + raw `.bin` (Mode 4 also writes a companion `.pal` of 256 ×
+u16 LE BGR555). Square pixels (PAR 1.0). `--native-par` letterboxes/
+pillarboxes the source into the fixed LCD buffer; the default is to
+stretch-fill.
 
 ## Sliced palette (per-line copper swaps)
 
@@ -530,6 +555,7 @@ Modes:
     Genesis: genesis-h32 | genesis-h40 | genesis-h32-sh | genesis-h40-sh
     C64:    c64-multicolor | c64-hires | c64-fli | c64-afli |
             c64-petscii | c64-charset-hires | c64-charset-multicolor
+    GBA:    gba-mode3 | gba-mode4 | gba-mode5
   --depth <1-8>                   Bitplane depth (default: 5)
   --chipset ocs|aga               Amiga chipset (default: auto)
   --dual-playfield, --dpf         Encode into PF2 (depth 3 OCS / 4 AGA)
@@ -696,7 +722,6 @@ Build integration:
 
 Exit codes (sysexits.h):
   0 ok    1 internal    64 usage    66 no input    73 cannot create
-
 ```
 
 ## License

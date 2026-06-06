@@ -177,6 +177,24 @@ ST/STE hi-res is hardware-locked to monochrome (white + black). Output to
 `--native-par` preserves source aspect by letterboxing/pillarboxing into the
 fixed hardware buffer (default is to stretch-fill).
 
+## Game Boy Advance Modes
+
+| `--mode` | Resolution | Colors | Notes |
+|----------|------------|--------|-------|
+| `gba-mode3` | 240×160 | 32768 | 16bpp BGR555 direct color, one u16/pixel, no palette |
+| `gba-mode4` | 240×160 | 256    | 8bpp paletted + 256-entry BGR555 palette |
+| `gba-mode5` | 160×128 | 32768 | 16bpp BGR555 direct color, smaller buffer (hardware-scaled) |
+
+Fixed-buffer modes (square pixels, PAR 1.0). Output: PNG preview (always)
++ devkitARM/grit-style C header (`.h`: `const unsigned short`/`const
+unsigned char` arrays, element-count sizes, BGR555 palette as `unsigned
+short`) + raw `.bin` (mode4 also writes a companion `.pal`, 256 × u16 LE
+BGR555). Direct modes (mode3/mode5) route per-pixel through
+`dither::diffuse_raw_buffer` snapping to the BGR555 grid (mirrors
+`snes_mode7_direct`, 5-5-5 instead of 3-3-2); mode4 quantizes to 256
+BGR555-snapped colors and dithers via `dither::apply` (mirrors `vga_13h`).
+`--depth` and `--chipset` are no-ops; `.iff` / viewer outputs are rejected.
+
 ## Architecture Notes
 
 - **Sister project**: Architecture mirrors `png2c64` — same pipeline pattern, same coding conventions

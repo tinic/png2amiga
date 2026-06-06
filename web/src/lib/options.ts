@@ -1,6 +1,6 @@
 // Type-side declarations.
 
-export type Chipset = 'ocs' | 'aga' | 'stf' | 'ste' | 'vga' | 'ega' | 'cga' | 'snes' | 'genesis' | 'c64'
+export type Chipset = 'ocs' | 'aga' | 'stf' | 'ste' | 'vga' | 'ega' | 'cga' | 'snes' | 'genesis' | 'c64' | 'gba'
 
 export interface ModeOption {
   value: string
@@ -190,11 +190,17 @@ const ALL_MODES: ModeOption[] = [
   { value: 'genesis-h40',    label: 'H40 (320x224)',    chipset: 'genesis' },
   { value: 'genesis-h32-sh', label: 'H32 + Shadow',     chipset: 'genesis' },
   { value: 'genesis-h40-sh', label: 'H40 + Shadow',     chipset: 'genesis' },
+  // Game Boy Advance bitmap modes — linear framebuffers, no bitplanes.
+  // mode3/mode5 are 16bpp BGR555 direct color; mode4 is 8bpp + a
+  // 256-entry BGR555 palette.
+  { value: 'gba-mode3', label: 'Mode 3 (240×160, direct)',  chipset: 'gba' },
+  { value: 'gba-mode4', label: 'Mode 4 (240×160, palette)', chipset: 'gba' },
+  { value: 'gba-mode5', label: 'Mode 5 (160×128, direct)',  chipset: 'gba' },
 ]
 
 // Chipsets whose mode list is exactly `m.chipset === chipset`.
 const FIXED_CHIPSETS = new Set<Chipset>(
-  ['stf', 'ste', 'vga', 'ega', 'cga', 'snes', 'genesis', 'c64'])
+  ['stf', 'ste', 'vga', 'ega', 'cga', 'snes', 'genesis', 'c64', 'gba'])
 
 // Filter modes available for a given chipset
 export function modesForChipset(chipset: Chipset): ModeOption[] {
@@ -230,6 +236,7 @@ export const CHIPSETS: ChipsetOption[] = [
   { value: 'cga',     label: 'IBM PC CGA (fixed palette)' },
   { value: 'snes',    label: 'SNES Mode 7' },
   { value: 'genesis', label: 'Sega Genesis / Mega Drive' },
+  { value: 'gba',     label: 'Game Boy Advance' },
 ]
 
 // VIC-II palette options — only meaningful when chipset is 'c64'.
@@ -581,6 +588,7 @@ const EXAMPLES_BY_CHIPSET: Record<Chipset, Example[]> = {
   c64:     C64_EXAMPLES,
   snes:    AMIGA_EXAMPLES,
   genesis: AMIGA_EXAMPLES,
+  gba:     AMIGA_EXAMPLES,
 }
 
 export function examplesForChipset(chipset: Chipset): Example[] {
@@ -712,6 +720,14 @@ export function isSnesMode(mode: string): boolean {
 export function isGenesisMode(mode: string): boolean {
   return mode.startsWith('genesis-')
 }
+export function isGbaMode(mode: string): boolean {
+  return mode.startsWith('gba-')
+}
+// GBA direct-color modes (16bpp BGR555 per pixel, no palette). mode4 is
+// 8bpp paletted, so it's excluded.
+export function isGbaDirectMode(mode: string): boolean {
+  return mode === 'gba-mode3' || mode === 'gba-mode5'
+}
 export function isC64Mode(mode: string): boolean {
   return mode.startsWith('c64-')
 }
@@ -756,7 +772,7 @@ export function isFixedBufferMode(mode: string): boolean {
   // fixed-buffer when Resize is enabled; the UI uses isEffectiveFixedBuffer
   // (Vue side) to keep Native PAR available at default size.
   if (isTileFreeformMode(mode)) return false
-  return isDosMode(mode) || isC64Mode(mode) || isAtariMode(mode)
+  return isDosMode(mode) || isC64Mode(mode) || isAtariMode(mode) || isGbaMode(mode)
 }
 
 // Hardware Pixel Aspect Ratio (display_pixel_width / display_pixel_height).
@@ -809,6 +825,10 @@ const MODE_PAR: Record<string, number> = {
   'stf-low':  0.833,  'ste-low':  0.833,
   'stf-med':  0.417,  'ste-med':  0.417,
   'stf-hi':   1,      'ste-hi':   1,
+  // Game Boy Advance — square pixels on the native LCD.
+  'gba-mode3': 1,
+  'gba-mode4': 1,
+  'gba-mode5': 1,
 }
 
 export function modePar(mode: string): number { return MODE_PAR[mode] ?? 1 }
@@ -902,7 +922,7 @@ export function decomposeMode(uiMode: string): DecomposedMode {
 // EHB always-6, Atari mode-defined, DOS hardware-defined, C64 cell
 // constraints) report 0 to mean "no user-adjustable depth slider".
 const FIXED_DEPTH_PREDICATES = [
-  isHamMode, isEhbMode, isAtariMode, isDosMode, isC64Mode,
+  isHamMode, isEhbMode, isAtariMode, isDosMode, isC64Mode, isGbaMode,
 ] as const
 export function maxDepth(mode: string, chipset: Chipset): number {
   for (const p of FIXED_DEPTH_PREDICATES) if (p(mode)) return 0
@@ -919,6 +939,9 @@ const FIXED_DEFAULT_DEPTH: Record<string, number> = {
   'cga-640': 1,
   'cga-320': 2, 'cga-composite-hires': 1,
   'vga-13h': 8,
+  // GBA: mode4 is 8bpp paletted; direct modes are 16bpp (conceptual).
+  'gba-mode4': 8,
+  'gba-mode3': 16, 'gba-mode5': 16,
 }
 
 // Family-level fallbacks for defaultDepth. Tried in order after the
@@ -951,6 +974,8 @@ export function numColors(mode: string, depth: number): string {
     const dataBits = defaultDepth(mode) - 2
     return `${1 << dataBits} base + modify`
   }
+  // GBA direct color: 16bpp BGR555 → 32768-color gamut (not 1<<16).
+  if (isGbaDirectMode(mode)) return '32768'
   return String(1 << depth)
 }
 

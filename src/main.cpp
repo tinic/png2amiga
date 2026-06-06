@@ -1165,6 +1165,7 @@ void print_usage() {
         "    Genesis: genesis-h32 | genesis-h40 | genesis-h32-sh | genesis-h40-sh\n"
         "    C64:    c64-multicolor | c64-hires | c64-fli | c64-afli |\n"
         "            c64-petscii | c64-charset-hires | c64-charset-multicolor\n"
+        "    GBA:    gba-mode3 | gba-mode4 | gba-mode5\n"
         "  --depth <1-8>                   Bitplane depth (default: 5)\n"
         "  --chipset ocs|aga               Amiga chipset (default: auto)\n"
         "  --dual-playfield, --dpf         Encode into PF2 (depth 3 OCS / 4 AGA)\n"
@@ -2079,6 +2080,12 @@ Result<Config> parse_args(int argc, char* argv[]) {
                 else if (v == "c64-charset-multicolor" || v == "c64-charset-mc" ||
                          v == "charset-multicolor")
                     config.mode = amiga::Mode::c64_charset_multicolor;
+                else if (v == "gba-mode3" || v == "gba-3")
+                    config.mode = amiga::Mode::gba_mode3;
+                else if (v == "gba-mode4" || v == "gba-4")
+                    config.mode = amiga::Mode::gba_mode4;
+                else if (v == "gba-mode5" || v == "gba-5")
+                    config.mode = amiga::Mode::gba_mode5;
                 else if (v == "png") {
                     // Benchmark-only path: emit indexed PNG-8 directly
                     // (no Amiga encoding). Used to compare our quantizer
@@ -2785,6 +2792,12 @@ std::string_view mode_to_options_string(amiga::Mode m) {
         return "genesis-h32-sh";
     case amiga::Mode::genesis_h40_sh:
         return "genesis-h40-sh";
+    case amiga::Mode::gba_mode3:
+        return "gba-mode3";
+    case amiga::Mode::gba_mode4:
+        return "gba-mode4";
+    case amiga::Mode::gba_mode5:
+        return "gba-mode5";
     default:
         return "lores";
     }
@@ -5579,6 +5592,9 @@ int run_main(int argc, char* argv[]) {
                 "c64-petscii",
                 "c64-charset-hires",
                 "c64-charset-multicolor",
+                "gba-mode3",
+                "gba-mode4",
+                "gba-mode5",
             };
             for (std::size_t i = 0; i < std::size(modes); ++i) {
                 std::print("    \"{}\"{}\n", modes[i], i + 1 < std::size(modes) ? "," : "");
@@ -5595,6 +5611,7 @@ int run_main(int argc, char* argv[]) {
             cli_status("  Genesis:  genesis-h32, genesis-h40 (+ -sh variants)");
             cli_status("  C64:      c64-multicolor, c64-hires, c64-fli, c64-afli, c64-petscii,");
             cli_status("            c64-charset-hires, c64-charset-multicolor");
+            cli_status("  GBA:      gba-mode3, gba-mode4, gba-mode5");
         }
         return exit_code::ok;
     }
@@ -6636,7 +6653,8 @@ int run_main(int argc, char* argv[]) {
             bool is_fixed_buffer = amiga::is_atari(config->mode) || amiga::is_vga(config->mode) ||
                                    amiga::is_cga(config->mode) || amiga::is_ega(config->mode) ||
                                    amiga::is_snes(config->mode) ||
-                                   amiga::is_genesis(config->mode) || amiga::is_c64(config->mode);
+                                   amiga::is_genesis(config->mode) || amiga::is_c64(config->mode) ||
+                                   amiga::is_gba(config->mode);
             if (is_fixed_buffer && !config->native_par) {
                 target_h = params.screen_height;  // stretch to fill
             } else if (target_h > params.screen_height) {
@@ -6816,7 +6834,7 @@ int run_main(int argc, char* argv[]) {
     else if (amiga::is_atari(config->mode) || amiga::is_vga(config->mode) ||
              amiga::is_ega(config->mode) || amiga::is_cga(config->mode) ||
              amiga::is_snes(config->mode) || amiga::is_genesis(config->mode) ||
-             amiga::is_c64(config->mode)) {
+             amiga::is_c64(config->mode) || amiga::is_gba(config->mode)) {
         // Atari/DOS/SNES/Genesis/C64 modes have their bitplane depth baked
         // into the hardware (ST Low=4, VGA 13h=8, EGA=4, CGA 320=2,
         // cga-text80x100=4 attribute, SNES Mode 7=8 chunky, Genesis tiles=4,
@@ -6846,8 +6864,17 @@ int run_main(int argc, char* argv[]) {
         auto early_chipset = effective_chipset(*config);
         print_depth = (early_chipset == amiga::Chipset::aga) ? 8 : 6;
     }
-    cli_print_target(
-        static_cast<std::size_t>(target_w), static_cast<std::size_t>(target_h), print_depth);
+    if (amiga::is_gba(config->mode)) {
+        // GBA has no bitplanes — report the buffer dims + pixel depth
+        // (8bpp paletted for mode4, 16bpp BGR555 for the direct modes).
+        cli_status("Target:   {}x{} @ {}",
+                   static_cast<std::size_t>(target_w),
+                   static_cast<std::size_t>(target_h),
+                   amiga::is_gba_paletted(config->mode) ? "8bpp" : "16bpp BGR555");
+    } else {
+        cli_print_target(
+            static_cast<std::size_t>(target_w), static_cast<std::size_t>(target_h), print_depth);
+    }
 
     // Scale
     if (image->width() != target_w || image->height() != target_h) {
@@ -6912,7 +6939,8 @@ int run_main(int argc, char* argv[]) {
     bool amiga_chipset = !amiga::is_atari(config->mode) && !amiga::is_vga(config->mode) &&
                          !amiga::is_ega(config->mode) && !amiga::is_cga(config->mode) &&
                          !amiga::is_cga_text(config->mode) && !amiga::is_c64(config->mode) &&
-                         !amiga::is_snes(config->mode) && !amiga::is_genesis(config->mode);
+                         !amiga::is_snes(config->mode) && !amiga::is_genesis(config->mode) &&
+                         !amiga::is_gba(config->mode);
     if (amiga_chipset) cli_print_chipset(chipset);
 
     // Dual playfield: encoded image lives in PF2 of a 2N-plane display, with
@@ -7307,6 +7335,150 @@ int run_main(int argc, char* argv[]) {
             auto cr = api::convert_cheader(src_png->data(), src_png->size(), aopts);
             if (!cr.error.empty()) {
                 std::println(stderr, "SNES header: {}", cr.error);
+                return exit_code::internal;
+            }
+            std::ofstream of(config->output_path);
+            of.write(reinterpret_cast<const char*>(cr.data.data()),
+                     static_cast<std::streamsize>(cr.data.size()));
+            cli_status("Header:   {} ({} bytes)", config->output_path, cr.data.size());
+        } else {
+            // PNG preview using st.rendered.
+            auto r = save_preview(config->output_path,
+                                  st.rendered,
+                                  has_transparency,
+                                  transparency_mask,
+                                  config->mode,
+                                  /*hires=*/false,
+                                  /*interlace=*/false);
+            if (!r) {
+                std::println(stderr, "PNG write error: {}", r.error().message);
+                return exit_code::internal;
+            }
+            cli_status("PNG:      {}", config->output_path);
+        }
+
+        if (!config->depfile.empty() && !config->output_path.empty()) {
+            std::array<std::string_view, 2> inputs{
+                config->input_path,
+                config->palette_file,
+            };
+            write_depfile(config->depfile, config->output_path, inputs);
+        }
+        return exit_code::ok;
+    }
+
+    // --- Game Boy Advance bitmap modes (mode3 / mode4 / mode5) ---
+    if (amiga::is_gba(config->mode)) {
+        if (has_transparency) {
+            for (std::size_t i = 0; i < transparency_mask.size(); ++i)
+                if (transparency_mask[i]) image->pixels()[i] = Color3f{0, 0, 0};
+        }
+        // PNG-encoded source bytes for api::convert_cheader (bytes-only
+        // entry). The encode itself uses encode_state_image (no round-trip).
+        auto src_png = png_io::encode(*image);
+        if (!src_png) {
+            std::println(stderr, "GBA: source re-encode failed: {}", src_png.error().message);
+            return exit_code::internal;
+        }
+
+        auto aopts = make_api_options(*config);
+        neutralize_preprocess(aopts);
+        switch (config->mode) {
+        case amiga::Mode::gba_mode3:
+            aopts.mode = "gba-mode3";
+            break;
+        case amiga::Mode::gba_mode4:
+            aopts.mode = "gba-mode4";
+            break;
+        default:
+            aopts.mode = "gba-mode5";
+            break;
+        }
+        aopts.width = static_cast<int>(image->width());
+        aopts.height = static_cast<int>(image->height());
+        aopts.on_progress = make_cli_progress_reporter();
+
+        auto enc = api::encode_state_image(*image, aopts);
+        if (!enc.ok()) {
+            std::println(stderr, "GBA encode error: {}", enc.error_msg);
+            return exit_code::internal;
+        }
+        auto& st = enc.state;
+        cli_print_mode(amiga::is_gba_paletted(config->mode)
+                           ? std::format("GBA Mode 4 ({}x{} 8bpp, 256-color BGR555 palette)",
+                                         st.rendered.width(),
+                                         st.rendered.height())
+                           : std::format("GBA Mode {} ({}x{} 16bpp BGR555 direct-color)",
+                                         config->mode == amiga::Mode::gba_mode3 ? 3 : 5,
+                                         st.rendered.width(),
+                                         st.rendered.height()));
+        if (!st.palette.empty()) cli_dump_palette(std::span<const Color3f>(st.palette), *config);
+        cli_print_dither(config->dither_method, resolved_dither_strength(make_api_options(*config)));
+        std::size_t gba_colors = amiga::is_gba_paletted(config->mode)
+                                     ? st.palette.size()
+                                     : static_cast<std::size_t>(count_unique_colors(st.rendered));
+        cli_print_encoded_other(std::format("{} bytes (GBA frame)", st.raw_frame.size()),
+                                gba_colors,
+                                static_cast<double>(st.quant_error),
+                                st.psnr,
+                                st.ssimulacra2_score);
+
+        if (config->preview)
+            show_terminal_preview(st.rendered,
+                                  config->mode,
+                                  /*hires=*/false,
+                                  /*interlace=*/false,
+                                  st.has_transparency,
+                                  st.transparency_mask);
+
+        if (config->output_path.empty()) {
+            // No -o (e.g. `--preview` only). Skip output writing.
+        } else if (ends_with(config->output_path, ".iff") ||
+                   ends_with(config->output_path, ".lbm") ||
+                   ends_with(config->output_path, ".cpp") ||
+                   ends_with(config->output_path, ".c") ||
+                   ends_with(config->output_path, ".pi1") ||
+                   ends_with(config->output_path, ".pi2") ||
+                   ends_with(config->output_path, ".pi3")) {
+            std::println(stderr,
+                         "GBA modes support .png, .h, and .bin/.raw output (got '{}').",
+                         config->output_path);
+            return exit_code::cant_create;
+        } else if (ends_with(config->output_path, ".bin") ||
+                   ends_with(config->output_path, ".raw")) {
+            // st.raw_frame is the GBA frame: 8bpp indices (mode4) or a
+            // little-endian u16 BGR555 stream (mode3/mode5).
+            std::ofstream of(config->output_path, std::ios::binary);
+            of.write(reinterpret_cast<const char*>(st.raw_frame.data()),
+                     static_cast<std::streamsize>(st.raw_frame.size()));
+            if (!of) {
+                std::println(stderr, "GBA write error: {}", config->output_path);
+                return exit_code::internal;
+            }
+            cli_status("Raw:      {} ({} bytes)", config->output_path, st.raw_frame.size());
+
+            if (amiga::is_gba_paletted(config->mode)) {
+                // Companion .pal file: 256 × u16 LE BGR555 (512 bytes),
+                // mirroring the SNES 256-mode raw+companion convention.
+                std::filesystem::path pal_path{config->output_path};
+                pal_path.replace_extension(".pal");
+                std::vector<std::uint8_t> pal_bytes(256 * 2, 0);
+                for (std::size_t i = 0; i < st.palette.size() && i < 256; ++i) {
+                    auto w16 = console_color::to_bgr555_word(st.palette[i]);
+                    pal_bytes[i * 2 + 0] = static_cast<std::uint8_t>(w16 & 0xFF);
+                    pal_bytes[i * 2 + 1] = static_cast<std::uint8_t>((w16 >> 8) & 0xFF);
+                }
+                std::ofstream pf(pal_path, std::ios::binary);
+                pf.write(reinterpret_cast<const char*>(pal_bytes.data()),
+                         static_cast<std::streamsize>(pal_bytes.size()));
+                cli_status("Pal:      {} ({} bytes)", pal_path.string(), pal_bytes.size());
+            }
+        } else if (ends_with(config->output_path, ".h")) {
+            // Route through api::convert_cheader → api.cpp::gba_header so
+            // the .h layout has a single source of truth.
+            auto cr = api::convert_cheader(src_png->data(), src_png->size(), aopts);
+            if (!cr.error.empty()) {
+                std::println(stderr, "GBA header: {}", cr.error);
                 return exit_code::internal;
             }
             std::ofstream of(config->output_path);

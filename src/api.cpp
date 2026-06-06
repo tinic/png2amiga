@@ -99,6 +99,9 @@ amiga::Mode parse_mode(const std::string& s) {
     if (s == "cga-text40x100") return amiga::Mode::cga_text40x100;
     if (s == "snes-mode7-256") return amiga::Mode::snes_mode7_256;
     if (s == "snes-mode7-direct") return amiga::Mode::snes_mode7_direct;
+    if (s == "gba-mode3") return amiga::Mode::gba_mode3;
+    if (s == "gba-mode4") return amiga::Mode::gba_mode4;
+    if (s == "gba-mode5") return amiga::Mode::gba_mode5;
     if (s == "genesis-h32") return amiga::Mode::genesis_h32;
     if (s == "genesis-h40") return amiga::Mode::genesis_h40;
     if (s == "genesis-h32-sh") return amiga::Mode::genesis_h32_sh;
@@ -523,7 +526,7 @@ TargetDims compute_target_dims(std::size_t src_w,
     // fixed-buf default still applies.
     bool is_fixed_buf = amiga::is_atari(mode) || amiga::is_vga(mode) || amiga::is_ega(mode) ||
                         amiga::is_cga(mode) || amiga::is_cga_text(mode) || amiga::is_snes(mode) ||
-                        amiga::is_genesis(mode) || amiga::is_c64(mode);
+                        amiga::is_genesis(mode) || amiga::is_c64(mode) || amiga::is_gba(mode);
     // Tile-based platforms with freeform sizing — Genesis (8×8 cells)
     // and SNES Mode 7 (8×8 cells) use the same 1:1 source-pixel
     // convention as c64-charset-hires. No multicolor halving.
@@ -633,7 +636,8 @@ TargetDims compute_target_dims(std::size_t src_w,
         bool is_fixed_buffer = amiga::is_atari(mode) || amiga::is_vga(mode) ||
                                amiga::is_ega(mode) || amiga::is_cga(mode) ||
                                amiga::is_cga_text(mode) || amiga::is_snes(mode) ||
-                               amiga::is_genesis(mode) || amiga::is_c64(mode);
+                               amiga::is_genesis(mode) || amiga::is_c64(mode) ||
+                               amiga::is_gba(mode);
         if (is_fixed_buffer && !options.native_par) {
             h = mode_h;  // stretch to fill
         } else if (h > mode_h) {
@@ -1188,9 +1192,10 @@ Result<PipelineResult> run_pipeline(const std::uint8_t* input_data,
     auto depth = static_cast<std::size_t>(std::clamp(options.depth, 1, 8));
     // Atari modes have fixed depth
     if (amiga::is_atari(mode)) depth = amiga::get_mode_params(mode).bitplane_depth;
-    // DOS + SNES + Genesis modes: depth also fixed by the hardware buffer.
+    // DOS + SNES + Genesis + GBA modes: depth also fixed by the hardware
+    // buffer (GBA mode4 = 8bpp; the direct modes don't use depth at all).
     if (amiga::is_vga(mode) || amiga::is_ega(mode) || amiga::is_cga(mode) || amiga::is_snes(mode) ||
-        amiga::is_genesis(mode))
+        amiga::is_genesis(mode) || amiga::is_gba(mode))
         depth = amiga::get_mode_params(mode).bitplane_depth;
 
     // Dual-playfield: encode the image into PF2 only with a constrained
@@ -1265,7 +1270,7 @@ Result<PipelineResult> run_pipeline(const std::uint8_t* input_data,
     auto mode_w_fixed = mparams.screen_width;
     bool is_fixed_buffer = amiga::is_atari(mode) || amiga::is_vga(mode) || amiga::is_ega(mode) ||
                            amiga::is_cga(mode) || amiga::is_cga_text(mode) ||
-                           amiga::is_snes(mode) || amiga::is_genesis(mode);
+                           amiga::is_snes(mode) || amiga::is_genesis(mode) || amiga::is_gba(mode);
     // cga-text accepts arbitrary multiples of 8×2 in freeform (--width
     // / --height set). Don't center-pad freeform input up to the
     // canonical 640×200 buffer — that would silently turn a 200×400
@@ -2165,6 +2170,112 @@ Result<PipelineResult> run_pipeline(const std::uint8_t* input_data,
         result.genesis_tile_bytes = std::move(tile_bytes);
         result.genesis_tilemap_cells = std::move(tilemap_cells);
         result.genesis_palette_words = std::move(palette_words);
+        return result;
+    }
+
+    // --- Game Boy Advance bitmap modes (mode3 / mode4 / mode5) ---
+    // Plain linear framebuffers — no tilemap, no bitplanes. The image
+    // already arrives at the fixed buffer size from compute_target_dims
+    // (240×160 for mode3/4, 160×128 for mode5), letterboxed/padded above
+    // when --native-par is set.
+    //   mode4: 8bpp paletted. Identical shape to the chunky VGA path but
+    //          with a BGR555-snapped 256-color palette (the GBA stores
+    //          palette entries as BGR555 words, so the dither target must
+    //          score against the snapped colors).
+    //   mode3/mode5: 16bpp direct color. Run the central error-diffusion
+    //          driver over the whole image; the picker snaps each pixel to
+    //          the BGR555 grid (same approach as snes_mode7_direct's
+    //          per-tile path, minus the tiling, and 5-5-5 instead of
+    //          3-3-2). The raw u16 BGR555 word stream goes into raw_frame.
+    if (amiga::is_gba(mode)) {
+        if (has_transparency) {
+            for (std::size_t i = 0; i < tmask.size(); ++i)
+                if (tmask[i]) image->pixels()[i] = Color3f{0, 0, 0};
+        }
+
+        auto w = image->width();
+        auto h = image->height();
+        dither::Settings dith;
+        dith.method = parse_dither(options.dither);
+        dith.strength = options.dither_strength;
+        dith.error_clamp = options.error_clamp;
+
+        if (amiga::is_gba_paletted(mode)) {
+            // --- GBA Mode 4: 8bpp + 256-entry BGR555 palette ---
+            constexpr std::size_t kColors = 256;
+            auto quantized = quantize::quantize(
+                *image, kColors, quantize::resolve_algorithm(mode, chipset, options.quantizer),
+                options.palette_diversity);
+            if (!quantized) return std::unexpected{quantized.error()};
+            Palette pal = std::move(*quantized);
+            // Snap every palette entry to the BGR555 grid the hardware
+            // actually stores, so the preview / .h / .bin all agree.
+            for (auto& c : pal.colors)
+                c = console_color::bgr555_quantize(c);
+
+            auto dith_result = dither::apply(*image, pal.colors, dith);
+
+            Image rendered(w, h);
+            for (std::size_t i = 0; i < dith_result.indices.size(); ++i)
+                rendered.pixels()[i] = pal.colors[dith_result.indices[i]];
+
+            PipelineResult result;
+            result.rendered = std::move(rendered);
+            result.palette = std::move(pal.colors);
+            result.indices = dith_result.indices;
+            result.planes.depth = 8;  // 8bpp chunky
+            result.mode = mode;
+            result.hires = false;
+            result.interlace = false;
+            result.has_transparency = has_transparency;
+            result.transparency_mask = tmask;
+            result.finalize_psnr(*image, dith_result.total_error);
+            // raw_frame = 8bpp index stream; convert_raw appends the
+            // BGR555 palette as a companion .pal file.
+            result.raw_frame = std::move(dith_result.indices);
+            return result;
+        }
+
+        // --- GBA Mode 3 / Mode 5: 16bpp BGR555 direct color ---
+        Image rendered(w, h);
+        std::vector<std::uint8_t> raw;
+        raw.reserve(w * h * 2);
+        // diffuse_raw_buffer drives serpentine scan + error feedback +
+        // ordered/structure bias centrally (dither.cpp). The picker is
+        // the only mode-specific piece: snap the adjusted target to the
+        // BGR555 grid and record both the linear render color and the
+        // packed LE u16 word. We collect words in a w×h grid first
+        // (serpentine scan visits pixels out of raster order), then flush
+        // to raw + rendered in raster order.
+        std::vector<std::uint16_t> words(w * h, 0);
+        float total_error = dither::diffuse_raw_buffer(
+            *image,
+            dith,
+            [&](const color_space::OKLab& target, std::size_t x, std::size_t y)
+                -> dither::PickResult {
+                auto linear = color_space::oklab_to_linear(target);
+                auto snapped = console_color::bgr555_quantize(linear);
+                words[y * w + x] = console_color::to_bgr555_word(linear);
+                rendered[x, y] = snapped;
+                return {color_space::linear_to_oklab(snapped), 0.5f};
+            });
+        for (std::size_t i = 0; i < words.size(); ++i) {
+            raw.push_back(static_cast<std::uint8_t>(words[i] & 0xFF));
+            raw.push_back(static_cast<std::uint8_t>((words[i] >> 8) & 0xFF));
+        }
+
+        PipelineResult result;
+        result.rendered = std::move(rendered);
+        result.palette.clear();  // direct color — no palette
+        result.indices.clear();
+        result.planes.depth = 16;  // conceptual: bits per pixel, not planes
+        result.mode = mode;
+        result.hires = false;
+        result.interlace = false;
+        result.has_transparency = has_transparency;
+        result.transparency_mask = tmask;
+        result.finalize_psnr(*image, total_error);
+        result.raw_frame = std::move(raw);
         return result;
     }
 
@@ -4645,6 +4756,10 @@ ConvertResult make_result(std::vector<std::uint8_t> data, const PipelineResult& 
     // EHB sliced/strips: report 64 (matching plain EHB) since the
     // hardware always doubles to 64 effective colors per line.
     if (p.mode == amiga::Mode::ehb && r.colors == 32) r.colors = 64;
+    // GBA direct-color modes have no palette (16bpp BGR555 per pixel);
+    // report the effective 32768-color gamut so status / web show it
+    // consistently with the SNES/Genesis convention.
+    if (amiga::is_gba_direct(p.mode)) r.colors = 32768;
     // Pack the final palette as sRGB bytes (3 per entry) for the web
     // tool's palette swatch view. Empty when palette is empty.
     //
@@ -4934,6 +5049,76 @@ static std::string snes_header(const PipelineResult& p, std::string_view sym) {
     return out;
 }
 
+// Emit `<type> name[count] = { ... };` for the GBA header (grit idiom:
+// element-count sizes, no `static`). 12 u16 values per row.
+static std::string emit_gba_u16_array(std::string_view name,
+                                      std::span<const std::uint16_t> words) {
+    std::string out;
+    out.reserve(words.size() * 8 + 64);
+    out += std::format("const unsigned short {}[{}] = {{\n   ", name, words.size());
+    for (std::size_t i = 0; i < words.size(); ++i) {
+        out += std::format(" 0x{:04X}", words[i]);
+        if (i + 1 < words.size()) out += ',';
+        if ((i + 1) % 12 == 0 && i + 1 < words.size()) out += "\n   ";
+    }
+    out += "\n};\n\n";
+    return out;
+}
+
+// Emit `const unsigned char name[count] = { ... };` for the GBA mode4
+// index array. 16 values per row.
+static std::string emit_gba_u8_array(std::string_view name,
+                                     std::span<const std::uint8_t> bytes) {
+    std::string out;
+    out.reserve(bytes.size() * 6 + 64);
+    out += std::format("const unsigned char {}[{}] = {{\n   ", name, bytes.size());
+    for (std::size_t i = 0; i < bytes.size(); ++i) {
+        out += std::format(" 0x{:02X}", bytes[i]);
+        if (i + 1 < bytes.size()) out += ',';
+        if ((i + 1) % 16 == 0 && i + 1 < bytes.size()) out += "\n   ";
+    }
+    out += "\n};\n\n";
+    return out;
+}
+
+// GBA bitmap-mode .h (devkitARM/grit idiom):
+//   mode3/mode5: BitmapLen + a const unsigned short Bitmap[W*H] of BGR555
+//                words (one per pixel; no palette).
+//   mode4:       BitmapLen + a const unsigned char Bitmap[W*H] of 8bpp
+//                indices, plus a const unsigned short Pal[256] BGR555
+//                palette.
+static std::string gba_header(const PipelineResult& p, std::string_view sym) {
+    const std::size_t w = p.rendered.width();
+    const std::size_t h = p.rendered.height();
+    std::string out;
+    out += "// Generated by png2amiga. Do not edit.\n\n#pragma once\n\n";
+    out += std::format("#define {}Width  {}\n", sym, w);
+    out += std::format("#define {}Height {}\n", sym, h);
+
+    if (amiga::is_gba_paletted(p.mode)) {
+        // raw_frame holds the 8bpp index stream (W*H bytes).
+        out += std::format("#define {}BitmapLen ({}*{})\n", sym, w, h);
+        out += std::format("#define {}PalLen   {}\n\n", sym, p.palette.size());
+        out += emit_gba_u8_array(std::string(sym) + "Bitmap", p.raw_frame);
+        std::vector<std::uint16_t> pal;
+        pal.reserve(p.palette.size());
+        for (auto& c : p.palette)
+            pal.push_back(console_color::to_bgr555_word(c));
+        out += emit_gba_u16_array(std::string(sym) + "Pal", pal);
+        return out;
+    }
+
+    // Direct color: raw_frame holds LE u16 BGR555 words (W*H*2 bytes).
+    out += std::format("#define {}BitmapLen ({}*{}*2)\n\n", sym, w, h);
+    std::vector<std::uint16_t> words;
+    words.reserve(w * h);
+    for (std::size_t i = 0; i + 1 < p.raw_frame.size(); i += 2)
+        words.push_back(static_cast<std::uint16_t>(p.raw_frame[i] |
+                                                   (p.raw_frame[i + 1] << 8)));
+    out += emit_gba_u16_array(std::string(sym) + "Bitmap", words);
+    return out;
+}
+
 ConvertResult convert_cheader(const std::uint8_t* input_data,
                               std::size_t input_size,
                               const Options& options) {
@@ -4990,6 +5175,13 @@ ConvertResult convert_cheader(const std::uint8_t* input_data,
     // SNES Mode 7: minimal inline header (tiles + tilemap + palette).
     if (amiga::is_snes(result->mode)) {
         auto txt = snes_header(*result, sym);
+        std::vector<std::uint8_t> bytes(txt.begin(), txt.end());
+        return make_result(std::move(bytes), *result);
+    }
+
+    // Game Boy Advance: devkitARM/grit-style bitmap header.
+    if (amiga::is_gba(result->mode)) {
+        auto txt = gba_header(*result, sym);
         std::vector<std::uint8_t> bytes(txt.begin(), txt.end());
         return make_result(std::move(bytes), *result);
     }

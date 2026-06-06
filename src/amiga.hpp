@@ -163,6 +163,19 @@ enum class Mode : unsigned char {
     // the encoder doesn't yet generate.
     genesis_h32_sh,  // 256×224, 4 base palettes + per-tile shadow flag
     genesis_h40_sh,  // 320×224, same
+
+    // Game Boy Advance bitmap modes — linear framebuffers in VRAM, no
+    // tilemap/bitplane structure. The GBA LCD is a fixed 240×160 panel;
+    // the smaller Mode 5 buffer is hardware-scaled to fill it.
+    //   mode3: 240×160, 16bpp BGR555 direct-color (one u16 per pixel, no
+    //          palette). 0bbbbbgggggrrrrr; top bit unused.
+    //   mode4: 240×160, 8bpp paletted (one u8 index per pixel) + a 256-entry
+    //          BGR555 palette in the BG palette RAM.
+    //   mode5: 160×128, 16bpp BGR555 direct-color (smaller buffer than the
+    //          panel; the hardware can stretch it to 240×160).
+    gba_mode3,  // 240×160, 16bpp BGR555 direct-color (no palette)
+    gba_mode4,  // 240×160, 8bpp, 256-color BGR555 palette
+    gba_mode5,  // 160×128, 16bpp BGR555 direct-color (no palette)
 };
 
 // ---------------------------------------------------------------------------
@@ -348,6 +361,18 @@ constexpr ModeParams get_mode_params(Mode mode) noexcept {
         return {256, 224, 4, 128, false, false, false, false, 1, 1, 1.167f};
     case Mode::genesis_h40_sh:
         return {320, 224, 4, 128, false, false, false, false, 1, 1, 0.933f};
+    // Game Boy Advance bitmap modes — fixed buffers, square pixels (PAR
+    // 1.0). bitplane_depth is conceptual for the direct modes (16 = bits
+    // per pixel, NOT a bitplane count); is_gba_direct gates off all
+    // palette/depth code so that field is never used as a plane count.
+    //   mode3/mode5: 16bpp direct, 32768 effective colors (BGR555).
+    //   mode4:        8bpp paletted, 256 colors.
+    case Mode::gba_mode3:
+        return {240, 160, 16, 32768, false, false, false, false, 1, 1, 1.0f};
+    case Mode::gba_mode4:
+        return {240, 160, 8, 256, false, false, false, false, 1, 1, 1.0f};
+    case Mode::gba_mode5:
+        return {160, 128, 16, 32768, false, false, false, false, 1, 1, 1.0f};
     }
     std::unreachable();
 }
@@ -509,7 +534,8 @@ constexpr bool is_chunky(Mode mode) noexcept {
     // 8bpp pixel-byte streams handed to the encoder before any tile-pack
     // layer. VGA 13h is genuine chunky output; SNES Mode 7 is chunky at
     // the encoder *input* but gets repacked into tiles before write.
-    return mode == Mode::vga_13h || mode == Mode::snes_mode7_256 || mode == Mode::snes_mode7_direct;
+    return mode == Mode::vga_13h || mode == Mode::snes_mode7_256 ||
+           mode == Mode::snes_mode7_direct || mode == Mode::gba_mode4;
 }
 
 constexpr bool is_snes(Mode mode) noexcept {
@@ -518,6 +544,21 @@ constexpr bool is_snes(Mode mode) noexcept {
 
 constexpr bool is_snes_direct(Mode mode) noexcept {
     return mode == Mode::snes_mode7_direct;
+}
+
+// Game Boy Advance bitmap modes (mode3/mode4/mode5).
+constexpr bool is_gba(Mode mode) noexcept {
+    return mode == Mode::gba_mode3 || mode == Mode::gba_mode4 || mode == Mode::gba_mode5;
+}
+
+// GBA direct-color modes (16bpp BGR555 per pixel, no palette).
+constexpr bool is_gba_direct(Mode mode) noexcept {
+    return mode == Mode::gba_mode3 || mode == Mode::gba_mode5;
+}
+
+// GBA paletted mode (8bpp + 256-entry BGR555 palette).
+constexpr bool is_gba_paletted(Mode mode) noexcept {
+    return mode == Mode::gba_mode4;
 }
 
 // Maximum bitplane depth for a chipset (raw hardware limit)
@@ -542,6 +583,9 @@ constexpr std::size_t max_user_depth(Mode mode, Chipset chipset) noexcept {
     if (is_ham(mode)) return get_mode_params(mode).bitplane_depth;
     if (mode == Mode::ehb) return 6;
     if (is_atari(mode)) return get_mode_params(mode).bitplane_depth;
+    // GBA buffers are fixed: mode4 = 8bpp paletted, direct modes = 16bpp.
+    // --depth is a no-op for all three.
+    if (is_gba(mode)) return get_mode_params(mode).bitplane_depth;
 
     // AGA standard modes
     if (chipset == Chipset::aga) return 8;
