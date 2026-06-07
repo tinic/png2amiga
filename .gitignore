@@ -44,6 +44,8 @@ test.cpp
 /tools/shootout/output/
 # Internal research / design notes — keep local
 /docs/*_research.md
+# Local scratch example images (JPEG XL); not part of the test set
+*.jxl
 .!*
 /examples/tile/out/
 tools/mode_survey.txt
