@@ -1154,6 +1154,21 @@ Result<PipelineResult> run_pipeline(const std::uint8_t* input_data,
         if (amiga::is_cga(mode) || amiga::is_cga_text(mode))
             return reject("not supported in CGA modes (palette is "
                           "hardware-fixed)");
+        if (amiga::is_gba_direct(mode))
+            return reject("not supported in GBA direct-color modes "
+                          "(16bpp BGR555 per pixel — there is no palette)");
+    }
+
+    // GBA direct-color modes (mode3/mode5) have no palette, so the other
+    // palette-pinning flags are meaningless there — reject rather than
+    // silently ignore.
+    if (amiga::is_gba_direct(mode) &&
+        (!options.locks.empty() || !options.pins.empty() || has_user_palette(options))) {
+        return std::unexpected{Error{
+            ErrorCode::unsupported_mode,
+            "--lock-index / --pin-index-at / --palette: not supported in GBA "
+            "direct-color modes (16bpp BGR555 per pixel — there is no palette)",
+        }};
     }
 
     // We need source dimensions to compute the target size.
@@ -2201,18 +2216,99 @@ Result<PipelineResult> run_pipeline(const std::uint8_t* input_data,
 
         if (amiga::is_gba_paletted(mode)) {
             // --- GBA Mode 4: 8bpp + 256-entry BGR555 palette ---
+            // Full palette-feature plumbing, mirroring the VGA chunky path
+            // (the only difference is the BGR555 snap): external --palette,
+            // --lock-index, --reserve-range, --lock-color0, --pin-index-at,
+            // transparency slot 0, and --palette-diversity. Lock / reserve
+            // colors snap onto the BGR555 grid via to_color()'s is_gba case;
+            // the quantizer runs in continuous space (resolve_algorithm
+            // routes GBA there) and every entry is snapped afterward.
             constexpr std::size_t kColors = 256;
-            auto quantized = quantize::quantize(
-                *image, kColors, quantize::resolve_algorithm(mode, chipset, options.quantizer),
-                options.palette_diversity);
-            if (!quantized) return std::unexpected{quantized.error()};
-            Palette pal = std::move(*quantized);
-            // Snap every palette entry to the BGR555 grid the hardware
-            // actually stores, so the preview / .h / .bin all agree.
-            for (auto& c : pal.colors)
-                c = console_color::bgr555_quantize(c);
+            bool user_pal = has_user_palette(options);
+            bool lock_zero = options.lock_color0 && (has_transparency || !user_pal);
 
-            auto dith_result = dither::apply(*image, pal.colors, dith);
+            if (auto v = palette_locks::validate_locks(options.locks, kColors); !v)
+                return std::unexpected{v.error()};
+            if (auto v = palette_locks::validate_pins(
+                    options.pins, options.locks, options.reserves, kColors, w, h, lock_zero);
+                !v)
+                return std::unexpected{v.error()};
+            auto reserves_in_pal =
+                palette_locks::validate_reserves(options.reserves, options.locks, kColors, lock_zero);
+            if (!reserves_in_pal) return std::unexpected{reserves_in_pal.error()};
+
+            Palette pal;
+            std::vector<bool> locked_mask(kColors, false);
+            if (user_pal) {
+                // External palette: snap to BGR555, pad to 256, then stamp
+                // user locks on top of the loaded entries.
+                auto loaded = load_user_palette(options);
+                if (!loaded) return std::unexpected{loaded.error()};
+                pal = *std::move(loaded);
+                if (pal.colors.size() > kColors) pal.colors.resize(kColors);
+                for (auto& c : pal.colors)
+                    c = console_color::bgr555_quantize(c);
+                while (pal.colors.size() < kColors)
+                    pal.colors.push_back(Color3f{0, 0, 0});
+                for (auto& lock : options.locks) {
+                    auto idx = static_cast<std::size_t>(lock.index);
+                    pal.colors[idx] = palette_locks::to_color(lock, chipset, mode);
+                    locked_mask[idx] = true;
+                }
+            } else {
+                auto qc = palette_locks::quant_counts_for_assemble(
+                    kColors, options.locks, *reserves_in_pal, lock_zero);
+                auto qfn = [&](std::size_t k) -> Result<Palette> {
+                    return quantize::quantize(
+                        *image, k,
+                        quantize::resolve_algorithm(mode, chipset, options.quantizer),
+                        options.palette_diversity);
+                };
+                auto qr = palette_locks::two_pass_quantize(qfn, qc.qcount, qc.kfallback, lock_zero);
+                if (!qr) return std::unexpected{qr.error()};
+                auto assembled = palette_locks::assemble_with_reserves(
+                    *qr, options.locks, options.reserves, kColors, lock_zero, chipset, mode);
+                pal = std::move(assembled.palette);
+                locked_mask = std::move(assembled.locked);
+                for (auto& c : pal.colors)
+                    c = console_color::bgr555_quantize(c);
+            }
+
+            // Reserved slots are excluded from the dither candidate set so
+            // image pixels never land on them; locks stay routable.
+            std::vector<bool> reserved_mask(kColors, false);
+            for (auto& r : options.reserves) {
+                auto i = static_cast<std::size_t>(r.index);
+                if (r.index >= 0 && i < kColors) reserved_mask[i] = true;
+            }
+            bool any_reserved =
+                std::any_of(reserved_mask.begin(), reserved_mask.end(), [](bool b) { return b; });
+            dither::DitherResult dith_result;
+            if (any_reserved) {
+                std::vector<Color3f> cand;
+                std::vector<std::uint8_t> cand_to_full;
+                for (std::size_t i = 0; i < pal.colors.size(); ++i) {
+                    if (reserved_mask[i]) continue;
+                    cand.push_back(pal.colors[i]);
+                    cand_to_full.push_back(static_cast<std::uint8_t>(i));
+                }
+                dith_result = dither::apply(*image, cand, dith);
+                for (auto& idx : dith_result.indices)
+                    idx = cand_to_full[idx];
+            } else {
+                dith_result = dither::apply(*image, pal.colors, dith);
+            }
+
+            // --pin-index-at: pin a slot to the source pixel at (x,y) and
+            // force those pixels to that slot. Applied post-dither (same as
+            // the standard path); re-snap since pins write source colors.
+            if (!options.pins.empty()) {
+                auto pin_result = palette_locks::apply_pins(
+                    pal, dith_result.indices, locked_mask, options.pins, w, h);
+                if (!pin_result) return std::unexpected{pin_result.error()};
+                for (auto& c : pal.colors)
+                    c = console_color::bgr555_quantize(c);
+            }
 
             Image rendered(w, h);
             for (std::size_t i = 0; i < dith_result.indices.size(); ++i)

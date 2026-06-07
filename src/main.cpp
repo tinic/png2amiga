@@ -1190,7 +1190,7 @@ void print_usage() {
         "  --print-palette                 Dump final CMAP to stderr (text)\n"
         "  --print-palette-json            Dump final CMAP to stdout (JSON)\n"
         "\n"
-        "Palette index pinning (lores/hires/EHB/Atari):\n"
+        "Palette index pinning (indexed-palette modes):\n"
         "  --no-lock-color0                Allow palette index 0 to be image color\n"
         "  --lock-index, --li <id> <hex>   Pin slot's color; image pixels CAN\n"
         "                                  still route to it (quantizer uses it)\n"

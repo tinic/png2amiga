@@ -520,6 +520,9 @@ const reservesSupported = computed(() => {
   if (isGenesisMode(m) || isSnesMode(m)) return false
   if (isC64Mode(m)) return false
   if (isCgaMode(m) || isCgaText(m)) return false
+  // GBA direct-color modes (mode3/mode5) are 16bpp BGR555 with no
+  // palette; only the paletted Mode 4 supports reserves.
+  if (isGbaDirectMode(m)) return false
   // DPF and DPF+sliced: the CLI gate at main.cpp:5704 explicitly
   // allows reserves through ("PF1 is zeroed in the current
   // implementation, so reserves on the depth-3/4 base palette ARE

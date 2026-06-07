@@ -580,7 +580,7 @@ Palette:
   --print-palette                 Dump final CMAP to stderr (text)
   --print-palette-json            Dump final CMAP to stdout (JSON)
 
-Palette index pinning (lores/hires/EHB/Atari):
+Palette index pinning (indexed-palette modes):
   --no-lock-color0                Allow palette index 0 to be image color
   --lock-index, --li <id> <hex>   Pin slot's color; image pixels CAN
                                   still route to it (quantizer uses it)

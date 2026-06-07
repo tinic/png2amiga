@@ -1,6 +1,7 @@
 #include "palette_locks.hpp"
 
 #include "color_space.hpp"
+#include "console_color.hpp"
 #include "palette.hpp"
 
 #include <algorithm>
@@ -25,6 +26,11 @@ Color3f to_color(const LockSpec& lock, amiga::Chipset chipset, amiga::Mode mode)
     auto c = clamp_srgb(lock.r, lock.g, lock.b);
     if (amiga::is_stf(mode)) {
         return palette::quantize_to_stf(c);
+    }
+    // GBA Mode 4 stores a 256-entry BGR555 palette — snap lock / reserve
+    // colors onto the 5-bit-per-channel grid the hardware actually holds.
+    if (amiga::is_gba(mode)) {
+        return console_color::bgr555_quantize(c);
     }
     if (chipset != amiga::Chipset::aga) {
         return palette::quantize_to_ocs(c);

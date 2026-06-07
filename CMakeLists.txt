@@ -1505,6 +1505,50 @@ sys.exit(0 if got==expect else (print(f'expected {expect}, got {got}') or 1))"
     set_tests_properties("smoke-gba-mode4-pal-exists"
                          PROPERTIES DEPENDS "smoke-gba-mode4.bin")
 
+    # GBA Mode 4 honors the palette-pinning flags (lock / reserve /
+    # external palette / pin) — same plumbing as the VGA chunky path.
+    add_test(
+        NAME "gba-mode4-lock-reserve"
+        COMMAND png2amiga --mode gba-mode4
+                --lock-index 5 ff0000 --reserve-range 6 00ff00
+                ${PNG2AMIGA_TEST_INPUT}
+                ${CMAKE_BINARY_DIR}/test_gba4_lock.h
+    )
+    add_test(
+        NAME "gba-mode4-pin"
+        COMMAND png2amiga --mode gba-mode4 --dither bayer4x4
+                --pin-index-at 5 10 10
+                ${PNG2AMIGA_TEST_INPUT}
+                ${CMAKE_BINARY_DIR}/test_gba4_pin.h
+    )
+    # External palette: a GIMP .gpl is loaded, snapped to BGR555, used
+    # as-is (no auto-quantize).
+    file(WRITE ${CMAKE_BINARY_DIR}/gba_ext.gpl
+         "GIMP Palette\nName: gba-test\n255 0 0\n0 255 0\n0 0 255\n255 255 0\n")
+    add_test(
+        NAME "gba-mode4-external-pal"
+        COMMAND png2amiga --mode gba-mode4
+                --palette ${CMAKE_BINARY_DIR}/gba_ext.gpl
+                ${PNG2AMIGA_TEST_INPUT}
+                ${CMAKE_BINARY_DIR}/test_gba4_extpal.h
+    )
+
+    # GBA direct-color modes have no palette → these flags must be rejected.
+    add_test(
+        NAME "gba-mode3-reserve-rejected"
+        COMMAND png2amiga --mode gba-mode3 --reserve-range 6 00ff00
+                ${PNG2AMIGA_TEST_INPUT}
+                ${CMAKE_BINARY_DIR}/test_gba3_rsv.h
+    )
+    set_tests_properties("gba-mode3-reserve-rejected" PROPERTIES WILL_FAIL TRUE)
+    add_test(
+        NAME "gba-mode5-lock-rejected"
+        COMMAND png2amiga --mode gba-mode5 --lock-index 5 ff0000
+                ${PNG2AMIGA_TEST_INPUT}
+                ${CMAKE_BINARY_DIR}/test_gba5_lock.h
+    )
+    set_tests_properties("gba-mode5-lock-rejected" PROPERTIES WILL_FAIL TRUE)
+
     # C64 — every (mode, output-format) combo we promise. Bitmap modes:
     # PNG preview, .raw bytes, .prg displayer; .koa for multicolor only;
     # .hir for hires only. Charset modes: PNG, .raw, .h header. PETSCII

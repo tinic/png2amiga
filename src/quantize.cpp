@@ -38,7 +38,9 @@ Algorithm resolve_algorithm(amiga::Mode mode,
     if (amiga::is_ham(mode)) {
         return (chipset == amiga::Chipset::aga) ? Algorithm::pnn : Algorithm::median_cut;
     }
-    if (amiga::is_vga(mode) || chipset == amiga::Chipset::aga) {
+    // VGA (18-bit DAC) and GBA Mode 4 (BGR555) are continuous gamuts:
+    // quantize in continuous space, then snap to the hardware grid.
+    if (amiga::is_vga(mode) || amiga::is_gba(mode) || chipset == amiga::Chipset::aga) {
         return metal_available() ? Algorithm::gpu_restart : Algorithm::pnn;
     }
     return Algorithm::ocs_bruteforce;  // OCS lores/hires/EHB
