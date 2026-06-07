@@ -28,7 +28,6 @@
 #include "png_io.hpp"
 #include "preprocess.hpp"
 #include "quantize.hpp"
-#include "quantize_metal.hpp"
 #include "scale.hpp"
 #include "types.hpp"
 
@@ -2259,9 +2258,9 @@ Result<PipelineResult> run_pipeline(const std::uint8_t* input_data,
                 rendered[x, y] = snapped;
                 return {color_space::linear_to_oklab(snapped), 0.5f};
             });
-        for (std::size_t i = 0; i < words.size(); ++i) {
-            raw.push_back(static_cast<std::uint8_t>(words[i] & 0xFF));
-            raw.push_back(static_cast<std::uint8_t>((words[i] >> 8) & 0xFF));
+        for (auto word : words) {
+            raw.push_back(static_cast<std::uint8_t>(word & 0xFF));
+            raw.push_back(static_cast<std::uint8_t>((word >> 8) & 0xFF));
         }
 
         PipelineResult result;
