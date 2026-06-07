@@ -46,6 +46,10 @@ test.cpp
 /docs/*_research.md
 # Local scratch example images (JPEG XL); not part of the test set
 *.jxl
+# Vendored reference encoders — built locally for bench/validation only,
+# not shipped (the tracked third_party/ entries are stb + ssimulacra2).
+/third_party/astc-encoder/
+/third_party/zstd/
 .!*
 /examples/tile/out/
 tools/mode_survey.txt
