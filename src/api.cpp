@@ -1200,6 +1200,29 @@ Result<PipelineResult> run_pipeline(const std::uint8_t* input_data,
         }};
     }
 
+    // Sliced palette (--sliced/--copper), strip palette (--strips), and dual
+    // playfield (--dpf) are Amiga copper / bitplane features (OCS/ECS/AGA
+    // lores/hires/HAM/EHB). Every other target is a fixed hardware buffer
+    // with no copper — reject rather than silently ignore (or, for VGA,
+    // wrongly fall into the Amiga sliced path).
+    if (options.copper || options.scap || options.dual_playfield) {
+        bool non_amiga = amiga::is_atari(mode) || amiga::is_vga(mode) || amiga::is_ega(mode) ||
+                         amiga::is_cga(mode) || amiga::is_c64(mode) || amiga::is_snes(mode) ||
+                         amiga::is_genesis(mode) || amiga::is_gba(mode) ||
+                         amiga::is_thomson(mode) || amiga::is_ted(mode);
+        if (non_amiga) {
+            std::string which;
+            if (options.copper) which += "--sliced/--copper ";
+            if (options.scap) which += "--strips ";
+            if (options.dual_playfield) which += "--dpf ";
+            return std::unexpected{Error{
+                ErrorCode::unsupported_mode,
+                which + "require an Amiga bitplane mode (lores / hires / HAM / EHB); "
+                        "not supported on this target.",
+            }};
+        }
+    }
+
     // We need source dimensions to compute the target size.
     // Peek at the source image dimensions first.
     int peek_w{}, peek_h{};

@@ -2356,6 +2356,30 @@ Result<Config> parse_args(int argc, char* argv[]) {
         if (config.input_path.empty()) config.input_path = "<batch>";
     }
 
+    // Sliced palette (--sliced/--copper), strip palette (--strips), and dual
+    // playfield (--dpf) are Amiga copper / bitplane features (lores / hires /
+    // HAM / EHB). On every other target they would be silently ignored or —
+    // for the DOS / Atari modes — wrongly hijack the encode into the Amiga
+    // sliced path. Reject up front, before any dispatch. (api.cpp's
+    // run_pipeline carries the same guard for the WASM / library callers.)
+    if (config.copper || config.scap || config.dual_playfield) {
+        auto m = config.mode;
+        bool non_amiga = amiga::is_atari(m) || amiga::is_vga(m) || amiga::is_ega(m) ||
+                         amiga::is_cga(m) || amiga::is_c64(m) || amiga::is_snes(m) ||
+                         amiga::is_genesis(m) || amiga::is_gba(m) || amiga::is_thomson(m) ||
+                         amiga::is_ted(m);
+        if (non_amiga) {
+            std::string which;
+            if (config.copper) which += "--sliced/--copper ";
+            if (config.scap) which += "--strips ";
+            if (config.dual_playfield) which += "--dpf ";
+            return std::unexpected{Error{
+                ErrorCode::unsupported_mode,
+                which + "require an Amiga bitplane mode (lores / hires / HAM / EHB); "
+                        "not supported on this target."}};
+        }
+    }
+
     if (config.input_path.empty() && config.strips_probe.empty() && !config.list_modes &&
         !config.list_dithers) {
         print_usage();
