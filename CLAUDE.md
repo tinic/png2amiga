@@ -195,6 +195,43 @@ BGR555). Direct modes (mode3/mode5) route per-pixel through
 BGR555-snapped colors and dithers via `dither::apply` (mirrors `vga_13h`).
 `--depth` and `--chipset` are no-ops; `.iff` / viewer outputs are rejected.
 
+## Thomson Modes
+
+| `--mode` | Resolution | Colors | Notes |
+|----------|------------|--------|-------|
+| `thomson-to7-320x16` | 320×200 | 16 fixed | forme-couleur, 2 colors/8×1 cell, fixed TO7/70 palette |
+| `thomson-to8-320x16` | 320×200 | 16 prog | forme-couleur, programmable 16-from-4096 palette |
+| `thomson-to8-160x16` | 160×200 | 16 prog | 4bpp bitmap |
+| `thomson-to8-320x4` | 320×200 | 4 prog | 2 bitplanes |
+| `thomson-to8-640x2` | 640×200 | 2 prog | 1bpp |
+
+TO7/70 + TO8, EF9369+TEA5114 gamma LUT (`palette::kThomsonIntens`, non-uniform
+ramp — NOT nibble replication). `src/thomson.{hpp,cpp}`. forme-couleur reuses
+the c64-style per-cell brute force + `diffuse_raw_buffer` dither (cell = 8×1);
+the color byte has INVERTED high bits (TO-series `Decode320x16` format,
+round-trip-verified). Bitmap modes mirror the gba-mode4 quantize→snap→dither→
+pack path (snap each channel to the nearest `intens[]` level). VRAM = two 8 KB
+pages; raw_frame = pageA ++ pageB.
+
+## Commodore TED Modes
+
+| `--mode` | Resolution | Colors | Notes |
+|----------|------------|--------|-------|
+| `ted-320x200` | 320×200 | 2 / 8×8 cell | hires (C64-hires-like) |
+| `ted-160x200` | 160×200 | 4 / 4×8 cell | multicolor: 2 global + 2 per-cell |
+
+Plus/4 / C16. Fixed 121-color palette (`palette::kTedPalette`, 128 entries
+indexed `(luma<<4)|chroma`; chroma 0 = black at every luma → 121 unique).
+`src/ted.{hpp,cpp}`. Per-cell brute force over the 121 colors in OKLab; the
+LUMA / CHROMA bytes pack two 3-bit lumas and two 4-bit chromas per cell.
+Multicolor adds a 2-color global background pair (`$FF15`/`$FF16`). raw_frame
+= bitmap[8000] ++ luma[1000] ++ chroma[1000] (++ bg0,bg1 for multicolor).
+
+Thomson + TED: fixed-buffer (square pixels, PAR 1.0). Output: PNG preview +
+generic C header (`.h`) + native-layout raw `.bin` (TO8 also writes a
+companion `.pal`). `--depth` / `--chipset` no-ops; reserve / lock / external-
+palette and `.iff` / viewer outputs rejected (fixed or auto-quantized palette).
+
 ## Architecture Notes
 
 - **Sister project**: Architecture mirrors `png2c64` — same pipeline pattern, same coding conventions

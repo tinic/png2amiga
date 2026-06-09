@@ -15,7 +15,7 @@ import {
   CHIPSETS, DITHER_METHODS, ALPHA_DITHER_METHODS, isNonSquareDither,
   SLIDERS, CGA_TEXT_METRICS, CGA_TEXT_KERNELS, C64_PALETTES, C64_METRICS, c64PaletteRgb, EXAMPLES, examplesForChipset,
   defaultOptions, isHamMode, hamType, isEhbMode, isAtariMode,
-  isDosMode, isVgaMode, isEgaMode, isSnesMode, isSnesDirectMode, isGenesisMode, isGbaMode, isGbaDirectMode, isC64Mode, isC64CharsetMode, isCgaMode, isCgaText, isTileFreeformMode, isFixedBufferMode, isInterlaceMode, modePar,
+  isDosMode, isVgaMode, isEgaMode, isSnesMode, isSnesDirectMode, isGenesisMode, isGbaMode, isGbaDirectMode, isC64Mode, isC64CharsetMode, isThomsonMode, isTedMode, isCgaMode, isCgaText, isTileFreeformMode, isFixedBufferMode, isInterlaceMode, modePar,
   maxDepth, defaultDepth, effectiveChipset, previewScale,
   modesForChipset,
 } from '../lib/options.js'
@@ -514,22 +514,18 @@ const reservablePaletteSize = computed(() => {
 // option (HAM dynamic palette, DPF split, multi-palette tile modes,
 // fixed hardware-palette modes). Hide the panel in those cases —
 // surfacing it would just cause the convert call to error.
-const reservesSupported = computed(() => {
-  const m = options.mode
-  if (isHamMode(m)) return false
-  if (isGenesisMode(m) || isSnesMode(m)) return false
-  if (isC64Mode(m)) return false
-  if (isCgaMode(m) || isCgaText(m)) return false
-  // GBA direct-color modes (mode3/mode5) are 16bpp BGR555 with no
-  // palette; only the paletted Mode 4 supports reserves.
-  if (isGbaDirectMode(m)) return false
-  // DPF and DPF+sliced: the CLI gate at main.cpp:5704 explicitly
-  // allows reserves through ("PF1 is zeroed in the current
-  // implementation, so reserves on the depth-3/4 base palette ARE
-  // PF2 reserves"), and copper.cpp's find_best_swap already rejects
-  // OCS-snapping onto reserved colors. No special-case needed.
-  return true
-})
+// Modes whose palette is fixed in hardware, dynamic, auto-quantized, or
+// split into multiple lines — none expose a single reservable CLUT.
+// (HAM dynamic, Genesis/SNES multi-line, C64/Thomson/TED fixed-or-auto,
+// CGA hardware-fixed, GBA direct = no palette.) DPF / DPF+sliced are NOT
+// here: the CLI lets reserves through (PF2 base palette) and copper.cpp
+// rejects OCS-snapping onto reserved colors.
+function modeHasNoReservableClut(m: string): boolean {
+  const fixedOrDynamic = [isHamMode, isGenesisMode, isSnesMode, isC64Mode,
+    isThomsonMode, isTedMode, isCgaMode, isCgaText, isGbaDirectMode]
+  return fixedOrDynamic.some(p => p(m))
+}
+const reservesSupported = computed(() => !modeHasNoReservableClut(options.mode))
 const numReserveRows = computed(() => {
   if (!reservesSupported.value) return 0
   return Math.max(0, Math.ceil(reservablePaletteSize.value / 16))
@@ -2763,8 +2759,18 @@ async function loadExample(example: typeof EXAMPLES[number]) {
               <Button label="h" icon="pi pi-download" class="flex-1" severity="secondary" :disabled="!imageBytes || converting" @click="downloadHeader"
                 title="Download a GBA C header: Bitmap[] of BGR555 words (Mode 3/5) or 8bpp indices + Pal[256] (Mode 4), with Width / Height / BitmapLen defines." />
             </div>
+            <!-- Thomson / TED export: PNG preview + generic .h header +
+                 native-layout .bin (no IFF / viewer — not Amiga/DOS). -->
+            <div v-if="isThomsonMode(options.mode) || isTedMode(options.mode)" class="flex gap-2">
+              <Button label="png" icon="pi pi-download" class="flex-1" :disabled="!imageBytes || converting" @click="downloadPNG"
+                title="Download the converted image as a PNG preview file." />
+              <Button label="h" icon="pi pi-download" class="flex-1" severity="secondary" :disabled="!imageBytes || converting" @click="downloadHeader"
+                title="Download a generic C header: Thomson Couleur/Forme or PageA/PageB (+ 4-bit r/g/b Palette for TO8); TED Bitmap/Luma/Chroma (+ Bg0/Bg1 for multicolor)." />
+              <Button label="raw" icon="pi pi-download" class="flex-1" severity="secondary" :disabled="!imageBytes || converting" @click="downloadRaw"
+                title="Download native-layout raw bytes (Thomson: pageA then pageB; TED: bitmap, luma, chroma, then globals)." />
+            </div>
             <!-- Amiga export buttons -->
-            <div v-if="!isAtariMode(options.mode) && !isDosMode(options.mode) && !isSnesMode(options.mode) && !isGenesisMode(options.mode) && !isC64Mode(options.mode) && !isGbaMode(options.mode)" class="flex gap-2">
+            <div v-if="!isAtariMode(options.mode) && !isDosMode(options.mode) && !isSnesMode(options.mode) && !isGenesisMode(options.mode) && !isC64Mode(options.mode) && !isGbaMode(options.mode) && !isThomsonMode(options.mode) && !isTedMode(options.mode)" class="flex gap-2">
               <Button label="png" icon="pi pi-download" class="flex-1" :disabled="!imageBytes || converting" @click="downloadPNG"
                 title="Download the converted image as a PNG preview file." />
               <Button label="iff" icon="pi pi-download" class="flex-1" :disabled="!imageBytes || converting" @click="downloadIFF"
@@ -2774,7 +2780,7 @@ async function loadExample(example: typeof EXAMPLES[number]) {
               <Button label="adf" icon="pi pi-download" class="flex-1" :disabled="!imageBytes || converting" @click="compileAndDownload('adf')"
                 title="Download bootable Amiga floppy disk image (ADF)." />
             </div>
-            <div v-if="!isAtariMode(options.mode) && !isDosMode(options.mode) && !isSnesMode(options.mode) && !isGenesisMode(options.mode) && !isC64Mode(options.mode) && !isGbaMode(options.mode)" class="flex gap-2">
+            <div v-if="!isAtariMode(options.mode) && !isDosMode(options.mode) && !isSnesMode(options.mode) && !isGenesisMode(options.mode) && !isC64Mode(options.mode) && !isGbaMode(options.mode) && !isThomsonMode(options.mode) && !isTedMode(options.mode)" class="flex gap-2">
               <Button label="exe" icon="pi pi-download" class="flex-1" severity="secondary" :disabled="!imageBytes || converting" @click="compileAndDownload('exe')"
                 title="Download compiled AmigaOS executable. Click left mouse button to exit." />
               <Button label="cpp" icon="pi pi-download" class="flex-1" severity="secondary" :disabled="!imageBytes || converting" @click="downloadViewer"

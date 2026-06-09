@@ -1,6 +1,6 @@
 // Type-side declarations.
 
-export type Chipset = 'ocs' | 'aga' | 'stf' | 'ste' | 'vga' | 'ega' | 'cga' | 'snes' | 'genesis' | 'c64' | 'gba'
+export type Chipset = 'ocs' | 'aga' | 'stf' | 'ste' | 'vga' | 'ega' | 'cga' | 'snes' | 'genesis' | 'c64' | 'gba' | 'thomson' | 'ted'
 
 export interface ModeOption {
   value: string
@@ -196,11 +196,20 @@ const ALL_MODES: ModeOption[] = [
   { value: 'gba-mode3', label: 'Mode 3 (240×160, direct)',  chipset: 'gba' },
   { value: 'gba-mode4', label: 'Mode 4 (240×160, palette)', chipset: 'gba' },
   { value: 'gba-mode5', label: 'Mode 5 (160×128, direct)',  chipset: 'gba' },
+  // Thomson TO7/70 + TO8 — EF9369 gamma palette, two-page VRAM.
+  { value: 'thomson-to7-320x16', label: 'TO7/70 320×16 (forme-couleur)', chipset: 'thomson' },
+  { value: 'thomson-to8-320x16', label: 'TO8 320×16 (forme-couleur)',    chipset: 'thomson' },
+  { value: 'thomson-to8-160x16', label: 'TO8 160×16 (4bpp bitmap)',      chipset: 'thomson' },
+  { value: 'thomson-to8-320x4',  label: 'TO8 320×4 (2 planes)',          chipset: 'thomson' },
+  { value: 'thomson-to8-640x2',  label: 'TO8 640×2 (1bpp)',              chipset: 'thomson' },
+  // Commodore TED (Plus/4, C16) — fixed 121-color palette.
+  { value: 'ted-320x200', label: 'TED 320×200 (2/8×8 cell)',  chipset: 'ted' },
+  { value: 'ted-160x200', label: 'TED 160×200 (4/4×8 cell)',  chipset: 'ted' },
 ]
 
 // Chipsets whose mode list is exactly `m.chipset === chipset`.
 const FIXED_CHIPSETS = new Set<Chipset>(
-  ['stf', 'ste', 'vga', 'ega', 'cga', 'snes', 'genesis', 'c64', 'gba'])
+  ['stf', 'ste', 'vga', 'ega', 'cga', 'snes', 'genesis', 'c64', 'gba', 'thomson', 'ted'])
 
 // Filter modes available for a given chipset
 export function modesForChipset(chipset: Chipset): ModeOption[] {
@@ -237,6 +246,8 @@ export const CHIPSETS: ChipsetOption[] = [
   { value: 'snes',    label: 'SNES Mode 7' },
   { value: 'genesis', label: 'Sega Genesis / Mega Drive' },
   { value: 'gba',     label: 'Game Boy Advance' },
+  { value: 'thomson', label: 'Thomson TO7/70 + TO8' },
+  { value: 'ted',     label: 'Commodore Plus/4 (TED)' },
 ]
 
 // VIC-II palette options — only meaningful when chipset is 'c64'.
@@ -589,6 +600,8 @@ const EXAMPLES_BY_CHIPSET: Record<Chipset, Example[]> = {
   snes:    AMIGA_EXAMPLES,
   genesis: AMIGA_EXAMPLES,
   gba:     AMIGA_EXAMPLES,
+  thomson: AMIGA_EXAMPLES,
+  ted:     AMIGA_EXAMPLES,
 }
 
 export function examplesForChipset(chipset: Chipset): Example[] {
@@ -731,6 +744,18 @@ export function isGbaDirectMode(mode: string): boolean {
 export function isC64Mode(mode: string): boolean {
   return mode.startsWith('c64-')
 }
+export function isThomsonMode(mode: string): boolean {
+  return mode.startsWith('thomson-')
+}
+// Thomson forme-couleur attribute modes (2 colors per 8×1 cell). The
+// 320×16 (TO7/70 + TO8) modes; the 160×16 / 320×4 / 640×2 are plain
+// bitmaps with no per-cell constraint.
+export function isThomsonFormeCouleur(mode: string): boolean {
+  return mode === 'thomson-to7-320x16' || mode === 'thomson-to8-320x16'
+}
+export function isTedMode(mode: string): boolean {
+  return mode.startsWith('ted-')
+}
 // c64 charset modes accept arbitrary width/height (padded to cell size)
 // and a configurable tile-budget. Distinguished from the bitmap c64
 // modes (multicolor / hires / fli / afli / petscii) which stay locked
@@ -772,7 +797,8 @@ export function isFixedBufferMode(mode: string): boolean {
   // fixed-buffer when Resize is enabled; the UI uses isEffectiveFixedBuffer
   // (Vue side) to keep Native PAR available at default size.
   if (isTileFreeformMode(mode)) return false
-  return isDosMode(mode) || isC64Mode(mode) || isAtariMode(mode) || isGbaMode(mode)
+  return isDosMode(mode) || isC64Mode(mode) || isAtariMode(mode) || isGbaMode(mode) ||
+         isThomsonMode(mode) || isTedMode(mode)
 }
 
 // Hardware Pixel Aspect Ratio (display_pixel_width / display_pixel_height).
@@ -880,6 +906,16 @@ const DOS_PREVIEW_SCALE: Record<string, PreviewScale> = {
   'c64-charset-multicolor':  { sx: 4, sy: 2 },
   'c64-multicolor':  { sx: 4, sy: 2 },
   'c64-fli':         { sx: 4, sy: 2 },
+  // Thomson — 320-wide buffers 2×2 → 640×400; 160-wide 4×2 (2:1 doubling
+  // baked in); 640-wide 1×2. PAR 1.0 (square pixels).
+  'thomson-to7-320x16':  { sx: 2, sy: 2 },
+  'thomson-to8-320x16':  { sx: 2, sy: 2 },
+  'thomson-to8-320x4':   { sx: 2, sy: 2 },
+  'thomson-to8-160x16':  { sx: 4, sy: 2 },
+  'thomson-to8-640x2':   { sx: 1, sy: 2 },
+  // TED — hires 320 (2×2), multicolor 160 (4×2).
+  'ted-320x200':         { sx: 2, sy: 2 },
+  'ted-160x200':         { sx: 4, sy: 2 },
 }
 
 // Generic Amiga-mode preview scale by (hires?, interlace?). 1×1 for
@@ -923,6 +959,7 @@ export function decomposeMode(uiMode: string): DecomposedMode {
 // constraints) report 0 to mean "no user-adjustable depth slider".
 const FIXED_DEPTH_PREDICATES = [
   isHamMode, isEhbMode, isAtariMode, isDosMode, isC64Mode, isGbaMode,
+  isThomsonMode, isTedMode,
 ] as const
 export function maxDepth(mode: string, chipset: Chipset): number {
   for (const p of FIXED_DEPTH_PREDICATES) if (p(mode)) return 0
@@ -942,6 +979,11 @@ const FIXED_DEFAULT_DEPTH: Record<string, number> = {
   // GBA: mode4 is 8bpp paletted; direct modes are 16bpp (conceptual).
   'gba-mode4': 8,
   'gba-mode3': 16, 'gba-mode5': 16,
+  // Thomson: 16/4/2-color buffers (conceptual bit depth).
+  'thomson-to7-320x16': 4, 'thomson-to8-320x16': 4, 'thomson-to8-160x16': 4,
+  'thomson-to8-320x4': 2, 'thomson-to8-640x2': 1,
+  // TED: hires 1bpp (2/cell), multicolor 2bpp (4/cell).
+  'ted-320x200': 1, 'ted-160x200': 2,
 }
 
 // Family-level fallbacks for defaultDepth. Tried in order after the
@@ -976,6 +1018,8 @@ export function numColors(mode: string, depth: number): string {
   }
   // GBA direct color: 16bpp BGR555 → 32768-color gamut (not 1<<16).
   if (isGbaDirectMode(mode)) return '32768'
+  // TED: fixed 121-color palette; the per-cell color count is the depth.
+  if (isTedMode(mode)) return `${1 << depth}/cell (121 palette)`
   return String(1 << depth)
 }
 

@@ -1166,6 +1166,9 @@ void print_usage() {
         "    C64:    c64-multicolor | c64-hires | c64-fli | c64-afli |\n"
         "            c64-petscii | c64-charset-hires | c64-charset-multicolor\n"
         "    GBA:    gba-mode3 | gba-mode4 | gba-mode5\n"
+        "    Thomson: thomson-to7-320x16 | thomson-to8-320x16 |\n"
+        "            thomson-to8-160x16 | thomson-to8-320x4 | thomson-to8-640x2\n"
+        "    TED:    ted-320x200 | ted-160x200\n"
         "  --depth <1-8>                   Bitplane depth (default: 5)\n"
         "  --chipset ocs|aga               Amiga chipset (default: auto)\n"
         "  --dual-playfield, --dpf         Encode into PF2 (depth 3 OCS / 4 AGA)\n"
@@ -5640,6 +5643,10 @@ int run_main(int argc, char* argv[]) {
             cli_status("  C64:      c64-multicolor, c64-hires, c64-fli, c64-afli, c64-petscii,");
             cli_status("            c64-charset-hires, c64-charset-multicolor");
             cli_status("  GBA:      gba-mode3, gba-mode4, gba-mode5");
+            cli_status("  Thomson:  thomson-to7-320x16, thomson-to8-320x16, "
+                       "thomson-to8-160x16,");
+            cli_status("            thomson-to8-320x4, thomson-to8-640x2");
+            cli_status("  TED:      ted-320x200, ted-160x200");
         }
         return exit_code::ok;
     }

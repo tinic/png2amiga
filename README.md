@@ -248,6 +248,42 @@ u16 LE BGR555). Square pixels (PAR 1.0). `--native-par` letterboxes/
 pillarboxes the source into the fixed LCD buffer; the default is to
 stretch-fill.
 
+## Thomson Modes
+
+Thomson TO7/70 and TO8 (French micros). Channels use the EF9369 + TEA5114
+gamma LUT (`intens[16]`, a non-uniform ramp — NOT nibble replication).
+
+| Mode | Resolution | Colors | Notes |
+|------|-----------|--------|-------|
+| `thomson-to7-320x16` | 320×200 | 16 fixed | forme-couleur, 2 colors per 8×1-pixel cell, fixed TO7/70 palette |
+| `thomson-to8-320x16` | 320×200 | 16 prog. | forme-couleur, programmable 16-from-4096 palette |
+| `thomson-to8-160x16` | 160×200 | 16 prog. | 4bpp bitmap, no per-cell constraint |
+| `thomson-to8-320x4` | 320×200 | 4 prog. | 2-bitplane bitmap |
+| `thomson-to8-640x2` | 640×200 | 2 prog. | 1bpp bitmap |
+
+The forme-couleur color byte uses the TO-series inverted-high-bits format
+(round-trip-verified against the theodore emulator's `Decode320x16`).
+
+## Commodore TED Modes
+
+Commodore Plus/4 and C16 (TED video chip). Fixed 121-color palette
+(luma 0–7 × chroma 0–15; chroma 0 = black at every luma).
+
+| Mode | Resolution | Colors | Notes |
+|------|-----------|--------|-------|
+| `ted-320x200` | 320×200 | 2 / 8×8 cell | hires (C64-hires-like) |
+| `ted-160x200` | 160×200 | 4 / 4×8 cell | multicolor: 2 global + 2 per-cell |
+
+Thomson + TED: fixed-buffer modes, square pixels (PAR 1.0). Output: PNG
+preview (always) + generic C header (`.h`: `const unsigned char` arrays
+— Thomson `Couleur`/`Forme` or `PageA`/`PageB` + a 4-bit r/g/b `Palette`
+for the TO8 modes; TED `Bitmap`/`Luma`/`Chroma` + `Bg0`/`Bg1` defines for
+multicolor) + native-layout raw `.bin` (Thomson: pageA then pageB; TED:
+bitmap, luma, chroma, then the two global bytes). The programmable TO8
+modes also write a companion `.pal`. `--depth` / `--chipset` are no-ops;
+reserve / lock / external-palette flags and `.iff` / viewer outputs are
+rejected (fixed or auto-quantized palettes).
+
 ## Sliced palette (per-line copper swaps)
 
 Add `--sliced` to any bitmap mode (lores, hires, EHB, HAM6, HAM8) to let
@@ -556,6 +592,9 @@ Modes:
     C64:    c64-multicolor | c64-hires | c64-fli | c64-afli |
             c64-petscii | c64-charset-hires | c64-charset-multicolor
     GBA:    gba-mode3 | gba-mode4 | gba-mode5
+    Thomson: thomson-to7-320x16 | thomson-to8-320x16 |
+            thomson-to8-160x16 | thomson-to8-320x4 | thomson-to8-640x2
+    TED:    ted-320x200 | ted-160x200
   --depth <1-8>                   Bitplane depth (default: 5)
   --chipset ocs|aga               Amiga chipset (default: auto)
   --dual-playfield, --dpf         Encode into PF2 (depth 3 OCS / 4 AGA)
