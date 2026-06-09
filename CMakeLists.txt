@@ -74,6 +74,8 @@ set(PNG2AMIGA_CORE_SOURCES
     src/genesis.cpp
     src/c64.cpp
     src/c64_prg.cpp
+    src/thomson.cpp
+    src/ted.cpp
     src/pipeline.cpp
     src/ssimulacra2.cpp
     src/api.cpp
@@ -1549,6 +1551,82 @@ sys.exit(0 if got==expect else (print(f'expected {expect}, got {got}') or 1))"
     )
     set_tests_properties("gba-mode5-lock-rejected" PROPERTIES WILL_FAIL TRUE)
 
+    # Thomson TO7/70 + TO8 and Commodore TED — PNG preview + .h header +
+    # native-layout .bin for every mode.
+    set(thomson_ted_outputs
+        "to7fc.png|--mode thomson-to7-320x16"
+        "to7fc.h|--mode thomson-to7-320x16 --symbol to7_test"
+        "to7fc.bin|--mode thomson-to7-320x16"
+        "to8fc.png|--mode thomson-to8-320x16"
+        "to8fc.h|--mode thomson-to8-320x16 --symbol to8fc_test"
+        "to8fc.bin|--mode thomson-to8-320x16"
+        "to8b16.png|--mode thomson-to8-160x16"
+        "to8b16.h|--mode thomson-to8-160x16 --symbol to8b16_test"
+        "to8b16.bin|--mode thomson-to8-160x16"
+        "to8b4.png|--mode thomson-to8-320x4"
+        "to8b4.h|--mode thomson-to8-320x4 --symbol to8b4_test"
+        "to8b4.bin|--mode thomson-to8-320x4"
+        "to8b2.png|--mode thomson-to8-640x2"
+        "to8b2.h|--mode thomson-to8-640x2 --symbol to8b2_test"
+        "to8b2.bin|--mode thomson-to8-640x2"
+        "tedhi.png|--mode ted-320x200"
+        "tedhi.h|--mode ted-320x200 --symbol tedhi_test"
+        "tedhi.bin|--mode ted-320x200"
+        "tedmc.png|--mode ted-160x200"
+        "tedmc.h|--mode ted-160x200 --symbol tedmc_test"
+        "tedmc.bin|--mode ted-160x200"
+    )
+    foreach(spec ${thomson_ted_outputs})
+        string(REPLACE "|" ";" spec_parts ${spec})
+        list(GET spec_parts 0 ext)
+        list(GET spec_parts 1 mode_args)
+        separate_arguments(mode_args UNIX_COMMAND "${mode_args}")
+        add_test(
+            NAME "smoke-thomsonted-${ext}"
+            COMMAND png2amiga ${mode_args}
+                    ${PNG2AMIGA_TEST_INPUT}
+                    ${CMAKE_BINARY_DIR}/smoke-thomsonted.${ext}
+        )
+        add_test(
+            NAME "smoke-thomsonted-${ext}-exists"
+            COMMAND ${CMAKE_COMMAND} -E sha256sum
+                    ${CMAKE_BINARY_DIR}/smoke-thomsonted.${ext}
+        )
+        set_tests_properties("smoke-thomsonted-${ext}-exists"
+                             PROPERTIES DEPENDS "smoke-thomsonted-${ext}")
+    endforeach()
+
+    # TO8 .bin must write a companion .pal (programmable palette, 2 B/color).
+    add_test(
+        NAME "smoke-thomson-to8-pal-exists"
+        COMMAND ${CMAKE_COMMAND} -E sha256sum
+                ${CMAKE_BINARY_DIR}/smoke-thomsonted.to8b16.pal
+    )
+    set_tests_properties("smoke-thomson-to8-pal-exists"
+                         PROPERTIES DEPENDS "smoke-thomsonted-to8b16.bin")
+
+    # TO7/70 has a FIXED palette → no companion .pal is written.
+    add_test(
+        NAME "thomson-to7-no-pal"
+        COMMAND ${CMAKE_COMMAND} -E compare_files
+                ${CMAKE_BINARY_DIR}/missing-to7.pal ${CMAKE_BINARY_DIR}/missing-to7.pal
+    )
+    set_tests_properties("thomson-to7-no-pal" PROPERTIES WILL_FAIL TRUE)
+
+    # Thomson / TED reject Amiga / viewer outputs.
+    add_test(
+        NAME "thomson-iff-rejected"
+        COMMAND png2amiga --mode thomson-to8-160x16
+                ${PNG2AMIGA_TEST_INPUT} ${CMAKE_BINARY_DIR}/test_thomson.iff
+    )
+    set_tests_properties("thomson-iff-rejected" PROPERTIES WILL_FAIL TRUE)
+    add_test(
+        NAME "ted-reserve-rejected"
+        COMMAND png2amiga --mode ted-320x200 --reserve-range 6 00ff00
+                ${PNG2AMIGA_TEST_INPUT} ${CMAKE_BINARY_DIR}/test_ted_rsv.h
+    )
+    set_tests_properties("ted-reserve-rejected" PROPERTIES WILL_FAIL TRUE)
+
     # C64 — every (mode, output-format) combo we promise. Bitmap modes:
     # PNG preview, .raw bytes, .prg displayer; .koa for multicolor only;
     # .hir for hires only. Charset modes: PNG, .raw, .h header. PETSCII
@@ -2187,6 +2265,20 @@ sys.exit(0 if got==expect else (print(f'expected {expect}, got {got}') or 1))"
         COMMAND ${_equiv_chk} --in ${_pal_makena_in} -- --mode c64-charset-hires)
     add_test(NAME "api-equiv-c64-charset-multicolor"
         COMMAND ${_equiv_chk} --in ${_pal_makena_in} -- --mode c64-charset-multicolor)
+    add_test(NAME "api-equiv-thomson-to7-320x16"
+        COMMAND ${_equiv_chk} --in ${_pal_makena_in} -- --mode thomson-to7-320x16)
+    add_test(NAME "api-equiv-thomson-to8-320x16"
+        COMMAND ${_equiv_chk} --in ${_pal_makena_in} -- --mode thomson-to8-320x16)
+    add_test(NAME "api-equiv-thomson-to8-160x16"
+        COMMAND ${_equiv_chk} --in ${_pal_makena_in} -- --mode thomson-to8-160x16)
+    add_test(NAME "api-equiv-thomson-to8-320x4"
+        COMMAND ${_equiv_chk} --in ${_pal_makena_in} -- --mode thomson-to8-320x4)
+    add_test(NAME "api-equiv-thomson-to8-640x2"
+        COMMAND ${_equiv_chk} --in ${_pal_makena_in} -- --mode thomson-to8-640x2)
+    add_test(NAME "api-equiv-ted-320x200"
+        COMMAND ${_equiv_chk} --in ${_pal_makena_in} -- --mode ted-320x200)
+    add_test(NAME "api-equiv-ted-160x200"
+        COMMAND ${_equiv_chk} --in ${_pal_makena_in} -- --mode ted-160x200)
     add_test(NAME "api-equiv-cga-text80x100"
         COMMAND ${_equiv_chk} --in ${_pal_makena_in} -- --mode cga-text80x100)
     # gpu_restart_quantize made deterministic in v1.66.0 (GPU argmin

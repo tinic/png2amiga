@@ -2086,6 +2086,20 @@ Result<Config> parse_args(int argc, char* argv[]) {
                     config.mode = amiga::Mode::gba_mode4;
                 else if (v == "gba-mode5" || v == "gba-5")
                     config.mode = amiga::Mode::gba_mode5;
+                else if (v == "thomson-to7-320x16")
+                    config.mode = amiga::Mode::thomson_to7_320x16;
+                else if (v == "thomson-to8-320x16")
+                    config.mode = amiga::Mode::thomson_to8_320x16;
+                else if (v == "thomson-to8-160x16")
+                    config.mode = amiga::Mode::thomson_to8_160x16;
+                else if (v == "thomson-to8-320x4")
+                    config.mode = amiga::Mode::thomson_to8_320x4;
+                else if (v == "thomson-to8-640x2")
+                    config.mode = amiga::Mode::thomson_to8_640x2;
+                else if (v == "ted-320x200")
+                    config.mode = amiga::Mode::ted_320x200;
+                else if (v == "ted-160x200")
+                    config.mode = amiga::Mode::ted_160x200;
                 else if (v == "png") {
                     // Benchmark-only path: emit indexed PNG-8 directly
                     // (no Amiga encoding). Used to compare our quantizer
@@ -2798,6 +2812,20 @@ std::string_view mode_to_options_string(amiga::Mode m) {
         return "gba-mode4";
     case amiga::Mode::gba_mode5:
         return "gba-mode5";
+    case amiga::Mode::thomson_to7_320x16:
+        return "thomson-to7-320x16";
+    case amiga::Mode::thomson_to8_320x16:
+        return "thomson-to8-320x16";
+    case amiga::Mode::thomson_to8_160x16:
+        return "thomson-to8-160x16";
+    case amiga::Mode::thomson_to8_320x4:
+        return "thomson-to8-320x4";
+    case amiga::Mode::thomson_to8_640x2:
+        return "thomson-to8-640x2";
+    case amiga::Mode::ted_320x200:
+        return "ted-320x200";
+    case amiga::Mode::ted_160x200:
+        return "ted-160x200";
     default:
         return "lores";
     }
@@ -6043,7 +6071,10 @@ int run_main(int argc, char* argv[]) {
         //  but for standard modes the user's depth must be valid)
         if (!amiga::is_ham(config->mode) && config->mode != amiga::Mode::ehb &&
             !amiga::is_atari(config->mode) && !amiga::is_vga(config->mode) &&
-            !amiga::is_ega(config->mode) && !amiga::is_cga(config->mode)) {
+            !amiga::is_ega(config->mode) && !amiga::is_cga(config->mode) &&
+            !amiga::is_snes(config->mode) && !amiga::is_genesis(config->mode) &&
+            !amiga::is_c64(config->mode) && !amiga::is_gba(config->mode) &&
+            !amiga::is_thomson(config->mode) && !amiga::is_ted(config->mode)) {
             auto max_d = amiga::max_user_depth(config->mode, cs);
             if (config->depth > max_d) {
                 auto mp = amiga::get_mode_params(config->mode);
@@ -6654,7 +6685,8 @@ int run_main(int argc, char* argv[]) {
                                    amiga::is_cga(config->mode) || amiga::is_ega(config->mode) ||
                                    amiga::is_snes(config->mode) ||
                                    amiga::is_genesis(config->mode) || amiga::is_c64(config->mode) ||
-                                   amiga::is_gba(config->mode);
+                                   amiga::is_gba(config->mode) || amiga::is_thomson(config->mode) ||
+                                   amiga::is_ted(config->mode);
             if (is_fixed_buffer && !config->native_par) {
                 target_h = params.screen_height;  // stretch to fill
             } else if (target_h > params.screen_height) {
@@ -6834,7 +6866,8 @@ int run_main(int argc, char* argv[]) {
     else if (amiga::is_atari(config->mode) || amiga::is_vga(config->mode) ||
              amiga::is_ega(config->mode) || amiga::is_cga(config->mode) ||
              amiga::is_snes(config->mode) || amiga::is_genesis(config->mode) ||
-             amiga::is_c64(config->mode) || amiga::is_gba(config->mode)) {
+             amiga::is_c64(config->mode) || amiga::is_gba(config->mode) ||
+             amiga::is_thomson(config->mode) || amiga::is_ted(config->mode)) {
         // Atari/DOS/SNES/Genesis/C64 modes have their bitplane depth baked
         // into the hardware (ST Low=4, VGA 13h=8, EGA=4, CGA 320=2,
         // cga-text80x100=4 attribute, SNES Mode 7=8 chunky, Genesis tiles=4,
@@ -6864,7 +6897,14 @@ int run_main(int argc, char* argv[]) {
         auto early_chipset = effective_chipset(*config);
         print_depth = (early_chipset == amiga::Chipset::aga) ? 8 : 6;
     }
-    if (amiga::is_gba(config->mode)) {
+    if (amiga::is_thomson(config->mode) || amiga::is_ted(config->mode)) {
+        // Thomson / TED have no Amiga bitplanes — report the buffer dims +
+        // color count (16 / 4 / 2 for Thomson; 121-color palette for TED).
+        cli_status("Target:   {}x{} @ {} colors",
+                   static_cast<std::size_t>(target_w),
+                   static_cast<std::size_t>(target_h),
+                   amiga::get_mode_params(config->mode).max_colors);
+    } else if (amiga::is_gba(config->mode)) {
         // GBA has no bitplanes — report the buffer dims + pixel depth
         // (8bpp paletted for mode4, 16bpp BGR555 for the direct modes).
         cli_status("Target:   {}x{} @ {}",
@@ -6940,7 +6980,8 @@ int run_main(int argc, char* argv[]) {
                          !amiga::is_ega(config->mode) && !amiga::is_cga(config->mode) &&
                          !amiga::is_cga_text(config->mode) && !amiga::is_c64(config->mode) &&
                          !amiga::is_snes(config->mode) && !amiga::is_genesis(config->mode) &&
-                         !amiga::is_gba(config->mode);
+                         !amiga::is_gba(config->mode) && !amiga::is_thomson(config->mode) &&
+                         !amiga::is_ted(config->mode);
     if (amiga_chipset) cli_print_chipset(chipset);
 
     // Dual playfield: encoded image lives in PF2 of a 2N-plane display, with
@@ -7228,6 +7269,144 @@ int run_main(int argc, char* argv[]) {
                 config->input_path,
                 config->palette_file,
             };
+            write_depfile(config->depfile, config->output_path, inputs);
+        }
+        return exit_code::ok;
+    }
+
+    // --- Thomson TO7/70 + TO8 and Commodore TED (Plus/4, C16) ---
+    // Fixed-buffer attribute / bitmap modes. PNG preview + native-layout
+    // raw .bin (+ companion .pal for the programmable TO8 modes) + generic
+    // C header. Reject .iff / viewer outputs.
+    if (amiga::is_thomson(config->mode) || amiga::is_ted(config->mode)) {
+        if (has_transparency) {
+            for (std::size_t i = 0; i < transparency_mask.size(); ++i)
+                if (transparency_mask[i]) image->pixels()[i] = Color3f{0, 0, 0};
+        }
+        auto src_png = png_io::encode(*image);
+        if (!src_png) {
+            std::println(stderr, "Thomson/TED: source re-encode failed: {}",
+                         src_png.error().message);
+            return exit_code::internal;
+        }
+        auto aopts = make_api_options(*config);
+        neutralize_preprocess(aopts);
+        aopts.mode = std::string(mode_to_options_string(config->mode));
+        // Leave width/height at 0 (mode default) unless the user asked for a
+        // freeform size: the prepared image is already at the native buffer,
+        // and forwarding its dims would make the api re-derive a target that
+        // can diverge from the byte path (api-equiv parity, matches c64/SNES).
+        bool freeform_request =
+            config->width.has_value() || config->height.has_value() || config->no_scale;
+        if (freeform_request) {
+            aopts.width = static_cast<int>(image->width());
+            aopts.height = static_cast<int>(image->height());
+        } else {
+            aopts.width = 0;
+            aopts.height = 0;
+        }
+        aopts.on_progress = make_cli_progress_reporter();
+
+        auto enc = api::encode_state_image(*image, aopts);
+        if (!enc.ok()) {
+            std::println(stderr, "Thomson/TED encode error: {}", enc.error_msg);
+            return exit_code::internal;
+        }
+        auto& st = enc.state;
+        const char* mode_desc = [&] {
+            switch (config->mode) {
+            case amiga::Mode::thomson_to7_320x16:
+                return "Thomson TO7/70 forme-couleur (320x200, 16 fixed, 2/8x1)";
+            case amiga::Mode::thomson_to8_320x16:
+                return "Thomson TO8 forme-couleur (320x200, 16 prog, 2/8x1)";
+            case amiga::Mode::thomson_to8_160x16:
+                return "Thomson TO8 bitmap (160x200, 16 prog, 4bpp)";
+            case amiga::Mode::thomson_to8_320x4:
+                return "Thomson TO8 bitmap (320x200, 4 prog, 2 planes)";
+            case amiga::Mode::thomson_to8_640x2:
+                return "Thomson TO8 bitmap (640x200, 2 prog, 1bpp)";
+            case amiga::Mode::ted_320x200:
+                return "Commodore TED hires (320x200, 2/8x8 cell, 121 palette)";
+            default:
+                return "Commodore TED multicolor (160x200, 4/4x8 cell, 121 palette)";
+            }
+        }();
+        cli_status("Mode:     {}", mode_desc);
+        if (!st.palette.empty()) cli_dump_palette(std::span<const Color3f>(st.palette), *config);
+        cli_print_dither(config->dither_method,
+                         resolved_dither_strength(make_api_options(*config)));
+        cli_print_encoded_other(
+            std::format("{} bytes (frame)", st.raw_frame.size()),
+            static_cast<std::size_t>(count_unique_colors(st.rendered)),
+            static_cast<double>(st.quant_error),
+            st.psnr,
+            st.ssimulacra2_score);
+
+        if (config->preview)
+            show_terminal_preview(st.rendered, config->mode, /*hires=*/false,
+                                  /*interlace=*/false, st.has_transparency,
+                                  st.transparency_mask);
+
+        if (config->output_path.empty()) {
+            // No -o — skip output.
+        } else if (ends_with(config->output_path, ".iff") ||
+                   ends_with(config->output_path, ".lbm") ||
+                   ends_with(config->output_path, ".cpp") ||
+                   ends_with(config->output_path, ".c") ||
+                   ends_with(config->output_path, ".pi1") ||
+                   ends_with(config->output_path, ".pi2") ||
+                   ends_with(config->output_path, ".pi3")) {
+            std::println(stderr,
+                         "Thomson / TED modes support .png, .h, and .bin/.raw output "
+                         "(got '{}').",
+                         config->output_path);
+            return exit_code::cant_create;
+        } else if (ends_with(config->output_path, ".bin") ||
+                   ends_with(config->output_path, ".raw")) {
+            std::ofstream of(config->output_path, std::ios::binary);
+            of.write(reinterpret_cast<const char*>(st.raw_frame.data()),
+                     static_cast<std::streamsize>(st.raw_frame.size()));
+            if (!of) {
+                std::println(stderr, "Thomson/TED write error: {}", config->output_path);
+                return exit_code::internal;
+            }
+            cli_status("Raw:      {} ({} bytes)", config->output_path, st.raw_frame.size());
+
+            // Companion .pal for the programmable-palette TO8 modes
+            // (gate-array byte order: 2 bytes/color, low byte = (g4<<4)|b4,
+            // high byte = r4; see api.cpp::thomson_pal_bytes).
+            if (amiga::is_thomson_programmable(config->mode) && !st.palette.empty()) {
+                std::filesystem::path pal_path{config->output_path};
+                pal_path.replace_extension(".pal");
+                auto pal_bytes = api::thomson_pal_bytes(st.palette);
+                std::ofstream pf(pal_path, std::ios::binary);
+                pf.write(reinterpret_cast<const char*>(pal_bytes.data()),
+                         static_cast<std::streamsize>(pal_bytes.size()));
+                cli_status("Pal:      {} ({} bytes)", pal_path.string(), pal_bytes.size());
+            }
+        } else if (ends_with(config->output_path, ".h")) {
+            auto cr = api::convert_cheader(src_png->data(), src_png->size(), aopts);
+            if (!cr.error.empty()) {
+                std::println(stderr, "Thomson/TED header: {}", cr.error);
+                return exit_code::internal;
+            }
+            std::ofstream of(config->output_path);
+            of.write(reinterpret_cast<const char*>(cr.data.data()),
+                     static_cast<std::streamsize>(cr.data.size()));
+            cli_status("Header:   {} ({} bytes)", config->output_path, cr.data.size());
+        } else {
+            auto r = save_preview(config->output_path, st.rendered, has_transparency,
+                                  transparency_mask, config->mode, /*hires=*/false,
+                                  /*interlace=*/false);
+            if (!r) {
+                std::println(stderr, "PNG write error: {}", r.error().message);
+                return exit_code::internal;
+            }
+            cli_status("PNG:      {}", config->output_path);
+        }
+
+        if (!config->depfile.empty() && !config->output_path.empty()) {
+            std::array<std::string_view, 2> inputs{config->input_path, config->palette_file};
             write_depfile(config->depfile, config->output_path, inputs);
         }
         return exit_code::ok;

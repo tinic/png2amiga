@@ -18,6 +18,8 @@
 #include "genesis.hpp"
 #include "c64.hpp"
 #include "c64_prg.hpp"
+#include "thomson.hpp"
+#include "ted.hpp"
 #include "snes_io.hpp"
 #include "palette.hpp"
 #include "palette_io.hpp"
@@ -112,6 +114,13 @@ amiga::Mode parse_mode(const std::string& s) {
     if (s == "c64-petscii") return amiga::Mode::c64_petscii;
     if (s == "c64-charset-hires") return amiga::Mode::c64_charset_hires;
     if (s == "c64-charset-multicolor") return amiga::Mode::c64_charset_multicolor;
+    if (s == "thomson-to7-320x16") return amiga::Mode::thomson_to7_320x16;
+    if (s == "thomson-to8-320x16") return amiga::Mode::thomson_to8_320x16;
+    if (s == "thomson-to8-160x16") return amiga::Mode::thomson_to8_160x16;
+    if (s == "thomson-to8-320x4") return amiga::Mode::thomson_to8_320x4;
+    if (s == "thomson-to8-640x2") return amiga::Mode::thomson_to8_640x2;
+    if (s == "ted-320x200") return amiga::Mode::ted_320x200;
+    if (s == "ted-160x200") return amiga::Mode::ted_160x200;
     return amiga::Mode::lores;
 }
 
@@ -525,7 +534,8 @@ TargetDims compute_target_dims(std::size_t src_w,
     // fixed-buf default still applies.
     bool is_fixed_buf = amiga::is_atari(mode) || amiga::is_vga(mode) || amiga::is_ega(mode) ||
                         amiga::is_cga(mode) || amiga::is_cga_text(mode) || amiga::is_snes(mode) ||
-                        amiga::is_genesis(mode) || amiga::is_c64(mode) || amiga::is_gba(mode);
+                        amiga::is_genesis(mode) || amiga::is_c64(mode) || amiga::is_gba(mode) ||
+                        amiga::is_thomson(mode) || amiga::is_ted(mode);
     // Tile-based platforms with freeform sizing — Genesis (8×8 cells)
     // and SNES Mode 7 (8×8 cells) use the same 1:1 source-pixel
     // convention as c64-charset-hires. No multicolor halving.
@@ -636,7 +646,8 @@ TargetDims compute_target_dims(std::size_t src_w,
                                amiga::is_ega(mode) || amiga::is_cga(mode) ||
                                amiga::is_cga_text(mode) || amiga::is_snes(mode) ||
                                amiga::is_genesis(mode) || amiga::is_c64(mode) ||
-                               amiga::is_gba(mode);
+                               amiga::is_gba(mode) || amiga::is_thomson(mode) ||
+                               amiga::is_ted(mode);
         if (is_fixed_buffer && !options.native_par) {
             h = mode_h;  // stretch to fill
         } else if (h > mode_h) {
@@ -1151,6 +1162,12 @@ Result<PipelineResult> run_pipeline(const std::uint8_t* input_data,
             return reject("not supported in C64 modes (VIC-II palette is "
                           "fixed in hardware; --lock-color0 covers the "
                           "common 'pin background' use-case)");
+        if (amiga::is_ted(mode))
+            return reject("not supported in TED modes (the Plus/4/C16 palette "
+                          "is fixed in hardware)");
+        if (amiga::is_thomson(mode))
+            return reject("not supported in Thomson modes (fixed TO7/70 palette "
+                          "or auto-quantized TO8 palette)");
         if (amiga::is_cga(mode) || amiga::is_cga_text(mode))
             return reject("not supported in CGA modes (palette is "
                           "hardware-fixed)");
@@ -1168,6 +1185,18 @@ Result<PipelineResult> run_pipeline(const std::uint8_t* input_data,
             ErrorCode::unsupported_mode,
             "--lock-index / --pin-index-at / --palette: not supported in GBA "
             "direct-color modes (16bpp BGR555 per pixel — there is no palette)",
+        }};
+    }
+
+    // Thomson + TED modes use a fixed (TO7/70, TED) or auto-quantized (TO8)
+    // palette — no slot to lock/pin and no external palette load. Reject
+    // rather than silently ignore, matching the C64 convention.
+    if ((amiga::is_thomson(mode) || amiga::is_ted(mode)) &&
+        (!options.locks.empty() || !options.pins.empty() || has_user_palette(options))) {
+        return std::unexpected{Error{
+            ErrorCode::unsupported_mode,
+            "--lock-index / --pin-index-at / --palette: not supported in "
+            "Thomson / TED modes (palette is fixed or auto-quantized)",
         }};
     }
 
@@ -1209,7 +1238,8 @@ Result<PipelineResult> run_pipeline(const std::uint8_t* input_data,
     // DOS + SNES + Genesis + GBA modes: depth also fixed by the hardware
     // buffer (GBA mode4 = 8bpp; the direct modes don't use depth at all).
     if (amiga::is_vga(mode) || amiga::is_ega(mode) || amiga::is_cga(mode) || amiga::is_snes(mode) ||
-        amiga::is_genesis(mode) || amiga::is_gba(mode))
+        amiga::is_genesis(mode) || amiga::is_gba(mode) || amiga::is_thomson(mode) ||
+        amiga::is_ted(mode))
         depth = amiga::get_mode_params(mode).bitplane_depth;
 
     // Dual-playfield: encode the image into PF2 only with a constrained
@@ -1284,7 +1314,8 @@ Result<PipelineResult> run_pipeline(const std::uint8_t* input_data,
     auto mode_w_fixed = mparams.screen_width;
     bool is_fixed_buffer = amiga::is_atari(mode) || amiga::is_vga(mode) || amiga::is_ega(mode) ||
                            amiga::is_cga(mode) || amiga::is_cga_text(mode) ||
-                           amiga::is_snes(mode) || amiga::is_genesis(mode) || amiga::is_gba(mode);
+                           amiga::is_snes(mode) || amiga::is_genesis(mode) || amiga::is_gba(mode) ||
+                           amiga::is_thomson(mode) || amiga::is_ted(mode);
     // cga-text accepts arbitrary multiples of 8×2 in freeform (--width
     // / --height set). Don't center-pad freeform input up to the
     // canonical 640×200 buffer — that would silently turn a 200×400
@@ -1928,6 +1959,94 @@ Result<PipelineResult> run_pipeline(const std::uint8_t* input_data,
             result.genesis_total_cells = enc->cols * enc->rows;
             result.tile_data_bytes = enc->unique_glyphs * 8;
         }
+        return result;
+    }
+
+    // --- Thomson TO7/70 + TO8 ---
+    // forme-couleur (8×1 attribute cells) + the 3 bitmap modes. The image
+    // already arrives at the native buffer size (fixed-buffer padding above).
+    // raw_frame holds pageA followed by pageB; the TO8 palette (if any) is
+    // carried in result.palette and written as a companion .pal by
+    // convert_raw / emitted as 4-bit channels in the .h.
+    if (amiga::is_thomson(mode)) {
+        if (has_transparency) {
+            for (std::size_t i = 0; i < tmask.size(); ++i)
+                if (tmask[i]) image->pixels()[i] = Color3f{0, 0, 0};
+        }
+        dither::Settings dith;
+        dith.method = parse_dither(options.dither);
+        dith.strength = options.dither_strength;
+        dith.error_clamp = options.error_clamp;
+        dith.serpentine = true;
+
+        auto enc = thomson::encode(*image, mode, dith);
+        if (!enc) return std::unexpected{enc.error()};
+
+        PipelineResult result;
+        result.rendered = std::move(enc->rendered);
+        // Surface the chosen colors as linear RGB for preview / palette dump.
+        result.palette.clear();
+        for (auto& e : enc->palette)
+            result.palette.push_back(color_space::srgb_hex_to_linear(
+                palette::thomson_rgb_hex(e.r, e.g, e.b)));
+        result.indices.clear();
+        result.planes.depth = amiga::get_mode_params(mode).bitplane_depth;
+        result.mode = mode;
+        result.hires = false;
+        result.interlace = false;
+        result.has_transparency = has_transparency;
+        result.transparency_mask = tmask;
+        result.finalize_psnr(*image, enc->total_error);
+        // raw_frame = pageA ++ pageB (natural hardware order).
+        std::vector<std::uint8_t> raw;
+        raw.reserve(enc->page_a.size() + enc->page_b.size());
+        raw.insert(raw.end(), enc->page_a.begin(), enc->page_a.end());
+        raw.insert(raw.end(), enc->page_b.begin(), enc->page_b.end());
+        result.raw_frame = std::move(raw);
+        return result;
+    }
+
+    // --- Commodore TED (Plus/4, C16) ---
+    // hires (2 colors / 8×8 cell) + multicolor (4 colors / 4×8 cell, 2 global
+    // + 2 per-cell). raw_frame = bitmap ++ luma ++ chroma (++ bg0,bg1 for mc).
+    if (amiga::is_ted(mode)) {
+        if (has_transparency) {
+            for (std::size_t i = 0; i < tmask.size(); ++i)
+                if (tmask[i]) image->pixels()[i] = Color3f{0, 0, 0};
+        }
+        dither::Settings dith;
+        dith.method = parse_dither(options.dither);
+        dith.strength = options.dither_strength;
+        dith.error_clamp = options.error_clamp;
+        dith.serpentine = true;
+
+        auto enc = ted::encode(*image, mode, dith);
+        if (!enc) return std::unexpected{enc.error()};
+
+        PipelineResult result;
+        result.rendered = std::move(enc->rendered);
+        result.palette.clear();  // fixed 121-color palette — not a slot list
+        result.indices.clear();
+        result.planes.depth = amiga::get_mode_params(mode).bitplane_depth;
+        result.mode = mode;
+        result.hires = false;
+        result.interlace = false;
+        result.has_transparency = has_transparency;
+        result.transparency_mask = tmask;
+        result.finalize_psnr(*image, enc->total_error);
+        std::vector<std::uint8_t> raw;
+        raw.reserve(enc->bitmap.size() + enc->luma.size() + enc->chroma.size() + 2);
+        raw.insert(raw.end(), enc->bitmap.begin(), enc->bitmap.end());
+        raw.insert(raw.end(), enc->luma.begin(), enc->luma.end());
+        raw.insert(raw.end(), enc->chroma.begin(), enc->chroma.end());
+        if (amiga::is_ted_multicolor(mode)) {
+            raw.push_back(enc->bg0);
+            raw.push_back(enc->bg1);
+        }
+        result.raw_frame = std::move(raw);
+        // Reuse c64_mc1/mc2 to carry the 2 global TED color bytes downstream.
+        result.c64_mc1 = enc->bg0;
+        result.c64_mc2 = enc->bg1;
         return result;
     }
 
@@ -5214,6 +5333,78 @@ static std::string gba_header(const PipelineResult& p, std::string_view sym) {
     return out;
 }
 
+// Snap a linear-RGB color to the Thomson 4-bit (r,g,b) intens[] channels.
+static std::array<std::uint8_t, 3> thomson_snap_rgb(const Color3f& c) {
+    auto to8 = [](float lin) {
+        return static_cast<int>(
+            std::lround(std::clamp(color_space::linear_to_srgb(lin), 0.0f, 1.0f) * 255.0f));
+    };
+    return {palette::thomson_channel_index(to8(c.r)),
+            palette::thomson_channel_index(to8(c.g)),
+            palette::thomson_channel_index(to8(c.b))};
+}
+
+// Thomson forme-couleur / bitmap .h. pageA + pageB arrays (+ a 4-bit r/g/b
+// palette for the programmable TO8 modes; TO7/70 has a fixed palette).
+static std::string thomson_header(const PipelineResult& p, std::string_view sym) {
+    const std::size_t w = p.rendered.width();
+    const std::size_t h = p.rendered.height();
+    std::string out;
+    out += "// Generated by png2amiga. Do not edit.\n\n#pragma once\n\n";
+    out += std::format("#define {}Width  {}\n", sym, w);
+    out += std::format("#define {}Height {}\n\n", sym, h);
+    // raw_frame = pageA ++ pageB (each 8000 bytes for the 320/640 modes,
+    // or 8000 for 160×16 — both pages are always 8000 here).
+    std::size_t half = p.raw_frame.size() / 2;
+    std::span<const std::uint8_t> page_a(p.raw_frame.data(), half);
+    std::span<const std::uint8_t> page_b(p.raw_frame.data() + half, half);
+    if (amiga::is_thomson_formecouleur(p.mode)) {
+        out += emit_gba_u8_array(std::string(sym) + "Couleur", page_a);
+        out += emit_gba_u8_array(std::string(sym) + "Forme", page_b);
+    } else {
+        out += emit_gba_u8_array(std::string(sym) + "PageA", page_a);
+        out += emit_gba_u8_array(std::string(sym) + "PageB", page_b);
+    }
+    if (amiga::is_thomson_programmable(p.mode) && !p.palette.empty()) {
+        out += std::format("#define {}PaletteLen {}\n", sym, p.palette.size());
+        out += std::format("// 3 bytes/color: 4-bit r, g, b intens[] channel indices.\n");
+        out += std::format("const unsigned char {}Palette[{}] = {{\n   ", sym,
+                           p.palette.size() * 3);
+        for (std::size_t i = 0; i < p.palette.size(); ++i) {
+            auto rgb = thomson_snap_rgb(p.palette[i]);
+            out += std::format(" {}, {}, {}", rgb[0], rgb[1], rgb[2]);
+            if (i + 1 < p.palette.size()) out += ',';
+            if ((i + 1) % 4 == 0 && i + 1 < p.palette.size()) out += "\n   ";
+        }
+        out += "\n};\n\n";
+    }
+    return out;
+}
+
+// Commodore TED .h. bitmap + luma + chroma arrays (+ Bg0/Bg1 #defines for
+// the multicolor mode's two global color bytes).
+static std::string ted_header(const PipelineResult& p, std::string_view sym) {
+    const std::size_t w = p.rendered.width();
+    const std::size_t h = p.rendered.height();
+    std::string out;
+    out += "// Generated by png2amiga. Do not edit.\n\n#pragma once\n\n";
+    out += std::format("#define {}Width  {}\n", sym, w);
+    out += std::format("#define {}Height {}\n\n", sym, h);
+    // raw_frame = bitmap[8000] ++ luma[1000] ++ chroma[1000] (++ bg0,bg1).
+    constexpr std::size_t kBitmap = 8000, kAttr = 1000;
+    std::span<const std::uint8_t> bitmap(p.raw_frame.data(), kBitmap);
+    std::span<const std::uint8_t> luma(p.raw_frame.data() + kBitmap, kAttr);
+    std::span<const std::uint8_t> chroma(p.raw_frame.data() + kBitmap + kAttr, kAttr);
+    out += emit_gba_u8_array(std::string(sym) + "Bitmap", bitmap);
+    out += emit_gba_u8_array(std::string(sym) + "Luma", luma);
+    out += emit_gba_u8_array(std::string(sym) + "Chroma", chroma);
+    if (amiga::is_ted_multicolor(p.mode)) {
+        out += std::format("#define {}Bg0 0x{:02X}\n", sym, p.c64_mc1);
+        out += std::format("#define {}Bg1 0x{:02X}\n\n", sym, p.c64_mc2);
+    }
+    return out;
+}
+
 ConvertResult convert_cheader(const std::uint8_t* input_data,
                               std::size_t input_size,
                               const Options& options) {
@@ -5277,6 +5468,18 @@ ConvertResult convert_cheader(const std::uint8_t* input_data,
     // Game Boy Advance: devkitARM/grit-style bitmap header.
     if (amiga::is_gba(result->mode)) {
         auto txt = gba_header(*result, sym);
+        std::vector<std::uint8_t> bytes(txt.begin(), txt.end());
+        return make_result(std::move(bytes), *result);
+    }
+
+    // Thomson + Commodore TED: generic byte-array headers.
+    if (amiga::is_thomson(result->mode)) {
+        auto txt = thomson_header(*result, sym);
+        std::vector<std::uint8_t> bytes(txt.begin(), txt.end());
+        return make_result(std::move(bytes), *result);
+    }
+    if (amiga::is_ted(result->mode)) {
+        auto txt = ted_header(*result, sym);
         std::vector<std::uint8_t> bytes(txt.begin(), txt.end());
         return make_result(std::move(bytes), *result);
     }
@@ -5474,7 +5677,8 @@ ConvertResult convert_raw(const std::uint8_t* input_data,
     // verbatim during run_pipeline (c64: bitmap+screen+color RAM,
     // genesis: tile_bytes + u16-BE tilemap + u16-BE palette). Hand
     // them straight back.
-    if (amiga::is_c64(result->mode) || amiga::is_genesis(result->mode)) {
+    if (amiga::is_c64(result->mode) || amiga::is_genesis(result->mode) ||
+        amiga::is_thomson(result->mode) || amiga::is_ted(result->mode)) {
         std::vector<std::uint8_t> raw = std::move(result->raw_frame);
         return make_result(std::move(raw), *result);
     }
@@ -5622,6 +5826,24 @@ ConvertResult c64_export(
 }
 
 }  // namespace
+
+std::vector<std::uint8_t> thomson_pal_bytes(std::span<const Color3f> palette) {
+    std::vector<std::uint8_t> out;
+    out.reserve(palette.size() * 2);
+    auto to8 = [](float lin) {
+        return static_cast<int>(
+            std::lround(std::clamp(color_space::linear_to_srgb(lin), 0.0f, 1.0f) * 255.0f));
+    };
+    for (auto& c : palette) {
+        std::uint8_t r = palette::thomson_channel_index(to8(c.r));
+        std::uint8_t g = palette::thomson_channel_index(to8(c.g));
+        std::uint8_t b = palette::thomson_channel_index(to8(c.b));
+        // Gate-array order: low byte = (g<<4)|b, high byte = r.
+        out.push_back(static_cast<std::uint8_t>((g << 4) | b));
+        out.push_back(r);
+    }
+    return out;
+}
 
 ConvertResult convert_prg(const std::uint8_t* input_data,
                           std::size_t input_size,

@@ -9,6 +9,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <functional>
+#include <span>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -522,6 +523,12 @@ ConvertResult convert_rgba(const std::uint8_t* input_data,
 ConvertResult convert_raw(const std::uint8_t* input_data,
                           std::size_t input_size,
                           const Options& options);
+
+// Thomson TO8 companion .pal bytes for a programmable palette. Each color
+// is encoded as 2 gate-array bytes (low byte = (g4<<4)|b4, high byte = r4),
+// where r4/g4/b4 are the 4-bit intens[] channel indices. Input is the
+// linear-RGB palette; channels are snapped to the nearest intens[] level.
+std::vector<std::uint8_t> thomson_pal_bytes(std::span<const Color3f> palette);
 
 // c64 only: convert and return a runnable C64 .prg with embedded
 // 6502 displayer (Koala for c64-multicolor, Art-Studio for c64-hires,

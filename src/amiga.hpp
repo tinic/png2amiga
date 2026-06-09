@@ -176,6 +176,31 @@ enum class Mode : unsigned char {
     gba_mode3,  // 240×160, 16bpp BGR555 direct-color (no palette)
     gba_mode4,  // 240×160, 8bpp, 256-color BGR555 palette
     gba_mode5,  // 160×128, 16bpp BGR555 direct-color (no palette)
+
+    // Thomson TO7/70 + TO8 — French micros, EF9369/TEA5114 gamma-corrected
+    // 4-bit-per-channel palette (non-uniform intens[] ramp). VRAM is two
+    // 8 KB pages (pageA / pageB). Fixed-buffer modes, square pixels.
+    //   forme-couleur (320×16): 2 colors per 8×1 pixel attribute. pageB =
+    //     shape (bit7 leftmost), pageA = color byte (bg/fg index, with the
+    //     two high bits INVERTED — the TO-series Decode320x16 format).
+    //   bitmap modes have no per-cell color constraint:
+    //     160×16 = 4bpp nibbles, 320×4 = 2 bitplanes, 640×2 = 1bpp.
+    //   TO7/70 uses the FIXED 16-color palette; TO8 is programmable
+    //   (16 / 4 / 2 colors chosen from the 4096-color intens[] gamut).
+    thomson_to7_320x16,  // TO7/70, 320×200, 16 fixed, forme-couleur
+    thomson_to8_320x16,  // TO8, 320×200, 16 programmable, forme-couleur
+    thomson_to8_160x16,  // TO8, 160×200, 16 programmable, 4bpp bitmap
+    thomson_to8_320x4,   // TO8, 320×200, 4 programmable, 2 bitplanes
+    thomson_to8_640x2,   // TO8, 640×200, 2 programmable, 1bpp
+
+    // Commodore TED (Plus/4, C16) — fixed 121-color palette (luma 0..7 ×
+    // chroma 0..15, chroma 0 = black at every luma). Cell-based color
+    // constraints like the VIC-II C64 modes.
+    //   hires (320×200): 2 colors per 8×8 cell (C64-hires-like).
+    //   multicolor (160×200): 4 colors per 4×8 cell (2 global + 2 per-cell,
+    //     C64-multicolor-like).
+    ted_320x200,  // TED hires, 320×200, 2 colors/8×8 cell
+    ted_160x200,  // TED multicolor, 160×200, 4 colors/4×8 cell
 };
 
 // ---------------------------------------------------------------------------
@@ -373,6 +398,29 @@ constexpr ModeParams get_mode_params(Mode mode) noexcept {
         return {240, 160, 8, 256, false, false, false, false, 1, 1, 1.0f};
     case Mode::gba_mode5:
         return {160, 128, 16, 32768, false, false, false, false, 1, 1, 1.0f};
+    // Thomson — fixed 200-line buffers, square pixels (PAR 1.0). The
+    // 160-wide and 640-wide modes hardware-double / halve horizontally but
+    // are square on the actual display; we letterbox the source to the
+    // native buffer. bitplane_depth is conceptual (color depth), not an
+    // Amiga plane count — suppressed from status like GBA/C64.
+    //   forme-couleur 320×16: 16 colors, attribute cells.
+    //   160×16 4bpp / 320×4 2-plane / 640×2 1bpp bitmaps.
+    case Mode::thomson_to7_320x16:
+    case Mode::thomson_to8_320x16:
+        return {320, 200, 4, 16, false, false, false, false, 1, 1, 1.0f};
+    case Mode::thomson_to8_160x16:
+        return {160, 200, 4, 16, false, false, false, false, 2, 1, 1.0f};
+    case Mode::thomson_to8_320x4:
+        return {320, 200, 2, 4, false, false, false, false, 1, 1, 1.0f};
+    case Mode::thomson_to8_640x2:
+        return {640, 200, 1, 2, false, false, false, false, 1, 1, 1.0f};
+    // Commodore TED — fixed 200-line buffers, square pixels.
+    //   hires 320×200: 2 colors / 8×8 cell.
+    //   multicolor 160×200: 4 colors / 4×8 cell (2:1 hardware doubling).
+    case Mode::ted_320x200:
+        return {320, 200, 1, 2, false, false, false, false, 1, 1, 1.0f};
+    case Mode::ted_160x200:
+        return {160, 200, 2, 4, false, false, false, false, 2, 1, 1.0f};
     }
     std::unreachable();
 }
@@ -561,6 +609,47 @@ constexpr bool is_gba_paletted(Mode mode) noexcept {
     return mode == Mode::gba_mode4;
 }
 
+// Thomson TO7/70 + TO8 modes.
+constexpr bool is_thomson(Mode mode) noexcept {
+    return mode == Mode::thomson_to7_320x16 || mode == Mode::thomson_to8_320x16 ||
+           mode == Mode::thomson_to8_160x16 || mode == Mode::thomson_to8_320x4 ||
+           mode == Mode::thomson_to8_640x2;
+}
+
+// Thomson forme-couleur attribute modes (2 colors per 8×1 pixel cell):
+// TO7/70 (fixed palette) and TO8 (programmable palette).
+constexpr bool is_thomson_formecouleur(Mode mode) noexcept {
+    return mode == Mode::thomson_to7_320x16 || mode == Mode::thomson_to8_320x16;
+}
+
+// Thomson bitmap modes (no per-cell color constraint): TO8 160×16 4bpp,
+// 320×4 2-plane, 640×2 1bpp. All have a programmable palette.
+constexpr bool is_thomson_bitmap(Mode mode) noexcept {
+    return mode == Mode::thomson_to8_160x16 || mode == Mode::thomson_to8_320x4 ||
+           mode == Mode::thomson_to8_640x2;
+}
+
+// Thomson modes with a programmable (vs. fixed TO7/70) palette — all TO8
+// modes. Drives the companion .pal output and the palette emission in .h.
+constexpr bool is_thomson_programmable(Mode mode) noexcept {
+    return is_thomson(mode) && mode != Mode::thomson_to7_320x16;
+}
+
+// Number of palette colors for a Thomson mode (16 / 4 / 2).
+constexpr std::size_t thomson_palette_size(Mode mode) noexcept {
+    return get_mode_params(mode).max_colors;
+}
+
+// Commodore TED modes (Plus/4, C16).
+constexpr bool is_ted(Mode mode) noexcept {
+    return mode == Mode::ted_320x200 || mode == Mode::ted_160x200;
+}
+
+// TED multicolor (4 colors / 4×8 cell) vs. hires (2 colors / 8×8 cell).
+constexpr bool is_ted_multicolor(Mode mode) noexcept {
+    return mode == Mode::ted_160x200;
+}
+
 // Maximum bitplane depth for a chipset (raw hardware limit)
 constexpr std::size_t max_depth(Chipset chipset) noexcept {
     switch (chipset) {
@@ -586,6 +675,8 @@ constexpr std::size_t max_user_depth(Mode mode, Chipset chipset) noexcept {
     // GBA buffers are fixed: mode4 = 8bpp paletted, direct modes = 16bpp.
     // --depth is a no-op for all three.
     if (is_gba(mode)) return get_mode_params(mode).bitplane_depth;
+    // Thomson / TED buffers are fixed by the hardware video mode.
+    if (is_thomson(mode) || is_ted(mode)) return get_mode_params(mode).bitplane_depth;
 
     // AGA standard modes
     if (chipset == Chipset::aga) return 8;
