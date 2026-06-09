@@ -2528,8 +2528,9 @@ async function loadExample(example: typeof EXAMPLES[number]) {
                 </div>
               </div>
 
-              <!-- sliced — Sliced palette (Amiga only; not Atari/DOS/C64) -->
-              <div v-if="!isAtariMode(options.mode) && !isDosMode(options.mode) && !isSnesMode(options.mode) && !isGenesisMode(options.mode) && !isC64Mode(options.mode) && !paletteData" class="grid align-items-center">
+              <!-- sliced — Sliced palette (Amiga copper only; not any
+                   fixed-buffer console/DOS mode, SNES, or Genesis) -->
+              <div v-if="!isFixedBufferMode(options.mode) && !isSnesMode(options.mode) && !isGenesisMode(options.mode) && !paletteData" class="grid align-items-center">
                 <label class="col-4 text-xs text-color-secondary font-semibold" title="Sliced palette: per-scanline palette swaps via the Copper coprocessor, picked greedily by OKLab error reduction. Each row gets its own per-line variant of the base palette. Composes with --dpf (palette evolves across the upper PF2 register bank).">Sliced</label>
                 <div class="col-8 flex align-items-center gap-2">
                   <ToggleSwitch v-model="options.copper" />
