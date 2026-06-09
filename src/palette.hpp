@@ -304,13 +304,16 @@ inline constexpr std::array<std::uint32_t, 16> kC64Levy = {
 };
 
 // ---------------------------------------------------------------------------
-// Thomson EF9369 + TEA5114 gamma LUT. A Thomson color channel is a 4-bit
-// index 0..15; its 8-bit DAC value is intens[idx]. The ramp is non-uniform
-// (0 then jumps to 100) — do NOT use OCS nibble replication for Thomson.
-// Transcribed from theodore src/video.c.
+// Thomson EF9369 DAC gamma LUT. A Thomson color channel is a 4-bit index
+// 0..15; its 8-bit DAC value is intens[idx]. The EF9369 has a built-in
+// gamma-2.8 correction, so the level is 255·(v/15)^(1/2.8) (MAME
+// thom_configure_palette, src/mame/thomson/thomson_m.cpp). The ramp is
+// non-uniform (0 then jumps to ~96) — do NOT use OCS nibble replication.
+// (Was theodore's slightly-brighter table; MAME's is the documented EF9369
+// curve and renders a touch darker.)
 // ---------------------------------------------------------------------------
 inline constexpr std::array<int, 16> kThomsonIntens = {
-    0, 100, 127, 147, 163, 179, 191, 203, 215, 223, 231, 239, 243, 247, 251, 255};
+    0, 96, 124, 143, 159, 172, 183, 194, 203, 212, 220, 228, 235, 242, 248, 255};
 
 // Snap an 8-bit sRGB channel to the nearest of the 16 Thomson intens[]
 // levels; returns the 4-bit index 0..15.
@@ -336,9 +339,9 @@ constexpr std::uint32_t thomson_rgb_hex(int r, int g, int b) noexcept {
 }
 
 // ---------------------------------------------------------------------------
-// Thomson TO7/70 FIXED 16-color palette. Power-on palette of the EF9369
-// (transcribed from theodore InitPalette). Each entry is (r,g,b) 4-bit
-// indices into kThomsonIntens. Index order is the hardware color index.
+// Thomson TO7/70 FIXED 16-color palette. ROM power-on palette, matching
+// MAME thom_pal_init (src/mame/thomson/thomson_m.cpp). Each entry is (r,g,b)
+// 4-bit indices into kThomsonIntens. Index order is the hardware color index.
 //   0 black 1 red 2 green 3 yellow 4 blue 5 magenta 6 cyan 7 white
 //   8 grey 9 pink 10 light-green 11 sand 12 light-blue 13 parme
 //   14 sky-blue 15 orange
@@ -346,7 +349,7 @@ constexpr std::uint32_t thomson_rgb_hex(int r, int g, int b) noexcept {
 inline constexpr std::array<std::array<std::uint8_t, 3>, 16> kThomsonTo770Idx = {{
     {0, 0, 0},     {15, 0, 0},  {0, 15, 0},   {15, 15, 0},  {0, 0, 15},  {15, 0, 15},
     {0, 15, 15},   {15, 15, 15}, {7, 7, 7},   {10, 3, 3},   {3, 10, 3},  {10, 10, 3},
-    {3, 3, 10},    {10, 3, 10}, {7, 14, 14},  {11, 3, 0},
+    {3, 3, 10},    {10, 3, 10}, {7, 14, 14},  {11, 7, 0},
 }};
 
 // ---------------------------------------------------------------------------
