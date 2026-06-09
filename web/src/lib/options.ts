@@ -855,6 +855,16 @@ const MODE_PAR: Record<string, number> = {
   'gba-mode3': 1,
   'gba-mode4': 1,
   'gba-mode5': 1,
+  // Thomson 4:3 monitor: 320×200 → 0.833 (like DOS/Atari 320×200); 160×200
+  // → 1.667 (2× hardware doubling); 640×200 → 0.417 (like ega-640).
+  'thomson-to7-320x16': 0.833,
+  'thomson-to8-320x16': 0.833,
+  'thomson-to8-320x4':  0.833,
+  'thomson-to8-160x16': 1.667,
+  'thomson-to8-640x2':  0.417,
+  // Commodore TED — same PAL VIC-II geometry as the C64.
+  'ted-320x200': 0.936,
+  'ted-160x200': 1.872,
 }
 
 export function modePar(mode: string): number { return MODE_PAR[mode] ?? 1 }

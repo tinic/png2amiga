@@ -26,7 +26,10 @@ const BUDGETS = [
   // use). The 1024-entry signal table + IQ rotation + per-row aabb
   // cell-pattern search adds ~5 KB to the WASM binary in exchange for
   // an artifact-colour gamut the user actually sees on hardware.
-  { match: /^png2amiga-.*\.wasm$/,  max:   2.45 * 1024 * 1024, label: 'wasm binary' },
+  // 2.55 MB up from 2.45 MB — the Thomson (TO7/70 + TO8) and Commodore TED
+  // encoders plus the 128-entry TED palette + Thomson gamma/colour tables
+  // add ~50 KB of binary in exchange for seven new hardware target modes.
+  { match: /^png2amiga-.*\.wasm$/,  max:   2.55 * 1024 * 1024, label: 'wasm binary' },
   { match: /^wasm\.worker-.*\.js$/, max:  20 * 1024, label: 'worker'     },
   { match: /^crt-.*\.js$/,          max:  30 * 1024, label: 'crt module' },
   { match: /^index-.*\.css$/,       max: 500 * 1024, label: 'css'        },

@@ -3623,6 +3623,20 @@ std::pair<std::size_t, std::size_t> preview_display_dims(
             sy = 2;
             break;
         }
+    } else if (amiga::is_thomson(mode) || amiga::is_ted(mode)) {
+        // 160-wide modes double again (sx=4) so they fill the same physical
+        // width as the 320-wide modes (the hardware doubles 160→320); the
+        // 640-wide mode halves (sx=1). All PAR-corrected below.
+        if (mode == amiga::Mode::thomson_to8_160x16 || mode == amiga::Mode::ted_160x200) {
+            sx = 4;
+            sy = 2;
+        } else if (mode == amiga::Mode::thomson_to8_640x2) {
+            sx = 1;
+            sy = 2;
+        } else {
+            sx = 2;
+            sy = 2;
+        }
     } else if (amiga::is_atari(mode) || amiga::is_snes(mode) || amiga::is_genesis(mode)) {
         // Web's previewScale() falls through to the Amiga table for
         // these modes (no DOS_PREVIEW_SCALE entry). The table keys
@@ -3682,7 +3696,8 @@ std::pair<std::size_t, std::size_t> preview_display_dims(
     //    "size-override" signal so apply PAR uniformly, which matches
     //    the web's freshly-opened-mode state.
     if (amiga::is_cga(mode) || amiga::is_ega(mode) || amiga::is_vga(mode) || amiga::is_c64(mode) ||
-        amiga::is_atari(mode) || amiga::is_snes(mode) || amiga::is_genesis(mode)) {
+        amiga::is_atari(mode) || amiga::is_snes(mode) || amiga::is_genesis(mode) ||
+        amiga::is_thomson(mode) || amiga::is_ted(mode)) {
         auto params = amiga::get_mode_params(mode);
         double par = static_cast<double>(params.par);
         if (par > 0 && w > 0) {

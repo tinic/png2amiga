@@ -405,22 +405,26 @@ constexpr ModeParams get_mode_params(Mode mode) noexcept {
     // Amiga plane count — suppressed from status like GBA/C64.
     //   forme-couleur 320×16: 16 colors, attribute cells.
     //   160×16 4bpp / 320×4 2-plane / 640×2 1bpp bitmaps.
+    // Thomson 4:3 display: 320×200 → PAR 0.833 (slightly tall, like the DOS /
+    // Atari 320×200 modes); 160×200 → 2× hardware doubling → 1.667; 640×200 →
+    // 0.417 (half-width pixels, like ega-640).
     case Mode::thomson_to7_320x16:
     case Mode::thomson_to8_320x16:
-        return {320, 200, 4, 16, false, false, false, false, 1, 1, 1.0f};
+        return {320, 200, 4, 16, false, false, false, false, 1, 1, 0.833f};
     case Mode::thomson_to8_160x16:
-        return {160, 200, 4, 16, false, false, false, false, 2, 1, 1.0f};
+        return {160, 200, 4, 16, false, false, false, false, 2, 1, 1.667f};
     case Mode::thomson_to8_320x4:
-        return {320, 200, 2, 4, false, false, false, false, 1, 1, 1.0f};
+        return {320, 200, 2, 4, false, false, false, false, 1, 1, 0.833f};
     case Mode::thomson_to8_640x2:
-        return {640, 200, 1, 2, false, false, false, false, 1, 1, 1.0f};
-    // Commodore TED — fixed 200-line buffers, square pixels.
-    //   hires 320×200: 2 colors / 8×8 cell.
-    //   multicolor 160×200: 4 colors / 4×8 cell (2:1 hardware doubling).
+        return {640, 200, 1, 2, false, false, false, false, 1, 1, 0.417f};
+    // Commodore TED — same PAL VIC-II-family display geometry as the C64:
+    //   hires 320×200: 2 colors / 8×8 cell → PAR 0.936 (like c64-hires).
+    //   multicolor 160×200: 4 colors / 4×8 cell (2:1 doubling) → 1.872
+    //   (= 2 × 0.936, like c64-multicolor).
     case Mode::ted_320x200:
-        return {320, 200, 1, 2, false, false, false, false, 1, 1, 1.0f};
+        return {320, 200, 1, 2, false, false, false, false, 1, 1, 0.936f};
     case Mode::ted_160x200:
-        return {160, 200, 2, 4, false, false, false, false, 2, 1, 1.0f};
+        return {160, 200, 2, 4, false, false, false, false, 2, 1, 1.872f};
     }
     std::unreachable();
 }
