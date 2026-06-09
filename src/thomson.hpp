@@ -17,11 +17,9 @@
 // indices into the EF9369 intens[] gamma LUT.
 
 #include "amiga.hpp"
-#include "color_space.hpp"
 #include "dither.hpp"
 #include "types.hpp"
 
-#include <array>
 #include <cstdint>
 #include <vector>
 

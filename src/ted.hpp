@@ -13,7 +13,6 @@
 // (OKLab) and emits the corresponding luma/chroma nibbles.
 
 #include "amiga.hpp"
-#include "color_space.hpp"
 #include "dither.hpp"
 #include "types.hpp"
 

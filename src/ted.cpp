@@ -94,8 +94,8 @@ Result<EncodeResult> encode_hires(const Image& image, const dither::Settings& se
                     cell[py * kC + px] = src_lab[(cy * kR + py) * W + (cx * kC + px)];
             float best = std::numeric_limits<float>::infinity();
             std::array<std::uint16_t, 2> best_pair{0, 0};
-            for (std::uint16_t i = 0; i < N; ++i) {
-                for (std::uint16_t j = i; j < N; ++j) {
+            for (std::size_t i = 0; i < N; ++i) {
+                for (std::size_t j = i; j < N; ++j) {
                     const auto& a = cols_pal[i].lab;
                     const auto& b = cols_pal[j].lab;
                     float total = 0.0f;
@@ -104,7 +104,7 @@ Result<EncodeResult> encode_hires(const Image& image, const dither::Settings& se
                                           color_space::fma_dist_sq(t, b));
                     if (total < best) {
                         best = total;
-                        best_pair = {i, j};
+                        best_pair = {static_cast<std::uint16_t>(i), static_cast<std::uint16_t>(j)};
                     }
                 }
             }
@@ -182,20 +182,20 @@ Result<EncodeResult> encode_multicolor(const Image& image, const dither::Setting
     {
         // First global: minimizes total nearest distance alone.
         float best = std::numeric_limits<float>::infinity();
-        for (std::uint16_t i = 0; i < N; ++i) {
+        for (std::size_t i = 0; i < N; ++i) {
             float total = 0.0f;
             const auto& a = cols_pal[i].lab;
             for (auto& t : src_lab)
                 total += color_space::fma_dist_sq(t, a);
             if (total < best) {
                 best = total;
-                g0 = i;
+                g0 = static_cast<std::uint16_t>(i);
             }
         }
         // Second global: minimizes min(d(g0), d(g1)) over the image.
         best = std::numeric_limits<float>::infinity();
         const auto& a = cols_pal[g0].lab;
-        for (std::uint16_t j = 0; j < N; ++j) {
+        for (std::size_t j = 0; j < N; ++j) {
             if (j == g0) continue;
             float total = 0.0f;
             const auto& b = cols_pal[j].lab;
@@ -203,7 +203,7 @@ Result<EncodeResult> encode_multicolor(const Image& image, const dither::Setting
                 total += std::min(color_space::fma_dist_sq(t, a), color_space::fma_dist_sq(t, b));
             if (total < best) {
                 best = total;
-                g1 = j;
+                g1 = static_cast<std::uint16_t>(j);
             }
         }
     }
@@ -229,9 +229,9 @@ Result<EncodeResult> encode_multicolor(const Image& image, const dither::Setting
             const auto& lg1 = cols_pal[g1].lab;
             float best = std::numeric_limits<float>::infinity();
             std::array<std::uint16_t, 2> best_pc{g0, g1};
-            for (std::uint16_t a = 0; a < N; ++a) {
+            for (std::size_t a = 0; a < N; ++a) {
                 const auto& la = cols_pal[a].lab;
-                for (std::uint16_t b = 0; b < N; ++b) {
+                for (std::size_t b = 0; b < N; ++b) {
                     const auto& lb = cols_pal[b].lab;
                     float total = 0.0f;
                     for (auto& t : cell) {
@@ -243,7 +243,7 @@ Result<EncodeResult> encode_multicolor(const Image& image, const dither::Setting
                     }
                     if (total < best) {
                         best = total;
-                        best_pc = {a, b};
+                        best_pc = {static_cast<std::uint16_t>(a), static_cast<std::uint16_t>(b)};
                     }
                 }
             }

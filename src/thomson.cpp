@@ -4,7 +4,6 @@
 #include "quantize.hpp"
 
 #include <algorithm>
-#include <bit>
 #include <cmath>
 #include <format>
 #include <limits>
@@ -188,8 +187,8 @@ Result<EncodeResult> encode_formecouleur(const Image& image,
                     cell[px] = blurred[cy * W + cx * kCellW + px];
                 float best_err = std::numeric_limits<float>::infinity();
                 std::array<std::uint8_t, 2> best{0, 0};
-                for (std::uint8_t i = 0; i < N; ++i) {
-                    for (std::uint8_t j = i; j < N; ++j) {
+                for (std::size_t i = 0; i < N; ++i) {
+                    for (std::size_t j = i; j < N; ++j) {
                         const auto& a = view.lab[i];
                         const auto& b = view.lab[j];
                         float total = 0.0f;
@@ -200,7 +199,7 @@ Result<EncodeResult> encode_formecouleur(const Image& image,
                         }
                         if (total < best_err) {
                             best_err = total;
-                            best = {i, j};
+                            best = {static_cast<std::uint8_t>(i), static_cast<std::uint8_t>(j)};
                         }
                     }
                 }
