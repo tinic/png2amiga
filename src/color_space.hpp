@@ -1,6 +1,7 @@
 #pragma once
 
 #include "types.hpp"
+#include <algorithm>
 #include <array>
 #include <bit>
 #include <cmath>
@@ -607,6 +608,28 @@ inline float fma_dist_sq(OKLab a, OKLab b) noexcept {
 [[gnu::always_inline]]
 inline double fma_dist_sq(double dx, double dy, double dz) noexcept {
     return PNG2AMIGA_FMA(dx, dx, PNG2AMIGA_FMA(dy, dy, dz * dz));
+}
+
+// Dither-aware pair score for attribute-cell encoders (c64 hires/FLI/AFLI,
+// TED hires, thomson forme-couleur): distance from target `t` to the OKLab
+// SEGMENT between candidate colors a/b (an error-diffusion pass realizes
+// any duty cycle between the two, and ED in OKLab averages in OKLab), plus
+// the mixing-noise penalty λ·u(1−u)·|a−b|² (variance of a Bernoulli mix —
+// keeps far-apart pairs from winning on mean alone and showing up as
+// checkerboard noise). λ is per cell geometry; see call sites.
+inline float mix_segment_score(const OKLab& t,
+                               const OKLab& a,
+                               const OKLab& b,
+                               float mix_noise_lambda) noexcept {
+    float dL = b.L - a.L, da = b.a - a.a, db = b.b - a.b;
+    float seg_sq = fma_dist_sq(dL, da, db);
+    if (seg_sq <= 0.0f) return fma_dist_sq(t, a);
+    float u = ((t.L - a.L) * dL + (t.a - a.a) * da + (t.b - a.b) * db) / seg_sq;
+    u = std::clamp(u, 0.0f, 1.0f);
+    float eL = t.L - (a.L + u * dL);
+    float ea = t.a - (a.a + u * da);
+    float eb = t.b - (a.b + u * db);
+    return fma_dist_sq(eL, ea, eb) + mix_noise_lambda * u * (1.0f - u) * seg_sq;
 }
 
 // 3-coefficient FMA dot product: c0*x0 + c1*x1 + c2*x2. Used by the OKLab

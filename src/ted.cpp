@@ -1,6 +1,7 @@
 #include "ted.hpp"
 
 #include "palette.hpp"
+#include "pipeline.hpp"
 
 #include <algorithm>
 #include <array>
@@ -84,33 +85,80 @@ Result<EncodeResult> encode_hires(const Image& image, const dither::Settings& se
     res.luma.assign(1000, 0);
     res.chroma.assign(1000, 0);
 
-    // Per-cell pair (index 0 = bit-0 color, index 1 = bit-1 color).
+    // Per-cell pair (index 0 = bit-0 color, index 1 = bit-1 color). With a
+    // dither method the pair can MIX, so score by distance to the OKLab
+    // segment + mixing-noise penalty on the 3×3-blurred target (see
+    // color_space::mix_segment_score; λ=0.09375 is the 8×8-cell tuning
+    // from c64 hires — endpoint-min picks the two most-DOMINANT colors
+    // and adjacent cells over smooth content snap between them, which is
+    // the attribute blockiness). Without dither keep endpoint-min on the
+    // raw source (static pick, no mixing possible). 7381 pairs × 64 px
+    // per cell — parallel over cells.
+    constexpr float kPairMixNoiseLambda = 0.09375f;
+    const bool mixing = settings.method != dither::Method::none;
+    std::vector<OKLab> blurred_lab;
+    if (mixing) {
+        // 3×3 binomial blur, image-edge replicate (same model as the c64 /
+        // thomson cell scorers — per-cell scoring reads a globally-
+        // coherent blurred target).
+        blurred_lab.resize(W * H);
+        static constexpr std::array<std::array<float, 3>, 3> k = {{
+            {1.0f / 16, 2.0f / 16, 1.0f / 16},
+            {2.0f / 16, 4.0f / 16, 2.0f / 16},
+            {1.0f / 16, 2.0f / 16, 1.0f / 16},
+        }};
+        for (std::size_t y = 0; y < H; ++y) {
+            for (std::size_t x = 0; x < W; ++x) {
+                OKLab acc{0, 0, 0};
+                for (int dy = -1; dy <= 1; ++dy) {
+                    int ny = std::clamp(static_cast<int>(y) + dy, 0, static_cast<int>(H) - 1);
+                    for (int dx = -1; dx <= 1; ++dx) {
+                        int nx = std::clamp(static_cast<int>(x) + dx, 0, static_cast<int>(W) - 1);
+                        float w =
+                            k[static_cast<std::size_t>(dy + 1)][static_cast<std::size_t>(dx + 1)];
+                        const auto& s =
+                            src_lab[static_cast<std::size_t>(ny) * W + static_cast<std::size_t>(nx)];
+                        acc.L += w * s.L;
+                        acc.a += w * s.a;
+                        acc.b += w * s.b;
+                    }
+                }
+                blurred_lab[y * W + x] = acc;
+            }
+        }
+    }
     std::vector<std::array<std::uint16_t, 2>> cell_pair(cols * rows);
-    for (std::size_t cy = 0; cy < rows; ++cy) {
-        for (std::size_t cx = 0; cx < cols; ++cx) {
-            std::array<OKLab, kC * kR> cell{};
-            for (std::size_t py = 0; py < kR; ++py)
-                for (std::size_t px = 0; px < kC; ++px)
-                    cell[py * kC + px] = src_lab[(cy * kR + py) * W + (cx * kC + px)];
-            float best = std::numeric_limits<float>::infinity();
-            std::array<std::uint16_t, 2> best_pair{0, 0};
-            for (std::size_t i = 0; i < N; ++i) {
-                for (std::size_t j = i; j < N; ++j) {
-                    const auto& a = cols_pal[i].lab;
-                    const auto& b = cols_pal[j].lab;
-                    float total = 0.0f;
+    pipeline::parallel_for(cols * rows, [&](std::size_t cell_idx) {
+        std::size_t cy = cell_idx / cols;
+        std::size_t cx = cell_idx % cols;
+        const auto& tgt = mixing ? blurred_lab : src_lab;
+        std::array<OKLab, kC * kR> cell{};
+        for (std::size_t py = 0; py < kR; ++py)
+            for (std::size_t px = 0; px < kC; ++px)
+                cell[py * kC + px] = tgt[(cy * kR + py) * W + (cx * kC + px)];
+        float best = std::numeric_limits<float>::infinity();
+        std::array<std::uint16_t, 2> best_pair{0, 0};
+        for (std::size_t i = 0; i < N; ++i) {
+            for (std::size_t j = i; j < N; ++j) {
+                const auto& a = cols_pal[i].lab;
+                const auto& b = cols_pal[j].lab;
+                float total = 0.0f;
+                if (mixing) {
+                    for (auto& t : cell)
+                        total += color_space::mix_segment_score(t, a, b, kPairMixNoiseLambda);
+                } else {
                     for (auto& t : cell)
                         total += std::min(color_space::fma_dist_sq(t, a),
                                           color_space::fma_dist_sq(t, b));
-                    if (total < best) {
-                        best = total;
-                        best_pair = {static_cast<std::uint16_t>(i), static_cast<std::uint16_t>(j)};
-                    }
+                }
+                if (total < best) {
+                    best = total;
+                    best_pair = {static_cast<std::uint16_t>(i), static_cast<std::uint16_t>(j)};
                 }
             }
-            cell_pair[cy * cols + cx] = best_pair;
         }
-    }
+        cell_pair[cell_idx] = best_pair;
+    });
 
     std::vector<std::uint8_t> indices(W * H, 0);
     auto pick = [&](const OKLab& target, std::size_t x, std::size_t y) -> dither::PickResult {

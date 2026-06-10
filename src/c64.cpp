@@ -669,6 +669,33 @@ inline float cell_error_for_pair(std::span<const color_space::OKLab> pix_lab,
     return total;
 }
 
+// Shared hires/FLI/AFLI cell pair scoring (ported from thomson.cpp
+// forme-couleur, retuned for the C64 palette): with a dither method the
+// colors of a cell can MIX, so a candidate set is scored per pixel as
+// the min over its OKLab segments of distance-to-segment plus the
+// mixing-noise penalty λ·u(1−u)·|A−B|² (Bernoulli mix variance — keeps
+// far-apart pairs from winning on mean alone and showing up as
+// checkerboard noise). Plain OKLab distance: the C64 palette has real
+// darks, so Thomson's chroma-weighted metric and neighbor-coherence
+// discount both LOSE here (sweep dcd2f83).
+//
+// λ and ED-feedback are per cell GEOMETRY:
+//   8×1 / 4×1 row strips (AFLI, FLI): λ=0.1875, lazy decision at strip
+//     entry steered by the damped feedback delta (×0.5, clamp ±0.04) —
+//     the strip IS the row being entered, so the delta is fresh.
+//   8×8 cells (hires): λ=0.09375 (the noise term averages over 8× the
+//     samples; half strength sweeps best, λ=0 collapses) and NO
+//     feedback — one entry pixel's delta steering 8 rows is noise
+//     (fb=0.5 cost 6.3 mean S2 vs static on examples-23).
+constexpr float kRowPairMixNoiseLambda = 0.1875f;
+constexpr float kCellPairMixNoiseLambda = 0.09375f;
+constexpr float kRowPairFeedbackScale = 0.5f;
+constexpr float kRowPairFeedbackClamp = 0.04f;
+
+inline float damp_feedback(float v) {
+    return std::clamp(v * kRowPairFeedbackScale, -kRowPairFeedbackClamp, kRowPairFeedbackClamp);
+}
+
 }  // namespace
 
 Result<EncodeResult> encode_hires(const Image& image,
@@ -715,38 +742,50 @@ Result<EncodeResult> encode_hires(const Image& image,
 
     // Pass 1: per-cell pair pick. Two paths:
     //
-    //   - Any dither method (!= none): global-FS palette coherence —
-    //     top-2 most-used colors in each cell's region of a full-
-    //     palette FS dither output. Same fix as encode_multicolor.
+    //   - Any dither method (!= none): static segment-scored brute force
+    //     over the 3×3-blurred cell (see the shared strip_segment_score
+    //     block). The old FS-histogram top-2 was statistically stable at
+    //     64 samples but picked the two most-USED colors, not the pair
+    //     that best MIXES over the cell — adjacent cells over smooth
+    //     content snap between dominant colors (attribute blockiness).
+    //     No ED-feedback here: one entry pixel steering an 8×8 cell is
+    //     noise (see the constants comment).
     //   - method == none: per-cell brute force C(16,2) = 120 pairs
     //     with mse/blur scoring (no dither = static MSE-optimal pair).
     constexpr std::size_t kHiCellPx = kHiCellW * kHiCellH;  // 64
     std::vector<std::array<std::uint8_t, 2>> cell_pair(kHiRows * kHiCols);
 
     if (settings.method != dither::Method::none) {
-        auto fs = global_fs_indices(image, pal_lab);
-        for (std::size_t cy = 0; cy < kHiRows; ++cy) {
-            for (std::size_t cx = 0; cx < kHiCols; ++cx) {
-                std::array<std::uint16_t, 16> hist{};
-                for (std::size_t py = 0; py < kHiCellH; ++py)
-                    for (std::size_t px = 0; px < kHiCellW; ++px)
-                        ++hist[fs[(cy * kHiCellH + py) * W + (cx * kHiCellW + px)]];
-                std::array<std::uint8_t, 2> top{0, 0};
-                for (std::size_t s = 0; s < 2; ++s) {
-                    std::uint16_t best_cnt = 0;
-                    std::uint8_t best_c = top[0];
-                    for (std::size_t c = 0; c < 16; ++c) {
-                        if (hist[c] > best_cnt) {
-                            best_cnt = hist[c];
-                            best_c = static_cast<std::uint8_t>(c);
-                        }
-                    }
-                    top[s] = best_c;
-                    hist[best_c] = 0;
+        std::vector<Color3f> src_s(W * H);
+        for (std::size_t i = 0; i < W * H; ++i)
+            src_s[i] = {src_lab[i].L, src_lab[i].a, src_lab[i].b};
+        auto blurred_s = global_blur_3x3(std::span<const Color3f>(src_s), W, H);
+        pipeline::parallel_for(kHiRows * kHiCols, [&](std::size_t cell_idx) {
+            std::size_t cy = cell_idx / kHiCols;
+            std::size_t cx = cell_idx % kHiCols;
+            std::array<color_space::OKLab, kHiCellPx> cell{};
+            for (std::size_t py = 0; py < kHiCellH; ++py) {
+                for (std::size_t px = 0; px < kHiCellW; ++px) {
+                    const auto& s = blurred_s[(cy * kHiCellH + py) * W + cx * kHiCellW + px];
+                    cell[py * kHiCellW + px] = {s.r, s.g, s.b};
                 }
-                cell_pair[cy * kHiCols + cx] = top;
             }
-        }
+            float best_err = std::numeric_limits<float>::infinity();
+            std::array<std::uint8_t, 2> best{0, 0};
+            for (std::size_t i = 0; i < 16; ++i) {
+                for (std::size_t j = i; j < 16; ++j) {
+                    float total = 0.0f;
+                    for (std::size_t p = 0; p < kHiCellPx; ++p)
+                        total += color_space::mix_segment_score(
+                            cell[p], pal_lab[i], pal_lab[j], kCellPairMixNoiseLambda);
+                    if (total < best_err) {
+                        best_err = total;
+                        best = {static_cast<std::uint8_t>(i), static_cast<std::uint8_t>(j)};
+                    }
+                }
+            }
+            cell_pair[cell_idx] = best;
+        });
     } else {
         std::array<color_space::OKLab, kHiCellPx> cell_lab{};
         std::array<Color3f, kHiCellPx> raw{};
@@ -861,45 +900,6 @@ Result<EncodeResult> encode_hires(const Image& image,
 
     return res;
 }
-
-namespace {
-
-// Shared FLI/AFLI row-strip pair scoring (ported from thomson.cpp
-// forme-couleur — same per-scanline attribute geometry, retuned for the
-// C64 palette): with a dither method the colors of a strip can MIX, so a
-// candidate set is scored per pixel as the min over its OKLab segments of
-// distance-to-segment plus the mixing-noise penalty λ·u(1−u)·|A−B|²
-// (Bernoulli mix variance — keeps far-apart pairs from winning on mean
-// alone and showing up as checkerboard noise). Plain OKLab distance: the
-// C64 palette has real darks, so Thomson's chroma-weighted metric and
-// neighbor-coherence discount both LOSE here (sweep dcd2f83). The strip
-// decision happens lazily at strip entry inside the ED pass, on the
-// 3×3-blurred target shifted by the damped feedback delta — raw deltas
-// carry dither PHASE error and chasing them oscillates.
-constexpr float kRowPairMixNoiseLambda = 0.1875f;
-constexpr float kRowPairFeedbackScale = 0.5f;
-constexpr float kRowPairFeedbackClamp = 0.04f;
-
-inline float strip_segment_score(const color_space::OKLab& t,
-                                 const color_space::OKLab& a,
-                                 const color_space::OKLab& b) {
-    float dL = b.L - a.L, da = b.a - a.a, db = b.b - a.b;
-    float seg_sq = color_space::fma_dist_sq(dL, da, db);
-    if (seg_sq <= 0.0f) return color_space::fma_dist_sq(t, a);
-    float u = ((t.L - a.L) * dL + (t.a - a.a) * da + (t.b - a.b) * db) / seg_sq;
-    u = std::clamp(u, 0.0f, 1.0f);
-    float eL = t.L - (a.L + u * dL);
-    float ea = t.a - (a.a + u * da);
-    float eb = t.b - (a.b + u * db);
-    return color_space::fma_dist_sq(eL, ea, eb) +
-           kRowPairMixNoiseLambda * u * (1.0f - u) * seg_sq;
-}
-
-inline float damp_feedback(float v) {
-    return std::clamp(v * kRowPairFeedbackScale, -kRowPairFeedbackClamp, kRowPairFeedbackClamp);
-}
-
-}  // namespace
 
 // ---------------------------------------------------------------------------
 // c64-FLI: 160×200 multicolor + per-row (c1, c2) screen colors
@@ -1248,7 +1248,7 @@ Result<EncodeResult> encode_afli(const Image& image,
             for (std::size_t j = i; j < 16; ++j) {
                 float total = 0.0f;
                 for (std::size_t p = 0; p < kHiCellW; ++p)
-                    total += strip_segment_score(strip[p], pal_lab[i], pal_lab[j]);
+                    total += color_space::mix_segment_score(strip[p], pal_lab[i], pal_lab[j], kRowPairMixNoiseLambda);
                 if (total < best_err) {
                     best_err = total;
                     best = {static_cast<std::uint8_t>(i), static_cast<std::uint8_t>(j)};
