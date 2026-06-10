@@ -1169,40 +1169,96 @@ Result<EncodeResult> encode_afli(const Image& image,
     res.bg_color = 0;
 
     // Pass 1: per-cell-row pair pick.
-    //   - method != none: global-FS palette coherence — top-2 most-
-    //     used colors in each row's 8 pixels of a full-palette FS
-    //     output. Same fix as encode_multicolor / encode_hires.
+    //   - method != none: pairs are decided lazily during the dither pass
+    //     (see decide_row_pair below) — the old 8-sample FS-histogram
+    //     top-2 was pure noise at 8×1 and caused horizontal tearing.
     //   - method == none: per-row brute force C(16,2) = 120 pairs.
     std::vector<std::array<std::array<std::uint8_t, 2>, kHiCellH>> cell_pairs(kHiRows * kHiCols);
 
+    // Dither-aware per-row-strip pair scoring, ported from the Thomson
+    // forme-couleur encoder (src/thomson.cpp) — same 8×1 attribute
+    // geometry. Score all 136 pairs against the 3×3-blurred OKLab target
+    // shifted by the (damped) ED feedback delta at strip entry:
+    //   • distance to the OKLab segment between the pair under a
+    //     chroma-weighted inner product (a,b × kRowPairChromaWeight)
+    //   • mixing-noise penalty λ·u(1−u)·|a−b|² (Bernoulli mix variance)
+    //   • coherence discount for already-decided left/right/above strips
+    // The OKLab segment matches what the OKLab ED pass realizes; the
+    // entry delta is damped ×0.5 and clamped ±0.04/channel because raw
+    // deltas carry dither PHASE error and chasing them oscillates.
+    static constexpr float kRowPairMixNoiseLambda = 0.1875f;
+    static constexpr float kRowPairChromaWeight = 1.0f;
+    static constexpr float kRowPairCoherenceBonus = 0.0f;
+    static constexpr float kRowPairFeedbackScale = 0.5f;
+    static constexpr float kRowPairFeedbackClamp = 0.04f;
+    std::vector<std::uint8_t> strip_decided(kHiCols * H, 0);
+    std::vector<color_space::OKLab> blurred_lab;
     if (settings.method != dither::Method::none) {
-        auto fs = global_fs_indices(image, pal_lab);
-        for (std::size_t cy = 0; cy < kHiRows; ++cy) {
-            for (std::size_t cx = 0; cx < kHiCols; ++cx) {
-                std::array<std::array<std::uint8_t, 2>, kHiCellH> rows{};
-                for (std::size_t py = 0; py < kHiCellH; ++py) {
-                    std::array<std::uint16_t, 16> hist{};
-                    for (std::size_t px = 0; px < kHiCellW; ++px)
-                        ++hist[fs[(cy * kHiCellH + py) * W + (cx * kHiCellW + px)]];
-                    std::uint8_t t0 = 0, t1 = 0;
-                    std::uint16_t c0 = 0, c1 = 0;
-                    for (std::size_t c = 0; c < 16; ++c) {
-                        if (hist[c] > c0) {
-                            c1 = c0;
-                            t1 = t0;
-                            c0 = hist[c];
-                            t0 = static_cast<std::uint8_t>(c);
-                        } else if (hist[c] > c1) {
-                            c1 = hist[c];
-                            t1 = static_cast<std::uint8_t>(c);
-                        }
+        std::vector<Color3f> src_s(W * H);
+        for (std::size_t i = 0; i < W * H; ++i)
+            src_s[i] = {src_lab[i].L, src_lab[i].a, src_lab[i].b};
+        auto blurred_s = global_blur_3x3(std::span<const Color3f>(src_s), W, H);
+        blurred_lab.resize(W * H);
+        for (std::size_t i = 0; i < W * H; ++i)
+            blurred_lab[i] = {blurred_s[i].r, blurred_s[i].g, blurred_s[i].b};
+    }
+    auto decide_row_pair = [&](std::size_t cx, std::size_t y, const color_space::OKLab& delta) {
+        std::array<color_space::OKLab, kHiCellW> strip{};
+        for (std::size_t px = 0; px < kHiCellW; ++px) {
+            const auto& s = blurred_lab[y * W + cx * kHiCellW + px];
+            strip[px] = {s.L + delta.L, s.a + delta.a, s.b + delta.b};
+        }
+        std::size_t row = y * kHiCols;
+        auto strip_pair = [&](std::size_t sx, std::size_t sy) -> std::array<std::uint8_t, 2>& {
+            return cell_pairs[(sy / kHiCellH) * kHiCols + sx][sy % kHiCellH];
+        };
+        const std::array<std::uint8_t, 2>* nb[3] = {
+            (cx > 0 && strip_decided[row + cx - 1]) ? &strip_pair(cx - 1, y) : nullptr,
+            (cx + 1 < kHiCols && strip_decided[row + cx + 1]) ? &strip_pair(cx + 1, y) : nullptr,
+            (y > 0 && strip_decided[row - kHiCols + cx]) ? &strip_pair(cx, y - 1) : nullptr,
+        };
+        float best_err = std::numeric_limits<float>::infinity();
+        std::array<std::uint8_t, 2> best{0, 0};
+        for (std::size_t i = 0; i < 16; ++i) {
+            for (std::size_t j = i; j < 16; ++j) {
+                const auto& a = pal_lab[i];
+                const auto& b = pal_lab[j];
+                constexpr float cw = kRowPairChromaWeight;
+                float dL = b.L - a.L, da = b.a - a.a, db = b.b - a.b;
+                float seg_sq = color_space::fma_dist_sq(dL, da, db);
+                float seg_sq_w = dL * dL + cw * (da * da + db * db);
+                float total = 0.0f;
+                for (std::size_t p = 0; p < kHiCellW; ++p) {
+                    const auto& t = strip[p];
+                    if (seg_sq > 0.0f) {
+                        float u = ((t.L - a.L) * dL + cw * (t.a - a.a) * da +
+                                   cw * (t.b - a.b) * db) /
+                                  seg_sq_w;
+                        u = std::clamp(u, 0.0f, 1.0f);
+                        float eL = t.L - (a.L + u * dL);
+                        float ea = t.a - (a.a + u * da);
+                        float eb = t.b - (a.b + u * db);
+                        total += eL * eL + cw * (ea * ea + eb * eb) +
+                                 kRowPairMixNoiseLambda * u * (1.0f - u) * seg_sq;
+                    } else {
+                        total += color_space::fma_dist_sq(t, a);
                     }
-                    rows[py] = {t0, t1};
                 }
-                cell_pairs[cy * kHiCols + cx] = rows;
+                std::array<std::uint8_t, 2> cand{static_cast<std::uint8_t>(i),
+                                                 static_cast<std::uint8_t>(j)};
+                for (auto* n : nb)
+                    if (n && cand == *n) total -= kRowPairCoherenceBonus;
+                if (total < best_err) {
+                    best_err = total;
+                    best = cand;
+                }
             }
         }
-    } else {
+        strip_pair(cx, y) = best;
+        strip_decided[row + cx] = 1;
+    };
+
+    if (settings.method == dither::Method::none) {
         for (std::size_t cy = 0; cy < kHiRows; ++cy) {
             for (std::size_t cx = 0; cx < kHiCols; ++cx) {
                 std::size_t cell_idx = cy * kHiCols + cx;
@@ -1260,15 +1316,28 @@ Result<EncodeResult> encode_afli(const Image& image,
                 cell_pairs[cell_idx] = row_pairs;
             }
         }
-    }  // end else (method == none brute-force path)
+    }  // end method == none brute-force pre-pass
 
-    // Pass 2: per-pixel dither against per-row 2-color palette.
+    // Pass 2: per-pixel dither against per-row 2-color palette. With a
+    // dither method the row pair is decided lazily at strip ENTRY from
+    // the blurred target shifted by the damped ED feedback delta.
     std::vector<std::uint8_t> indices(W * H, 0);
     auto pick =
         [&](const color_space::OKLab& target, std::size_t x, std::size_t y) -> dither::PickResult {
         std::size_t cy = y / kHiCellH;
         std::size_t cx = x / kHiCellW;
         std::size_t py = y % kHiCellH;
+        if (settings.method != dither::Method::none && !strip_decided[y * kHiCols + cx]) {
+            const auto& s = src_lab[y * W + x];
+            auto damp = [](float v) {
+                return std::clamp(v * kRowPairFeedbackScale,
+                                  -kRowPairFeedbackClamp,
+                                  kRowPairFeedbackClamp);
+            };
+            decide_row_pair(cx,
+                            y,
+                            {damp(target.L - s.L), damp(target.a - s.a), damp(target.b - s.b)});
+        }
         const auto& pair = cell_pairs[cy * kHiCols + cx][py];
         std::array<color_space::OKLab, 2> cp{
             pal_lab[pair[0]],
