@@ -121,7 +121,8 @@ float oklab_error(const Image& a, const Image& b) {
 // error-diffusion driver picking 0/1 within each cell's pair.
 Result<EncodeResult> encode_formecouleur(const Image& image,
                                          const std::vector<PaletteEntry>& palette_entries,
-                                         const dither::Settings& settings) {
+                                         const dither::Settings& settings,
+                                         const FormeCouleurParams& fc) {
     constexpr std::size_t W = 320;
     constexpr std::size_t H = 200;
     constexpr std::size_t kCellW = 8;
@@ -167,13 +168,16 @@ Result<EncodeResult> encode_formecouleur(const Image& image,
     // pairs × 8 px per cell is cheap. An 8-sample FS-histogram top-2 (the
     // c64 8×8-cell approach) is far too noisy at 8×1 — adjacent cells flip
     // pairs randomly → horizontal tearing.
+    //
+    // The three weights live in FormeCouleurParams (defaults tuned on
+    // Kodak-24); --best sweeps a grid around them per image.
     const bool mixing = settings.method != dither::Method::none;
-    constexpr float kMixNoiseLambda = 0.1875f;
-    constexpr float kPairChromaWeight = 3.0f;
+    const float mix_noise_lambda = fc.mix_noise_lambda;
+    const float cw = fc.chroma_weight;
     // Coherence: discount the left/above neighbor's already-chosen pair so
     // smooth regions keep one pair instead of flipping between near-tied
     // pairs cell to cell (patchy seams). Scan order makes both available.
-    constexpr float kCoherenceBonus = 0.01f;
+    const float coherence_bonus = fc.coherence_bonus;
     auto blurred = global_blur_3x3(std::span<const OKLab>(src_lab), W, H);
     for (std::size_t cy = 0; cy < H; ++cy) {
         for (std::size_t cx = 0; cx < kCols; ++cx) {
@@ -190,7 +194,6 @@ Result<EncodeResult> encode_formecouleur(const Image& image,
                 for (std::size_t j = i; j < N; ++j) {
                     const auto& a = view.lab[i];
                     const auto& b = view.lab[j];
-                    constexpr float cw = kPairChromaWeight;
                     float dL = b.L - a.L, da = b.a - a.a, db = b.b - a.b;
                     float seg_sq = color_space::fma_dist_sq(dL, da, db);
                     float seg_sq_w = dL * dL + cw * (da * da + db * db);
@@ -206,7 +209,7 @@ Result<EncodeResult> encode_formecouleur(const Image& image,
                             float ea = t.a - (a.a + u * da);
                             float eb = t.b - (a.b + u * db);
                             total += eL * eL + cw * (ea * ea + eb * eb) +
-                                     kMixNoiseLambda * u * (1.0f - u) * seg_sq;
+                                     mix_noise_lambda * u * (1.0f - u) * seg_sq;
                         } else {
                             float ea = color_space::fma_dist_sq(t, a);
                             float eb = color_space::fma_dist_sq(t, b);
@@ -215,8 +218,8 @@ Result<EncodeResult> encode_formecouleur(const Image& image,
                     }
                     std::array<std::uint8_t, 2> cand{static_cast<std::uint8_t>(i),
                                                      static_cast<std::uint8_t>(j)};
-                    if (left && cand == *left) total -= kCoherenceBonus;
-                    if (above && cand == *above) total -= kCoherenceBonus;
+                    if (left && cand == *left) total -= coherence_bonus;
+                    if (above && cand == *above) total -= coherence_bonus;
                     if (total < best_err) {
                         best_err = total;
                         best = cand;
@@ -369,12 +372,13 @@ Result<EncodeResult> encode_bitmap(const Image& image,
 
 Result<EncodeResult> encode(const Image& image,
                             amiga::Mode mode,
-                            const dither::Settings& settings) {
+                            const dither::Settings& settings,
+                            const FormeCouleurParams& fc) {
     if (amiga::is_thomson_formecouleur(mode)) {
         std::vector<PaletteEntry> pal = (mode == amiga::Mode::thomson_to7_320x16)
                                             ? to770_palette()
                                             : quantize_to8(image, 16);
-        auto r = encode_formecouleur(image, pal, settings);
+        auto r = encode_formecouleur(image, pal, settings, fc);
         if (!r) return r;
         // TO7/70 has a fixed palette → no .pal emitted; TO8 carries it.
         if (mode == amiga::Mode::thomson_to8_320x16) r->palette = pal;

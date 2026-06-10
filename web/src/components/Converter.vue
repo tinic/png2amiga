@@ -848,10 +848,14 @@ const scapAvailable = computed(() => {
 
 // --best multi-restart sweep eligibility. Mirrors the C++ eligibility
 // gates in src/api.cpp: lores/hires plain, EHB plain (no copper/scap/dpf),
-// HAM6/HAM8 (any depth that maps to those modes), and any sliced/strips
-// mode (copper or scap on).
+// HAM6/HAM8 (any depth that maps to those modes), any sliced/strips
+// mode (copper or scap on), and Thomson forme-couleur (pair-weight grid
+// sweep).
 const PLAIN_INDEXED_MODES = new Set([
   'lores', 'lores-lace', 'hires', 'hires-lace',
+])
+const FORMECOULEUR_MODES = new Set([
+  'thomson-to7-320x16', 'thomson-to8-320x16',
 ])
 const bestEligible = computed(() => {
   const m = options.mode
@@ -860,6 +864,7 @@ const bestEligible = computed(() => {
   if (t === 'ham6' || t === 'ham8') return true
   if (options.dualPlayfield) return false
   if (isEhbMode(m)) return true
+  if (FORMECOULEUR_MODES.has(m)) return true
   return PLAIN_INDEXED_MODES.has(m)
 })
 

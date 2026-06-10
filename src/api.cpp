@@ -1030,15 +1030,18 @@ Result<void> check_best_supported(const Options& options, amiga::Mode mode, bool
     bool copper_best = options.copper;
     bool scap_best = options.scap;
     bool snes_best = (mode == amiga::Mode::snes_mode7_256);
-    if (ham_best || ehb_best || plain_best || copper_best || scap_best || snes_best) return {};
+    bool thomson_fc_best = amiga::is_thomson_formecouleur(mode);
+    if (ham_best || ehb_best || plain_best || copper_best || scap_best || snes_best ||
+        thomson_fc_best)
+        return {};
     return std::unexpected{Error{ErrorCode::unsupported_mode,
                                  "--best is not supported in this configuration. "
                                  "Supported: HAM6/HAM8, plain EHB (no user palette), "
                                  "plain lores/hires (no --copper, no --scap, no --dpf, "
                                  "no --tile, no --palette), sliced (--copper), strips "
-                                 "(--scap), and snes-mode7-256. Drop --best or change "
-                                 "one of those "
-                                 "options."}};
+                                 "(--scap), snes-mode7-256, and Thomson forme-couleur "
+                                 "(thomson-to7-320x16 / thomson-to8-320x16). Drop --best "
+                                 "or change one of those options."}};
 }
 
 Result<PipelineResult> run_pipeline(const std::uint8_t* input_data,
@@ -2002,7 +2005,91 @@ Result<PipelineResult> run_pipeline(const std::uint8_t* input_data,
         dith.error_clamp = options.error_clamp;
         dith.serpentine = true;
 
-        auto enc = thomson::encode(*image, mode, dith);
+        Result<thomson::EncodeResult> enc = std::unexpected{
+            Error{ErrorCode::unsupported_mode, "thomson: no encode ran"}};
+        if (options.best && amiga::is_thomson_formecouleur(mode)) {
+            // forme-couleur --best: grid sweep over the pair-selection
+            // weights (mix-noise λ × chroma weight × coherence) crossed with
+            // dither-strength multipliers, ranked by SSIMULACRA2 vs the
+            // source. Trial 0 is the exact default configuration so the
+            // sweep can never lose to a plain encode. The per-image optimum
+            // of these weights varies a lot more than for the global-palette
+            // modes — the TO7 fixed palette has no dark colors, so the
+            // noise-vs-hue tradeoff is content-dependent.
+            struct Trial {
+                thomson::FormeCouleurParams fc;
+                float strength;
+            };
+            std::vector<Trial> trials;
+            trials.push_back({thomson::FormeCouleurParams{}, dith.strength});  // baseline
+            // No chroma weight below 2: cw=1 is the hue coin-flip regime
+            // (every dark target pairs against black with near-equal ΔL, and
+            // S2 at this mode's deep-negative floor rewards the smooth
+            // wrong-hue winner — kodim06's teal water comes back pink).
+            constexpr float kLambdas[] = {0.0f, 0.09375f, 0.1875f, 0.28125f, 0.375f};
+            constexpr float kChromaWeights[] = {2.0f, 3.0f, 4.5f};
+            constexpr float kCoherences[] = {0.0f, 0.01f, 0.03f};
+            constexpr float kStrengthMul[] = {0.85f, 1.0f, 1.15f};
+            for (float lam : kLambdas)
+                for (float cwt : kChromaWeights)
+                    for (float coh : kCoherences)
+                        for (float sm : kStrengthMul)
+                            trials.push_back({{lam, cwt, coh},
+                                              std::clamp(dith.strength * sm, 0.0f, 2.0f)});
+
+            ssimulacra2::PrecomputedSource src_pre;
+            src_pre.prepare(image->pixels(), image->width(), image->height());
+
+            std::optional<thomson::EncodeResult> best;
+            float best_s2 = -std::numeric_limits<float>::infinity();
+            std::mutex best_mu;
+            std::atomic<std::size_t> done{0};
+            pipeline::parallel_for(trials.size(), [&](std::size_t i) {
+                auto d = dith;
+                d.strength = trials[i].strength;
+                auto r = thomson::encode(*image, mode, d, trials[i].fc);
+                auto n_done = done.fetch_add(1) + 1;
+                float label_best = -1.0f;
+                bool have_best = false;
+                if (r) {
+                    float score = ssimulacra2::compute(src_pre, r->rendered.pixels());
+                    std::lock_guard lk(best_mu);
+                    if (!best.has_value() || score > best_s2) {
+                        best = std::move(*r);
+                        best_s2 = score;
+                    }
+                    label_best = best_s2;
+                    have_best = true;
+                } else {
+                    std::lock_guard lk(best_mu);
+                    if (best.has_value()) {
+                        label_best = best_s2;
+                        have_best = true;
+                    }
+                }
+                if (options.on_progress) {
+                    char label[48];
+                    if (have_best) {
+                        std::snprintf(label,
+                                      sizeof(label),
+                                      "best  S2=%.2f",
+                                      static_cast<double>(label_best));
+                    } else {
+                        std::snprintf(label, sizeof(label), "best");
+                    }
+                    options.on_progress(
+                        static_cast<float>(n_done) / static_cast<float>(trials.size()), label);
+                }
+            });
+            if (options.on_progress) options.on_progress(1.0f, "done");
+            if (!best) {
+                return std::unexpected{Error{ErrorCode::unsupported_mode,
+                                             "thomson --best sweep produced no result"}};
+            }
+            enc = std::move(*best);
+        } else {
+            enc = thomson::encode(*image, mode, dith);
+        }
         if (!enc) return std::unexpected{enc.error()};
 
         PipelineResult result;

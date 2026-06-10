@@ -34,6 +34,15 @@ struct PaletteEntry {
     std::uint8_t b;  // 0..15
 };
 
+// forme-couleur pair-selection tunables (see encode_formecouleur in
+// thomson.cpp for what each term does). Defaults are the Kodak-24-tuned
+// shipping values; --best sweeps a grid around them per image.
+struct FormeCouleurParams {
+    float mix_noise_lambda = 0.1875f;  // λ on the Bernoulli mix-variance term
+    float chroma_weight = 3.0f;        // a,b axis weight in pair distance
+    float coherence_bonus = 0.01f;     // left/above same-pair discount
+};
+
 struct EncodeResult {
     Image rendered;                    // preview at the logical buffer size
     std::vector<std::uint8_t> page_a;  // 8000 bytes (forme-couleur: couleur;
@@ -54,6 +63,7 @@ struct EncodeResult {
 // dither against the full snapped palette).
 Result<EncodeResult> encode(const Image& image,
                             amiga::Mode mode,
-                            const dither::Settings& settings = {});
+                            const dither::Settings& settings = {},
+                            const FormeCouleurParams& fc = {});
 
 }  // namespace png2amiga::thomson

@@ -631,8 +631,9 @@ Palette index pinning (indexed-palette modes):
 
 Search quality:
   --best                          Multi-restart search (~20–30× slower).
-                                  Works with plain HAM/EHB/lores/hires
-                                  and with --sliced / --strips.
+                                  Works with plain HAM/EHB/lores/hires,
+                                  --sliced / --strips, and Thomson
+                                  320x16 modes.
 
 Image processing:
   --brightness <float>            -1.0..1.0 (default: 0.0)
