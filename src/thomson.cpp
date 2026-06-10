@@ -115,11 +115,10 @@ float oklab_error(const Image& a, const Image& b) {
 // forme-couleur (320×200, 8×1 attribute cells, 2 colors per cell)
 // ---------------------------------------------------------------------------
 //
-// Cell = 8 pixels wide × 1 tall. Pick the best 2-of-palette pair per cell,
-// then run the central error-diffusion driver picking 0/1 within each cell's
-// pair. The pair-pick path mirrors c64::encode_hires: with a dither method,
-// derive the top-2 most-used colors from a full-palette FS dither (palette
-// coherence); without dither, brute-force the best pair by blurred OKLab² MSE.
+// Cell = 8 pixels wide × 1 tall. Pick the best 2-of-palette pair per cell by
+// brute force on the blurred target (dither-aware segment scoring + neighbor
+// coherence — see the comment at the pair loop), then run the central
+// error-diffusion driver picking 0/1 within each cell's pair.
 Result<EncodeResult> encode_formecouleur(const Image& image,
                                          const std::vector<PaletteEntry>& palette_entries,
                                          const dither::Settings& settings) {
@@ -151,60 +150,80 @@ Result<EncodeResult> encode_formecouleur(const Image& image,
     // Per-cell color pair (background c0, foreground c1).
     std::vector<std::array<std::uint8_t, 2>> cell_pair(kCols * H);
 
-    if (settings.method != dither::Method::none) {
-        // Full-palette FS dither → per-cell top-2 histogram coherence.
-        dither::Settings fs = settings;
-        fs.method = dither::Method::floyd_steinberg;
-        auto fsr = dither::apply(image, view.lin, fs);
-        for (std::size_t cy = 0; cy < H; ++cy) {
-            for (std::size_t cx = 0; cx < kCols; ++cx) {
-                std::array<std::uint16_t, 16> hist{};
-                for (std::size_t px = 0; px < kCellW; ++px)
-                    ++hist[fsr.indices[cy * W + cx * kCellW + px]];
-                std::array<std::uint8_t, 2> top{0, 0};
-                for (std::size_t s = 0; s < 2; ++s) {
-                    std::uint16_t best_cnt = 0;
-                    std::uint8_t best_c = top[0];
-                    for (std::size_t c = 0; c < N; ++c) {
-                        if (hist[c] > best_cnt) {
-                            best_cnt = hist[c];
-                            best_c = static_cast<std::uint8_t>(c);
-                        }
-                    }
-                    top[s] = best_c;
-                    hist[best_c] = 0;
-                }
-                cell_pair[cy * kCols + cx] = top;
-            }
-        }
-    } else {
-        // No dither: brute-force best static pair by blurred OKLab² MSE.
-        auto blurred = global_blur_3x3(std::span<const OKLab>(src_lab), W, H);
-        for (std::size_t cy = 0; cy < H; ++cy) {
-            for (std::size_t cx = 0; cx < kCols; ++cx) {
-                std::array<OKLab, kCellW> cell{};
-                for (std::size_t px = 0; px < kCellW; ++px)
-                    cell[px] = blurred[cy * W + cx * kCellW + px];
-                float best_err = std::numeric_limits<float>::infinity();
-                std::array<std::uint8_t, 2> best{0, 0};
-                for (std::size_t i = 0; i < N; ++i) {
-                    for (std::size_t j = i; j < N; ++j) {
-                        const auto& a = view.lab[i];
-                        const auto& b = view.lab[j];
-                        float total = 0.0f;
-                        for (std::size_t p = 0; p < kCellW; ++p) {
-                            float ea = color_space::fma_dist_sq(cell[p], a);
-                            float eb = color_space::fma_dist_sq(cell[p], b);
+    // Brute-force the best pair per cell on the blurred target. With a dither
+    // method the pair can MIX: score by distance to the OKLab segment between
+    // the two colors plus a mixing-noise penalty λ·t(1−t)·|a−b|² (variance of
+    // a Bernoulli mix — keeps far-apart pairs from winning on mean alone and
+    // showing up as checkerboard noise). The OKLab segment (not the linear-
+    // RGB mix curve) is the right model here because the ED pass diffuses
+    // error in OKLab, so realized duty cycles average to the target in OKLab
+    // — scoring against linear-RGB mixes was tried and posterizes badly.
+    // Segment distance + projection use a chroma-weighted inner product (a,b
+    // axes × kPairChromaWeight): every TO7 non-black color is bright (L ≥
+    // 0.45), so dark targets must pair with black and all such pairs share a
+    // big ΔL — the penalty term then dwarfs unweighted chroma mismatch and
+    // hue degenerates to a coin flip (teal water rendered pink). Without
+    // dither, score endpoint-min (static pick, no mixing possible). 136
+    // pairs × 8 px per cell is cheap. An 8-sample FS-histogram top-2 (the
+    // c64 8×8-cell approach) is far too noisy at 8×1 — adjacent cells flip
+    // pairs randomly → horizontal tearing.
+    const bool mixing = settings.method != dither::Method::none;
+    constexpr float kMixNoiseLambda = 0.1875f;
+    constexpr float kPairChromaWeight = 3.0f;
+    // Coherence: discount the left/above neighbor's already-chosen pair so
+    // smooth regions keep one pair instead of flipping between near-tied
+    // pairs cell to cell (patchy seams). Scan order makes both available.
+    constexpr float kCoherenceBonus = 0.01f;
+    auto blurred = global_blur_3x3(std::span<const OKLab>(src_lab), W, H);
+    for (std::size_t cy = 0; cy < H; ++cy) {
+        for (std::size_t cx = 0; cx < kCols; ++cx) {
+            std::array<OKLab, kCellW> cell{};
+            for (std::size_t px = 0; px < kCellW; ++px)
+                cell[px] = blurred[cy * W + cx * kCellW + px];
+            const std::array<std::uint8_t, 2>* left =
+                cx > 0 ? &cell_pair[cy * kCols + cx - 1] : nullptr;
+            const std::array<std::uint8_t, 2>* above =
+                cy > 0 ? &cell_pair[(cy - 1) * kCols + cx] : nullptr;
+            float best_err = std::numeric_limits<float>::infinity();
+            std::array<std::uint8_t, 2> best{0, 0};
+            for (std::size_t i = 0; i < N; ++i) {
+                for (std::size_t j = i; j < N; ++j) {
+                    const auto& a = view.lab[i];
+                    const auto& b = view.lab[j];
+                    constexpr float cw = kPairChromaWeight;
+                    float dL = b.L - a.L, da = b.a - a.a, db = b.b - a.b;
+                    float seg_sq = color_space::fma_dist_sq(dL, da, db);
+                    float seg_sq_w = dL * dL + cw * (da * da + db * db);
+                    float total = 0.0f;
+                    for (std::size_t p = 0; p < kCellW; ++p) {
+                        const auto& t = cell[p];
+                        if (mixing && seg_sq > 0.0f) {
+                            float u = ((t.L - a.L) * dL + cw * (t.a - a.a) * da +
+                                       cw * (t.b - a.b) * db) /
+                                      seg_sq_w;
+                            u = std::clamp(u, 0.0f, 1.0f);
+                            float eL = t.L - (a.L + u * dL);
+                            float ea = t.a - (a.a + u * da);
+                            float eb = t.b - (a.b + u * db);
+                            total += eL * eL + cw * (ea * ea + eb * eb) +
+                                     kMixNoiseLambda * u * (1.0f - u) * seg_sq;
+                        } else {
+                            float ea = color_space::fma_dist_sq(t, a);
+                            float eb = color_space::fma_dist_sq(t, b);
                             total += std::min(ea, eb);
                         }
-                        if (total < best_err) {
-                            best_err = total;
-                            best = {static_cast<std::uint8_t>(i), static_cast<std::uint8_t>(j)};
-                        }
+                    }
+                    std::array<std::uint8_t, 2> cand{static_cast<std::uint8_t>(i),
+                                                     static_cast<std::uint8_t>(j)};
+                    if (left && cand == *left) total -= kCoherenceBonus;
+                    if (above && cand == *above) total -= kCoherenceBonus;
+                    if (total < best_err) {
+                        best_err = total;
+                        best = cand;
                     }
                 }
-                cell_pair[cy * kCols + cx] = best;
             }
+            cell_pair[cy * kCols + cx] = best;
         }
     }
 
