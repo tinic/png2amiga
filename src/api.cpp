@@ -1202,6 +1202,10 @@ Result<PipelineResult> run_pipeline(const std::uint8_t* input_data,
             "Thomson / TED modes (palette is fixed or auto-quantized)",
         }};
     }
+    // No transparency-slot-0 semantics on these targets either: a forced
+    // black slot would just waste one of 16 entries. Hard-off regardless
+    // of the flag so no generic path can ever apply it.
+    if (amiga::is_thomson(mode) || amiga::is_ted(mode)) options.lock_color0 = false;
 
     // Sliced palette (--sliced/--copper), strip palette (--strips), and dual
     // playfield (--dpf) are Amiga copper / bitplane features (OCS/ECS/AGA
@@ -2044,6 +2048,26 @@ Result<PipelineResult> run_pipeline(const std::uint8_t* input_data,
                                 trials.push_back({{lam, cwt, coh, fb},
                                                   std::clamp(dith.strength * sm, 0.0f, 2.0f)});
 
+            // TO8 phase 1: population palette search (encode-in-the-loop
+            // fitness — median-cut centroids are systematically wrong for
+            // a pair-mixing encoder, which wants segment endpoints). The
+            // GA seeds from the median-cut palette so it can never lose
+            // to the default; the winner feeds every grid trial below.
+            // Progress: pop search = first half, grid = second half.
+            std::optional<std::vector<thomson::PaletteEntry>> pop_pal;
+            const bool pop_phase = (mode == amiga::Mode::thomson_to8_320x16);
+            if (pop_phase) {
+                thomson::PopSearchOptions pso;
+                if (options.on_progress) {
+                    pso.on_progress = [&](float f, std::string_view label) {
+                        options.on_progress(f * 0.5f, label);
+                    };
+                }
+                auto pr = thomson::formecouleur_palette_search(*image, dith, pso);
+                if (!pr) return std::unexpected{pr.error()};
+                pop_pal = std::move(*pr);
+            }
+
             ssimulacra2::PrecomputedSource src_pre;
             src_pre.prepare(image->pixels(), image->width(), image->height());
 
@@ -2054,7 +2078,8 @@ Result<PipelineResult> run_pipeline(const std::uint8_t* input_data,
             pipeline::parallel_for(trials.size(), [&](std::size_t i) {
                 auto d = dith;
                 d.strength = trials[i].strength;
-                auto r = thomson::encode(*image, mode, d, trials[i].fc);
+                auto r = thomson::encode(
+                    *image, mode, d, trials[i].fc, pop_pal ? &*pop_pal : nullptr);
                 auto n_done = done.fetch_add(1) + 1;
                 float label_best = -1.0f;
                 bool have_best = false;
@@ -2084,8 +2109,9 @@ Result<PipelineResult> run_pipeline(const std::uint8_t* input_data,
                     } else {
                         std::snprintf(label, sizeof(label), "best");
                     }
-                    options.on_progress(
-                        static_cast<float>(n_done) / static_cast<float>(trials.size()), label);
+                    float frac =
+                        static_cast<float>(n_done) / static_cast<float>(trials.size());
+                    options.on_progress(pop_phase ? 0.5f + frac * 0.5f : frac, label);
                 }
             });
             if (options.on_progress) options.on_progress(1.0f, "done");

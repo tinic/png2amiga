@@ -6947,6 +6947,10 @@ int run_main(int argc, char* argv[]) {
     if (amiga::is_thomson(config->mode) || amiga::is_ted(config->mode)) {
         // Thomson / TED have no Amiga bitplanes — report the buffer dims +
         // color count (16 / 4 / 2 for Thomson; 121-color palette for TED).
+        // No transparency-slot-0 semantics either: clear lock_color0 so
+        // the palette dump doesn't mislabel slot 0 as 🔒 (the encoder
+        // side hard-offs it in run_pipeline).
+        config->lock_color0 = false;
         cli_status("Target:   {}x{} @ {} colors",
                    static_cast<std::size_t>(target_w),
                    static_cast<std::size_t>(target_h),

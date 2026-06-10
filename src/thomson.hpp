@@ -21,6 +21,8 @@
 #include "types.hpp"
 
 #include <cstdint>
+#include <functional>
+#include <string_view>
 #include <vector>
 
 namespace png2amiga::thomson {
@@ -32,6 +34,7 @@ struct PaletteEntry {
     std::uint8_t r;  // 0..15
     std::uint8_t g;  // 0..15
     std::uint8_t b;  // 0..15
+    bool operator==(const PaletteEntry&) const = default;
 };
 
 // forme-couleur pair-selection tunables (see encode_formecouleur in
@@ -63,9 +66,31 @@ struct EncodeResult {
 // is implied by the mode. The dither settings drive the error-diffusion
 // pass (forme-couleur uses per-cell candidate dithering; bitmap modes
 // dither against the full snapped palette).
+// `to8_palette` overrides the auto-quantized palette for the TO8
+// forme-couleur mode (16 entries; ignored for TO7's fixed palette and
+// for the bitmap modes). Used by the --best population palette search.
 Result<EncodeResult> encode(const Image& image,
                             amiga::Mode mode,
                             const dither::Settings& settings = {},
-                            const FormeCouleurParams& fc = {});
+                            const FormeCouleurParams& fc = {},
+                            const std::vector<PaletteEntry>* to8_palette = nullptr);
+
+// Evolutionary population palette search for TO8 forme-couleur
+// (mirrors palette_search.cpp's GA shape: elitist quarter, crossover +
+// OKLab-nudge mutations snapped to the intens[] grid, SSIMULACRA2
+// fitness on the FULL encode_formecouleur output — median-cut picks
+// cluster centroids, but the pair-mixing encoder wants segment
+// ENDPOINTS, and only encode-in-the-loop fitness can see that).
+// Candidate 0 is the verbatim median-cut seed, so the result can never
+// lose to the default palette at the given settings.
+struct PopSearchOptions {
+    int pop_size = 64;
+    int generations = 48;
+    int stale_limit = 16;
+    std::function<void(float, std::string_view)> on_progress;
+};
+Result<std::vector<PaletteEntry>> formecouleur_palette_search(const Image& image,
+                                                              const dither::Settings& settings,
+                                                              const PopSearchOptions& opts = {});
 
 }  // namespace png2amiga::thomson

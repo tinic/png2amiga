@@ -1,12 +1,17 @@
 #include "thomson.hpp"
 
 #include "palette.hpp"
+#include "pipeline.hpp"
 #include "quantize.hpp"
+#include "ssimulacra2.hpp"
 
 #include <algorithm>
 #include <cmath>
+#include <cstdio>
 #include <format>
 #include <limits>
+#include <numeric>
+#include <random>
 #include <span>
 
 namespace png2amiga::thomson {
@@ -43,25 +48,42 @@ std::vector<PaletteEntry> to770_palette() {
     return p;
 }
 
-// Quantize to N colors (continuous), then snap each color's channels to the
-// nearest intens[] level → 4-bit (r,g,b) per color. Mirrors the TO8 gamut
-// constraint (4096 colors = intens[] per channel).
-std::vector<PaletteEntry> quantize_to8(const Image& image, std::size_t n) {
-    auto pal = quantize::quantize(image, n, quantize::Algorithm::median_cut, 0.0f);
-    std::vector<PaletteEntry> out;
-    if (!pal) {
-        out.resize(n, PaletteEntry{0, 0, 0});
-        return out;
-    }
-    out.reserve(n);
-    auto to8 = [](float lin) {
-        return static_cast<int>(std::lround(std::clamp(color_space::linear_to_srgb(lin), 0.0f, 1.0f) *
-                                            255.0f));
+// Snap a linear color to the nearest TO8 palette entry (per-channel 4-bit
+// index into the intens[] gamma LUT).
+PaletteEntry snap_to8(const Color3f& lin) {
+    auto to8 = [](float v) {
+        return static_cast<int>(
+            std::lround(std::clamp(color_space::linear_to_srgb(v), 0.0f, 1.0f) * 255.0f));
     };
-    for (auto& c : pal->colors) {
-        out.push_back({palette::thomson_channel_index(to8(c.r)),
-                       palette::thomson_channel_index(to8(c.g)),
-                       palette::thomson_channel_index(to8(c.b))});
+    return {palette::thomson_channel_index(to8(lin.r)),
+            palette::thomson_channel_index(to8(lin.g)),
+            palette::thomson_channel_index(to8(lin.b))};
+}
+
+// Quantize to N colors (continuous), then snap each color's channels to the
+// nearest intens[] level → 4-bit (r,g,b) per color. The intens[] grid is
+// coarse at the dark end (0 → 96 → 124), so DISTINCT continuous centroids
+// can snap onto the same entry — a dark-heavy image (or --native-par pad
+// bars) then wastes several of the 16 slots on duplicate blacks/greys.
+// Base round: ALL distinct entries from the n-color quantize (the image's
+// principal clusters — never displaced). Top-up rounds: the freed slots
+// are refilled from progressively finer quantizes (2n, 4n, …) with
+// entries not already present. Only the top-up is exposed to median-cut's
+// arbitrary tree order — collecting the FIRST n distinct of a fine
+// quantize instead loses principal bright/dark clusters wholesale (tried:
+// 3macao S2 −20.7 → −62.0).
+std::vector<PaletteEntry> quantize_to8(const Image& image, std::size_t n) {
+    std::vector<PaletteEntry> out;
+    for (std::size_t k = n; k <= 256 && out.size() < n; k *= 2) {
+        auto pal = quantize::quantize(image, k, quantize::Algorithm::median_cut, 0.0f);
+        if (!pal) break;
+        std::size_t before = out.size();
+        for (auto& c : pal->colors) {
+            auto e = snap_to8(c);
+            if (std::find(out.begin(), out.end(), e) == out.end()) out.push_back(e);
+            if (out.size() == n) break;
+        }
+        if (out.size() == before) break;  // snapped gamut saturated
     }
     while (out.size() < n)
         out.push_back({0, 0, 0});
@@ -417,11 +439,14 @@ Result<EncodeResult> encode_bitmap(const Image& image,
 Result<EncodeResult> encode(const Image& image,
                             amiga::Mode mode,
                             const dither::Settings& settings,
-                            const FormeCouleurParams& fc) {
+                            const FormeCouleurParams& fc,
+                            const std::vector<PaletteEntry>* to8_palette) {
     if (amiga::is_thomson_formecouleur(mode)) {
-        std::vector<PaletteEntry> pal = (mode == amiga::Mode::thomson_to7_320x16)
-                                            ? to770_palette()
-                                            : quantize_to8(image, 16);
+        std::vector<PaletteEntry> pal =
+            (mode == amiga::Mode::thomson_to7_320x16)
+                ? to770_palette()
+                : ((to8_palette && to8_palette->size() == 16) ? *to8_palette
+                                                              : quantize_to8(image, 16));
         auto r = encode_formecouleur(image, pal, settings, fc);
         if (!r) return r;
         // TO7/70 has a fixed palette → no .pal emitted; TO8 carries it.
@@ -434,6 +459,180 @@ Result<EncodeResult> encode(const Image& image,
         return encode_bitmap(image, mode, pal, settings);
     }
     return std::unexpected{Error{ErrorCode::unsupported_mode, "thomson::encode: not a Thomson mode"}};
+}
+
+namespace {
+
+// OKLab nudge on one slot, step sizes mirrored from palette_search.cpp's
+// lores GA (±0.08 L, ±0.04 a/b), snapped back to the intens[] grid.
+void nudge_slot(std::vector<PaletteEntry>& pal, std::size_t k, std::mt19937& rng) {
+    std::uniform_real_distribution<float> dL(-0.08f, 0.08f);
+    std::uniform_real_distribution<float> dab(-0.04f, 0.04f);
+    auto lin =
+        color_space::srgb_hex_to_linear(palette::thomson_rgb_hex(pal[k].r, pal[k].g, pal[k].b));
+    auto lab = color_space::linear_to_oklab(lin);
+    lab.L = std::clamp(lab.L + dL(rng), 0.0f, 1.0f);
+    lab.a = std::clamp(lab.a + dab(rng), -0.4f, 0.4f);
+    lab.b = std::clamp(lab.b + dab(rng), -0.4f, 0.4f);
+    pal[k] = snap_to8(color_space::oklab_to_linear(lab));
+}
+
+void mutate_pal(std::vector<PaletteEntry>& pal, std::mt19937& rng) {
+    std::uniform_int_distribution<int> count_dist(1, 2);
+    std::uniform_int_distribution<std::size_t> slot_dist(0, pal.size() - 1);
+    int n = count_dist(rng);
+    for (int i = 0; i < n; ++i)
+        nudge_slot(pal, slot_dist(rng), rng);
+}
+
+// Re-roll any slot that duplicates an earlier one. A duplicate entry can
+// never help (the pair scorer just sees the same color twice) and the
+// snapped intens[] grid makes collisions common after crossover /
+// mutation — without repair the GA happily carries 2-3 wasted slots.
+void repair_duplicates(std::vector<PaletteEntry>& pal, std::mt19937& rng) {
+    for (std::size_t k = 1; k < pal.size(); ++k) {
+        for (int tries = 0; tries < 8; ++tries) {
+            bool dup = false;
+            for (std::size_t j = 0; j < k; ++j) {
+                if (pal[j] == pal[k]) {
+                    dup = true;
+                    break;
+                }
+            }
+            if (!dup) break;
+            nudge_slot(pal, k, rng);
+        }
+    }
+}
+
+std::vector<PaletteEntry> crossover_pal(const std::vector<PaletteEntry>& a,
+                                        const std::vector<PaletteEntry>& b,
+                                        std::mt19937& rng) {
+    std::vector<PaletteEntry> child(a.size());
+    std::uniform_int_distribution<int> coin(0, 1);
+    for (std::size_t k = 0; k < a.size(); ++k)
+        child[k] = (coin(rng) != 0) ? a[k] : b[k];
+    return child;
+}
+
+}  // namespace
+
+Result<std::vector<PaletteEntry>> formecouleur_palette_search(const Image& image,
+                                                              const dither::Settings& settings,
+                                                              const PopSearchOptions& opts) {
+    if (image.width() != 320 || image.height() != 200) {
+        return std::unexpected{Error{ErrorCode::invalid_dimensions,
+                                     "formecouleur_palette_search: expected 320x200 input"}};
+    }
+
+    ssimulacra2::PrecomputedSource src_pre;
+    src_pre.prepare(image.pixels(), image.width(), image.height());
+
+    auto fitness = [&](const std::vector<PaletteEntry>& pal) -> float {
+        auto r = encode_formecouleur(image, pal, settings, FormeCouleurParams{});
+        if (!r) return -std::numeric_limits<float>::infinity();
+        return ssimulacra2::compute(src_pre, r->rendered.pixels());
+    };
+
+    // Seed: candidate 0 = verbatim median-cut palette; remainder are
+    // progressively heavier mutations of it. Deterministic rng for
+    // reproducible output (same convention as palette_search.cpp).
+    auto seed0 = quantize_to8(image, 16);
+    std::mt19937 rng(0xa5a5);  // NOLINT(bugprone-random-generator-seed)
+    std::vector<std::vector<PaletteEntry>> population;
+    population.reserve(static_cast<std::size_t>(opts.pop_size));
+    population.push_back(seed0);
+    for (int i = 1; i < opts.pop_size; ++i) {
+        auto p = seed0;
+        for (int j = 0; j <= i / 8; ++j)
+            mutate_pal(p, rng);
+        repair_duplicates(p, rng);
+        population.push_back(std::move(p));
+    }
+
+    std::vector<float> scores(population.size(), 0.0f);
+    std::vector<std::uint8_t> needs_score(population.size(), 1);
+    auto score_all = [&] {
+        std::vector<std::size_t> todo;
+        for (std::size_t i = 0; i < population.size(); ++i)
+            if (needs_score[i]) todo.push_back(i);
+        pipeline::parallel_for(todo.size(), [&](std::size_t k) {
+            scores[todo[k]] = fitness(population[todo[k]]);
+        });
+        std::fill(needs_score.begin(), needs_score.end(), std::uint8_t{0});
+    };
+
+    auto report = [&](int gen, float best) {
+        if (!opts.on_progress) return;
+        char label[64];
+        std::snprintf(label,
+                      sizeof(label),
+                      "pop search gen %d/%d  best=%.2f",
+                      gen,
+                      opts.generations,
+                      static_cast<double>(best));
+        opts.on_progress(static_cast<float>(gen) / static_cast<float>(opts.generations), label);
+    };
+
+    score_all();
+    float prev_best = *std::max_element(scores.begin(), scores.end());
+    int stale_gens = 0;
+    report(0, prev_best);
+
+    for (int gen = 1; gen <= opts.generations; ++gen) {
+        std::vector<std::size_t> idx(population.size());
+        std::iota(idx.begin(), idx.end(), std::size_t{0});
+        std::sort(idx.begin(), idx.end(), [&](std::size_t a, std::size_t b) {
+            return scores[a] > scores[b];
+        });
+        int n_keep = std::max(2, opts.pop_size / 4);
+        std::vector<std::vector<PaletteEntry>> new_pop;
+        std::vector<float> new_scores;
+        new_pop.reserve(static_cast<std::size_t>(opts.pop_size));
+        new_scores.reserve(static_cast<std::size_t>(opts.pop_size));
+        for (int i = 0; i < n_keep; ++i) {
+            std::size_t k = idx[static_cast<std::size_t>(i)];
+            new_pop.push_back(population[k]);
+            new_scores.push_back(scores[k]);
+        }
+        std::uniform_int_distribution<int> parent_pick(0, n_keep - 1);
+        while (new_pop.size() < static_cast<std::size_t>(opts.pop_size)) {
+            int role = static_cast<int>(new_pop.size()) % 4;
+            if (role < 2) {
+                auto& a = new_pop[static_cast<std::size_t>(parent_pick(rng))];
+                auto& b = new_pop[static_cast<std::size_t>(parent_pick(rng))];
+                auto child = crossover_pal(a, b, rng);
+                mutate_pal(child, rng);
+                repair_duplicates(child, rng);
+                new_pop.push_back(std::move(child));
+            } else {
+                auto child = new_pop[static_cast<std::size_t>(parent_pick(rng))];
+                for (int m = 0; m < 3; ++m)
+                    mutate_pal(child, rng);
+                repair_duplicates(child, rng);
+                new_pop.push_back(std::move(child));
+            }
+            new_scores.push_back(0.0f);
+        }
+        population = std::move(new_pop);
+        scores = std::move(new_scores);
+        needs_score.assign(population.size(), 1);
+        for (int i = 0; i < n_keep; ++i)
+            needs_score[static_cast<std::size_t>(i)] = 0;
+        score_all();
+
+        float cur_best = *std::max_element(scores.begin(), scores.end());
+        report(gen, cur_best);
+        if (cur_best - prev_best < 0.001f) {
+            if (++stale_gens >= opts.stale_limit) break;
+        } else {
+            stale_gens = 0;
+            prev_best = cur_best;
+        }
+    }
+
+    auto winner_it = std::max_element(scores.begin(), scores.end());
+    return population[static_cast<std::size_t>(winner_it - scores.begin())];
 }
 
 }  // namespace png2amiga::thomson
