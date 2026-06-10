@@ -2026,19 +2026,23 @@ Result<PipelineResult> run_pipeline(const std::uint8_t* input_data,
             // (every dark target pairs against black with near-equal ΔL, and
             // S2 at this mode's deep-negative floor rewards the smooth
             // wrong-hue winner — kodim06's teal water comes back pink).
-            // 1200-trial grid (~6 s at 320×200); strength multipliers match
-            // pipeline::best_sweep's standard five.
+            // 2400-trial grid (~17 s at 320×200); strength multipliers match
+            // pipeline::best_sweep's standard five. Feedback 0 keeps the
+            // static pair pick reachable — regular textures (brick) churn
+            // under ED-feedback steering and S2 ranks them back to static.
             constexpr float kLambdas[] = {
                 0.0f, 0.046875f, 0.09375f, 0.140625f, 0.1875f, 0.28125f, 0.375f, 0.5f};
             constexpr float kChromaWeights[] = {2.0f, 2.5f, 3.0f, 3.75f, 4.5f, 6.0f};
             constexpr float kCoherences[] = {0.0f, 0.005f, 0.01f, 0.02f, 0.04f};
             constexpr float kStrengthMul[] = {0.7f, 0.85f, 1.0f, 1.15f, 1.3f};
+            constexpr float kFeedbacks[] = {0.0f, 0.5f};
             for (float lam : kLambdas)
                 for (float cwt : kChromaWeights)
                     for (float coh : kCoherences)
                         for (float sm : kStrengthMul)
-                            trials.push_back({{lam, cwt, coh},
-                                              std::clamp(dith.strength * sm, 0.0f, 2.0f)});
+                            for (float fb : kFeedbacks)
+                                trials.push_back({{lam, cwt, coh, fb},
+                                                  std::clamp(dith.strength * sm, 0.0f, 2.0f)});
 
             ssimulacra2::PrecomputedSource src_pre;
             src_pre.prepare(image->pixels(), image->width(), image->height());

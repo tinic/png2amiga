@@ -174,67 +174,111 @@ Result<EncodeResult> encode_formecouleur(const Image& image,
     const bool mixing = settings.method != dither::Method::none;
     const float mix_noise_lambda = fc.mix_noise_lambda;
     const float cw = fc.chroma_weight;
-    // Coherence: discount the left/above neighbor's already-chosen pair so
-    // smooth regions keep one pair instead of flipping between near-tied
-    // pairs cell to cell (patchy seams). Scan order makes both available.
+    // Coherence: discount already-decided neighbor cells' pairs so smooth
+    // regions keep one pair instead of flipping between near-tied pairs
+    // cell to cell (patchy seams).
     const float coherence_bonus = fc.coherence_bonus;
     auto blurred = global_blur_3x3(std::span<const OKLab>(src_lab), W, H);
-    for (std::size_t cy = 0; cy < H; ++cy) {
-        for (std::size_t cx = 0; cx < kCols; ++cx) {
-            std::array<OKLab, kCellW> cell{};
-            for (std::size_t px = 0; px < kCellW; ++px)
-                cell[px] = blurred[cy * W + cx * kCellW + px];
-            const std::array<std::uint8_t, 2>* left =
-                cx > 0 ? &cell_pair[cy * kCols + cx - 1] : nullptr;
-            const std::array<std::uint8_t, 2>* above =
-                cy > 0 ? &cell_pair[(cy - 1) * kCols + cx] : nullptr;
-            float best_err = std::numeric_limits<float>::infinity();
-            std::array<std::uint8_t, 2> best{0, 0};
-            for (std::size_t i = 0; i < N; ++i) {
-                for (std::size_t j = i; j < N; ++j) {
-                    const auto& a = view.lab[i];
-                    const auto& b = view.lab[j];
-                    float dL = b.L - a.L, da = b.a - a.a, db = b.b - a.b;
-                    float seg_sq = color_space::fma_dist_sq(dL, da, db);
-                    float seg_sq_w = dL * dL + cw * (da * da + db * db);
-                    float total = 0.0f;
-                    for (std::size_t p = 0; p < kCellW; ++p) {
-                        const auto& t = cell[p];
-                        if (mixing && seg_sq > 0.0f) {
-                            float u = ((t.L - a.L) * dL + cw * (t.a - a.a) * da +
-                                       cw * (t.b - a.b) * db) /
-                                      seg_sq_w;
-                            u = std::clamp(u, 0.0f, 1.0f);
-                            float eL = t.L - (a.L + u * dL);
-                            float ea = t.a - (a.a + u * da);
-                            float eb = t.b - (a.b + u * db);
-                            total += eL * eL + cw * (ea * ea + eb * eb) +
-                                     mix_noise_lambda * u * (1.0f - u) * seg_sq;
-                        } else {
-                            float ea = color_space::fma_dist_sq(t, a);
-                            float eb = color_space::fma_dist_sq(t, b);
-                            total += std::min(ea, eb);
-                        }
-                    }
-                    std::array<std::uint8_t, 2> cand{static_cast<std::uint8_t>(i),
-                                                     static_cast<std::uint8_t>(j)};
-                    if (left && cand == *left) total -= coherence_bonus;
-                    if (above && cand == *above) total -= coherence_bonus;
-                    if (total < best_err) {
-                        best_err = total;
-                        best = cand;
+
+    // decide_pair scores all 136 pairs for one cell against the blurred
+    // cell target shifted by `delta` (the ED feedback at cell entry; zero
+    // for the static pre-pass) and commits the winner. Coherence reads
+    // whichever of the three potential predecessors (same-row left/right,
+    // above) are already decided — in serpentine ED order the in-scan
+    // predecessor alternates sides.
+    std::vector<std::uint8_t> decided(kCols * H, 0);
+    auto decide_pair = [&](std::size_t cx, std::size_t cy, const OKLab& delta) {
+        std::array<OKLab, kCellW> cell{};
+        for (std::size_t px = 0; px < kCellW; ++px) {
+            const auto& s = blurred[cy * W + cx * kCellW + px];
+            cell[px] = {s.L + delta.L, s.a + delta.a, s.b + delta.b};
+        }
+        std::size_t row = cy * kCols;
+        const std::array<std::uint8_t, 2>* nb[3] = {
+            (cx > 0 && decided[row + cx - 1]) ? &cell_pair[row + cx - 1] : nullptr,
+            (cx + 1 < kCols && decided[row + cx + 1]) ? &cell_pair[row + cx + 1] : nullptr,
+            (cy > 0 && decided[row - kCols + cx]) ? &cell_pair[row - kCols + cx] : nullptr,
+        };
+        float best_err = std::numeric_limits<float>::infinity();
+        std::array<std::uint8_t, 2> best{0, 0};
+        for (std::size_t i = 0; i < N; ++i) {
+            for (std::size_t j = i; j < N; ++j) {
+                const auto& a = view.lab[i];
+                const auto& b = view.lab[j];
+                float dL = b.L - a.L, da = b.a - a.a, db = b.b - a.b;
+                float seg_sq = color_space::fma_dist_sq(dL, da, db);
+                float seg_sq_w = dL * dL + cw * (da * da + db * db);
+                float total = 0.0f;
+                for (std::size_t p = 0; p < kCellW; ++p) {
+                    const auto& t = cell[p];
+                    if (mixing && seg_sq > 0.0f) {
+                        float u = ((t.L - a.L) * dL + cw * (t.a - a.a) * da +
+                                   cw * (t.b - a.b) * db) /
+                                  seg_sq_w;
+                        u = std::clamp(u, 0.0f, 1.0f);
+                        float eL = t.L - (a.L + u * dL);
+                        float ea = t.a - (a.a + u * da);
+                        float eb = t.b - (a.b + u * db);
+                        total += eL * eL + cw * (ea * ea + eb * eb) +
+                                 mix_noise_lambda * u * (1.0f - u) * seg_sq;
+                    } else {
+                        float ea = color_space::fma_dist_sq(t, a);
+                        float eb = color_space::fma_dist_sq(t, b);
+                        total += std::min(ea, eb);
                     }
                 }
+                std::array<std::uint8_t, 2> cand{static_cast<std::uint8_t>(i),
+                                                 static_cast<std::uint8_t>(j)};
+                for (auto* n : nb)
+                    if (n && cand == *n) total -= coherence_bonus;
+                if (total < best_err) {
+                    best_err = total;
+                    best = cand;
+                }
             }
-            cell_pair[cy * kCols + cx] = best;
         }
+        cell_pair[row + cx] = best;
+        decided[row + cx] = 1;
+    };
+
+    // Static pre-pass (no dither): raster order, no feedback — left + above
+    // neighbors are the decided ones, matching the original scan-order
+    // coherence.
+    if (!mixing) {
+        for (std::size_t cy = 0; cy < H; ++cy)
+            for (std::size_t cx = 0; cx < kCols; ++cx)
+                decide_pair(cx, cy, OKLab{0, 0, 0});
     }
 
     // Dither pass: pick index 0/1 within each cell's pair via the central
-    // error-diffusion driver.
+    // error-diffusion driver. With a dither method the pair itself is
+    // decided lazily at cell ENTRY (first pixel the serpentine scan visits)
+    // from the blurred cell target shifted by the ED feedback delta — the
+    // accumulated error the kernel has pushed into this pixel. A static
+    // pre-pass can't see that drift, so it picks pairs for a target the
+    // dither pass is no longer rendering.
+    // The raw entry delta on a ~50% duty cell is up to half a quantization
+    // step of dither PHASE error — chasing it makes pair choice oscillate
+    // (flat textures explode into random-hue confetti). Damp + clamp so
+    // only consistent low-frequency drift steers the pair. The scale is a
+    // FormeCouleurParams axis (--best sweeps {0, 0.5}): regular textures
+    // like examples/brick.png churn between near-tied pairs under any
+    // feedback and want 0.
+    static constexpr float kFeedbackClamp = 0.04f;
+    const float feedback_scale = fc.feedback_scale;
     std::vector<std::uint8_t> indices(W * H, 0);
     auto pick = [&](const OKLab& target, std::size_t x, std::size_t y) -> dither::PickResult {
-        const auto& pair = cell_pair[y * kCols + (x / kCellW)];
+        std::size_t cell_idx = y * kCols + (x / kCellW);
+        if (!decided[cell_idx]) {
+            const auto& s = src_lab[y * W + x];
+            auto damp = [&](float v) {
+                return std::clamp(v * feedback_scale, -kFeedbackClamp, kFeedbackClamp);
+            };
+            decide_pair(x / kCellW,
+                        y,
+                        OKLab{damp(target.L - s.L), damp(target.a - s.a), damp(target.b - s.b)});
+        }
+        const auto& pair = cell_pair[cell_idx];
         std::array<OKLab, 2> cp{view.lab[pair[0]], view.lab[pair[1]]};
         std::size_t chosen_idx = 0;
         OKLab chosen{};

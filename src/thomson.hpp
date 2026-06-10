@@ -40,7 +40,9 @@ struct PaletteEntry {
 struct FormeCouleurParams {
     float mix_noise_lambda = 0.1875f;  // λ on the Bernoulli mix-variance term
     float chroma_weight = 3.0f;        // a,b axis weight in pair distance
-    float coherence_bonus = 0.01f;     // left/above same-pair discount
+    float coherence_bonus = 0.01f;     // decided-neighbor same-pair discount
+    float feedback_scale = 0.5f;       // ED-feedback steering of the pair pick
+                                       //   (0 = static pre-pass behavior)
 };
 
 struct EncodeResult {
