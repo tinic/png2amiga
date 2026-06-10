@@ -1168,7 +1168,7 @@ void print_usage() {
         "    GBA:    gba-mode3 | gba-mode4 | gba-mode5\n"
         "    Thomson: thomson-to7-320x16 | thomson-to8-320x16 |\n"
         "            thomson-to8-160x16 | thomson-to8-320x4 | thomson-to8-640x2\n"
-        "    TED:    ted-320x200 | ted-160x200\n"
+        "    TED:    ted-hires | ted-multicolor\n"
         "  --depth <1-8>                   Bitplane depth (default: 5)\n"
         "  --chipset ocs|aga               Amiga chipset (default: auto)\n"
         "  --dual-playfield, --dpf         Encode into PF2 (depth 3 OCS / 4 AGA)\n"
@@ -2100,10 +2100,10 @@ Result<Config> parse_args(int argc, char* argv[]) {
                     config.mode = amiga::Mode::thomson_to8_320x4;
                 else if (v == "thomson-to8-640x2")
                     config.mode = amiga::Mode::thomson_to8_640x2;
-                else if (v == "ted-320x200")
-                    config.mode = amiga::Mode::ted_320x200;
-                else if (v == "ted-160x200")
-                    config.mode = amiga::Mode::ted_160x200;
+                else if (v == "ted-hires")
+                    config.mode = amiga::Mode::ted_hires;
+                else if (v == "ted-multicolor")
+                    config.mode = amiga::Mode::ted_multicolor;
                 else if (v == "png") {
                     // Benchmark-only path: emit indexed PNG-8 directly
                     // (no Amiga encoding). Used to compare our quantizer
@@ -2850,10 +2850,10 @@ std::string_view mode_to_options_string(amiga::Mode m) {
         return "thomson-to8-320x4";
     case amiga::Mode::thomson_to8_640x2:
         return "thomson-to8-640x2";
-    case amiga::Mode::ted_320x200:
-        return "ted-320x200";
-    case amiga::Mode::ted_160x200:
-        return "ted-160x200";
+    case amiga::Mode::ted_hires:
+        return "ted-hires";
+    case amiga::Mode::ted_multicolor:
+        return "ted-multicolor";
     default:
         return "lores";
     }
@@ -3652,7 +3652,7 @@ std::pair<std::size_t, std::size_t> preview_display_dims(
         // 160-wide modes double again (sx=4) so they fill the same physical
         // width as the 320-wide modes (the hardware doubles 160→320); the
         // 640-wide mode halves (sx=1). All PAR-corrected below.
-        if (mode == amiga::Mode::thomson_to8_160x16 || mode == amiga::Mode::ted_160x200) {
+        if (mode == amiga::Mode::thomson_to8_160x16 || mode == amiga::Mode::ted_multicolor) {
             sx = 4;
             sy = 2;
         } else if (mode == amiga::Mode::thomson_to8_640x2) {
@@ -5686,7 +5686,7 @@ int run_main(int argc, char* argv[]) {
             cli_status("  Thomson:  thomson-to7-320x16, thomson-to8-320x16, "
                        "thomson-to8-160x16,");
             cli_status("            thomson-to8-320x4, thomson-to8-640x2");
-            cli_status("  TED:      ted-320x200, ted-160x200");
+            cli_status("  TED:      ted-hires, ted-multicolor");
         }
         return exit_code::ok;
     }
@@ -7376,7 +7376,7 @@ int run_main(int argc, char* argv[]) {
                 return "Thomson TO8 bitmap (320x200, 4 prog, 2 planes)";
             case amiga::Mode::thomson_to8_640x2:
                 return "Thomson TO8 bitmap (640x200, 2 prog, 1bpp)";
-            case amiga::Mode::ted_320x200:
+            case amiga::Mode::ted_hires:
                 return "Commodore TED hires (320x200, 2/8x8 cell, 121 palette)";
             default:
                 return "Commodore TED multicolor (160x200, 4/4x8 cell, 121 palette)";

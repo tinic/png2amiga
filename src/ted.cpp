@@ -359,8 +359,8 @@ Result<EncodeResult> encode_multicolor(const Image& image, const dither::Setting
 Result<EncodeResult> encode(const Image& image,
                             amiga::Mode mode,
                             const dither::Settings& settings) {
-    if (mode == amiga::Mode::ted_320x200) return encode_hires(image, settings);
-    if (mode == amiga::Mode::ted_160x200) return encode_multicolor(image, settings);
+    if (mode == amiga::Mode::ted_hires) return encode_hires(image, settings);
+    if (mode == amiga::Mode::ted_multicolor) return encode_multicolor(image, settings);
     return std::unexpected{Error{ErrorCode::unsupported_mode, "ted::encode: not a TED mode"}};
 }
 

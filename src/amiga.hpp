@@ -199,8 +199,8 @@ enum class Mode : unsigned char {
     //   hires (320×200): 2 colors per 8×8 cell (C64-hires-like).
     //   multicolor (160×200): 4 colors per 4×8 cell (2 global + 2 per-cell,
     //     C64-multicolor-like).
-    ted_320x200,  // TED hires, 320×200, 2 colors/8×8 cell
-    ted_160x200,  // TED multicolor, 160×200, 4 colors/4×8 cell
+    ted_hires,  // TED hires, 320×200, 2 colors/8×8 cell
+    ted_multicolor,  // TED multicolor, 160×200, 4 colors/4×8 cell
 };
 
 // ---------------------------------------------------------------------------
@@ -421,9 +421,9 @@ constexpr ModeParams get_mode_params(Mode mode) noexcept {
     //   hires 320×200: 2 colors / 8×8 cell → PAR 0.936 (like c64-hires).
     //   multicolor 160×200: 4 colors / 4×8 cell (2:1 doubling) → 1.872
     //   (= 2 × 0.936, like c64-multicolor).
-    case Mode::ted_320x200:
+    case Mode::ted_hires:
         return {320, 200, 1, 2, false, false, false, false, 1, 1, 0.936f};
-    case Mode::ted_160x200:
+    case Mode::ted_multicolor:
         return {160, 200, 2, 4, false, false, false, false, 2, 1, 1.872f};
     }
     std::unreachable();
@@ -646,12 +646,12 @@ constexpr std::size_t thomson_palette_size(Mode mode) noexcept {
 
 // Commodore TED modes (Plus/4, C16).
 constexpr bool is_ted(Mode mode) noexcept {
-    return mode == Mode::ted_320x200 || mode == Mode::ted_160x200;
+    return mode == Mode::ted_hires || mode == Mode::ted_multicolor;
 }
 
 // TED multicolor (4 colors / 4×8 cell) vs. hires (2 colors / 8×8 cell).
 constexpr bool is_ted_multicolor(Mode mode) noexcept {
-    return mode == Mode::ted_160x200;
+    return mode == Mode::ted_multicolor;
 }
 
 // Maximum bitplane depth for a chipset (raw hardware limit)

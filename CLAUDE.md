@@ -217,8 +217,8 @@ pages; raw_frame = pageA ++ pageB.
 
 | `--mode` | Resolution | Colors | Notes |
 |----------|------------|--------|-------|
-| `ted-320x200` | 320×200 | 2 / 8×8 cell | hires (C64-hires-like) |
-| `ted-160x200` | 160×200 | 4 / 4×8 cell | multicolor: 2 global + 2 per-cell |
+| `ted-hires` | 320×200 | 2 / 8×8 cell | hires (C64-hires-like) |
+| `ted-multicolor` | 160×200 | 4 / 4×8 cell | multicolor: 2 global + 2 per-cell |
 
 Plus/4 / C16. Fixed 121-color palette (`palette::kTedPalette`, 128 entries
 indexed `(luma<<4)|chroma`; chroma 0 = black at every luma → 121 unique).

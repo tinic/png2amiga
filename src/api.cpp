@@ -119,8 +119,8 @@ amiga::Mode parse_mode(const std::string& s) {
     if (s == "thomson-to8-160x16") return amiga::Mode::thomson_to8_160x16;
     if (s == "thomson-to8-320x4") return amiga::Mode::thomson_to8_320x4;
     if (s == "thomson-to8-640x2") return amiga::Mode::thomson_to8_640x2;
-    if (s == "ted-320x200") return amiga::Mode::ted_320x200;
-    if (s == "ted-160x200") return amiga::Mode::ted_160x200;
+    if (s == "ted-hires") return amiga::Mode::ted_hires;
+    if (s == "ted-multicolor") return amiga::Mode::ted_multicolor;
     return amiga::Mode::lores;
 }
 

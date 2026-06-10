@@ -203,8 +203,8 @@ const ALL_MODES: ModeOption[] = [
   { value: 'thomson-to8-320x4',  label: 'TO8 320×4 (2 planes)',          chipset: 'thomson' },
   { value: 'thomson-to8-640x2',  label: 'TO8 640×2 (1bpp)',              chipset: 'thomson' },
   // Commodore TED (Plus/4, C16) — fixed 121-color palette.
-  { value: 'ted-320x200', label: 'TED 320×200 (2/8×8 cell)',  chipset: 'ted' },
-  { value: 'ted-160x200', label: 'TED 160×200 (4/4×8 cell)',  chipset: 'ted' },
+  { value: 'ted-multicolor', label: 'Multicolor (160x200, 4/cell)', chipset: 'ted' },
+  { value: 'ted-hires', label: 'Hires (320x200, 2/cell)',      chipset: 'ted' },
 ]
 
 // Chipsets whose mode list is exactly `m.chipset === chipset`.
@@ -863,8 +863,8 @@ const MODE_PAR: Record<string, number> = {
   'thomson-to8-160x16': 1.667,
   'thomson-to8-640x2':  0.417,
   // Commodore TED — same PAL VIC-II geometry as the C64.
-  'ted-320x200': 0.936,
-  'ted-160x200': 1.872,
+  'ted-hires': 0.936,
+  'ted-multicolor': 1.872,
 }
 
 export function modePar(mode: string): number { return MODE_PAR[mode] ?? 1 }
@@ -924,8 +924,8 @@ const DOS_PREVIEW_SCALE: Record<string, PreviewScale> = {
   'thomson-to8-160x16':  { sx: 4, sy: 2 },
   'thomson-to8-640x2':   { sx: 1, sy: 2 },
   // TED — hires 320 (2×2), multicolor 160 (4×2).
-  'ted-320x200':         { sx: 2, sy: 2 },
-  'ted-160x200':         { sx: 4, sy: 2 },
+  'ted-hires':         { sx: 2, sy: 2 },
+  'ted-multicolor':         { sx: 4, sy: 2 },
 }
 
 // Generic Amiga-mode preview scale by (hires?, interlace?). 1×1 for
@@ -993,7 +993,7 @@ const FIXED_DEFAULT_DEPTH: Record<string, number> = {
   'thomson-to7-320x16': 4, 'thomson-to8-320x16': 4, 'thomson-to8-160x16': 4,
   'thomson-to8-320x4': 2, 'thomson-to8-640x2': 1,
   // TED: hires 1bpp (2/cell), multicolor 2bpp (4/cell).
-  'ted-320x200': 1, 'ted-160x200': 2,
+  'ted-hires': 1, 'ted-multicolor': 2,
 }
 
 // Family-level fallbacks for defaultDepth. Tried in order after the

@@ -2,8 +2,8 @@
 
 // Commodore TED (Plus/4, C16) encoders. Two modes:
 //
-//   ted_320x200 — hires, 2 colors per 8×8 cell (C64-hires-like).
-//   ted_160x200 — multicolor, 4 colors per 4×8 cell: 2 global (whole-image
+//   ted_hires — hires, 2 colors per 8×8 cell (C64-hires-like).
+//   ted_multicolor — multicolor, 4 colors per 4×8 cell: 2 global (whole-image
 //                 background pair $FF15/$FF16) + 2 per-cell (C64-multicolor-
 //                 like). 160 logical px → 2:1 hardware doubling.
 //

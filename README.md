@@ -271,8 +271,8 @@ Commodore Plus/4 and C16 (TED video chip). Fixed 121-color palette
 
 | Mode | Resolution | Colors | Notes |
 |------|-----------|--------|-------|
-| `ted-320x200` | 320×200 | 2 / 8×8 cell | hires (C64-hires-like) |
-| `ted-160x200` | 160×200 | 4 / 4×8 cell | multicolor: 2 global + 2 per-cell |
+| `ted-hires` | 320×200 | 2 / 8×8 cell | hires (C64-hires-like) |
+| `ted-multicolor` | 160×200 | 4 / 4×8 cell | multicolor: 2 global + 2 per-cell |
 
 Thomson + TED: fixed-buffer modes, square pixels (PAR 1.0). Output: PNG
 preview (always) + generic C header (`.h`: `const unsigned char` arrays
@@ -594,7 +594,7 @@ Modes:
     GBA:    gba-mode3 | gba-mode4 | gba-mode5
     Thomson: thomson-to7-320x16 | thomson-to8-320x16 |
             thomson-to8-160x16 | thomson-to8-320x4 | thomson-to8-640x2
-    TED:    ted-320x200 | ted-160x200
+    TED:    ted-hires | ted-multicolor
   --depth <1-8>                   Bitplane depth (default: 5)
   --chipset ocs|aga               Amiga chipset (default: auto)
   --dual-playfield, --dpf         Encode into PF2 (depth 3 OCS / 4 AGA)

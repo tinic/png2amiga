@@ -1569,12 +1569,12 @@ sys.exit(0 if got==expect else (print(f'expected {expect}, got {got}') or 1))"
         "to8b2.png|--mode thomson-to8-640x2"
         "to8b2.h|--mode thomson-to8-640x2 --symbol to8b2_test"
         "to8b2.bin|--mode thomson-to8-640x2"
-        "tedhi.png|--mode ted-320x200"
-        "tedhi.h|--mode ted-320x200 --symbol tedhi_test"
-        "tedhi.bin|--mode ted-320x200"
-        "tedmc.png|--mode ted-160x200"
-        "tedmc.h|--mode ted-160x200 --symbol tedmc_test"
-        "tedmc.bin|--mode ted-160x200"
+        "tedhi.png|--mode ted-hires"
+        "tedhi.h|--mode ted-hires --symbol tedhi_test"
+        "tedhi.bin|--mode ted-hires"
+        "tedmc.png|--mode ted-multicolor"
+        "tedmc.h|--mode ted-multicolor --symbol tedmc_test"
+        "tedmc.bin|--mode ted-multicolor"
     )
     foreach(spec ${thomson_ted_outputs})
         string(REPLACE "|" ";" spec_parts ${spec})
@@ -1622,7 +1622,7 @@ sys.exit(0 if got==expect else (print(f'expected {expect}, got {got}') or 1))"
     set_tests_properties("thomson-iff-rejected" PROPERTIES WILL_FAIL TRUE)
     add_test(
         NAME "ted-reserve-rejected"
-        COMMAND png2amiga --mode ted-320x200 --reserve-range 6 00ff00
+        COMMAND png2amiga --mode ted-hires --reserve-range 6 00ff00
                 ${PNG2AMIGA_TEST_INPUT} ${CMAKE_BINARY_DIR}/test_ted_rsv.h
     )
     set_tests_properties("ted-reserve-rejected" PROPERTIES WILL_FAIL TRUE)
@@ -2275,10 +2275,10 @@ sys.exit(0 if got==expect else (print(f'expected {expect}, got {got}') or 1))"
         COMMAND ${_equiv_chk} --in ${_pal_makena_in} -- --mode thomson-to8-320x4)
     add_test(NAME "api-equiv-thomson-to8-640x2"
         COMMAND ${_equiv_chk} --in ${_pal_makena_in} -- --mode thomson-to8-640x2)
-    add_test(NAME "api-equiv-ted-320x200"
-        COMMAND ${_equiv_chk} --in ${_pal_makena_in} -- --mode ted-320x200)
-    add_test(NAME "api-equiv-ted-160x200"
-        COMMAND ${_equiv_chk} --in ${_pal_makena_in} -- --mode ted-160x200)
+    add_test(NAME "api-equiv-ted-hires"
+        COMMAND ${_equiv_chk} --in ${_pal_makena_in} -- --mode ted-hires)
+    add_test(NAME "api-equiv-ted-multicolor"
+        COMMAND ${_equiv_chk} --in ${_pal_makena_in} -- --mode ted-multicolor)
     add_test(NAME "api-equiv-cga-text80x100"
         COMMAND ${_equiv_chk} --in ${_pal_makena_in} -- --mode cga-text80x100)
     # gpu_restart_quantize made deterministic in v1.66.0 (GPU argmin
