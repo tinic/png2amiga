@@ -75,7 +75,7 @@ PaletteEntry snap_to8(const Color3f& lin) {
 std::vector<PaletteEntry> quantize_to8(const Image& image, std::size_t n) {
     std::vector<PaletteEntry> out;
     for (std::size_t k = n; k <= 256 && out.size() < n; k *= 2) {
-        auto pal = quantize::quantize(image, k, quantize::Algorithm::median_cut, 0.0f);
+        auto pal = quantize::quantize(image, k, quantize::Algorithm::median_cut, 0);
         if (!pal) break;
         std::size_t before = out.size();
         for (auto& c : pal->colors) {
