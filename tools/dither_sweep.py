@@ -139,6 +139,13 @@ def psnr(target: Path, dithered: Path) -> float:
 BLOCK_IMAGES = ['dragon.png', 'fantasy.png', 'face.png']
 BLOCK_GLYPH_IMAGES = ['dragon.png', 'fantasy.png', 'head.png']  # head has glyph-friendly detail
 AMIGA_IMAGES = ['electrichues02.jpg', 'chuck31.png', 'lovers.jpg']
+# Thomson / TED tuning set: diverse mix of art / photo / texture from
+# examples/ — the 3-image block-lowres set (C64 blocky art) over-fits and
+# its optima regress on photographic content (validated 2026-06-10:
+# block-lowres-swept Thomson/TED values lost 0.2-0.6 mean S2 on the full
+# 23-image examples set).
+THOMSON_TED_IMAGES = ['asterix.png', 'fantasy.png', 'brick.png',
+                      'macaw.jpg', 'photo.jpg', 'maui.jpg']
 
 # Method buckets — matches the structure of dither_tuning.cpp.
 PALETTE_AWARE = [
@@ -185,6 +192,17 @@ BLOCK_MODES: list[ModeSpec] = [
     ModeSpec('genesis-h40', 'genesis', 320, 224, BLOCK_IMAGES, BLOCK_LOWRES),
     ModeSpec('genesis-h32-sh', 'genesis', 256, 224, BLOCK_IMAGES, BLOCK_LOWRES),
     ModeSpec('genesis-h40-sh', 'genesis', 320, 224, BLOCK_IMAGES, BLOCK_LOWRES),
+    # Thomson / TED: ED + structure-aware only (the per-cell pair pick
+    # routes everything through diffuse_raw_buffer; Yliluoma palette-aware
+    # ordered methods are gated off for these modes).
+    ModeSpec('thomson-to7-320x16', 'thomson', 320, 200, THOMSON_TED_IMAGES, EXAMPLES,
+             methods=ERROR_DIFFUSION + STRUCTURE_AWARE),
+    ModeSpec('thomson-to8-320x16', 'thomson', 320, 200, THOMSON_TED_IMAGES, EXAMPLES,
+             methods=ERROR_DIFFUSION + STRUCTURE_AWARE),
+    ModeSpec('ted-hires', 'ted', 320, 200, THOMSON_TED_IMAGES, EXAMPLES,
+             methods=ERROR_DIFFUSION + STRUCTURE_AWARE),
+    ModeSpec('ted-multicolor', 'ted', 160, 200, THOMSON_TED_IMAGES, EXAMPLES,
+             methods=ERROR_DIFFUSION + STRUCTURE_AWARE),
 ]
 
 # Amiga modes: lores/hires across depths, ham6/8, ehb. Use full examples set.
@@ -390,15 +408,20 @@ def main() -> int:
     p = argparse.ArgumentParser(description=__doc__,
                                 formatter_class=argparse.RawDescriptionHelpFormatter)
     p.add_argument('--family',
-                   choices=['all', 'amiga', 'c64', 'snes', 'genesis', 'block'],
+                   choices=['all', 'amiga', 'c64', 'snes', 'genesis', 'thomson',
+                            'ted', 'block'],
                    default='all',
-                   help='Mode family ("block" = c64+snes+genesis)')
+                   help='Mode family ("block" = every fixed-buffer family)')
     p.add_argument('--mode', help='Single mode name (matches ModeSpec.name)')
     p.add_argument('--method', help='Single dither method (else all applicable)')
     p.add_argument('--methods', help='CSV of methods')
     p.add_argument('--strengths',
                    default='0.50,0.60,0.70,0.80,0.85,0.90,0.95,1.00',
                    help='CSV of dither strengths to test')
+    p.add_argument('--error-clamps',
+                   help='CSV of --error-clamp values; the full sweep runs '
+                        'once per clamp (outer axis). Omit = encoder default '
+                        '(the dither_tuning table value).')
     p.add_argument('--metric', choices=['msssim', 'psnr', 's2'],
                    default='msssim',
                    help='msssim/psnr computed in Python; s2 parsed from '
@@ -454,13 +477,26 @@ def main() -> int:
           f"× {len(strengths)} strength(s)  (metric={args.metric})")
     print(f"work_dir: {work_dir}")
 
-    all_results: dict[str, dict] = {}
+    clamps: list[float | None] = (
+        [float(c) for c in args.error_clamps.split(',')] if args.error_clamps
+        else [None])
     try:
-        for spec in modes:
-            r = sweep_one(spec, methods, strengths, args.metric, work_dir)
-            if r:
-                all_results[spec.name] = r
-        print_summary(all_results, strengths, args.metric)
+        for ec in clamps:
+            run_modes = modes
+            if ec is not None:
+                print(f"\n######## error-clamp {ec:.2f} ########")
+                run_modes = [
+                    ModeSpec(m.name, m.family, m.width, m.height, m.images,
+                             m.image_dir, m.methods,
+                             m.extra_args + ['--error-clamp', f'{ec:.2f}'])
+                    for m in modes
+                ]
+            all_results: dict[str, dict] = {}
+            for spec in run_modes:
+                r = sweep_one(spec, methods, strengths, args.metric, work_dir)
+                if r:
+                    all_results[spec.name] = r
+            print_summary(all_results, strengths, args.metric)
     finally:
         if work_ctx is not None:
             work_ctx.cleanup()

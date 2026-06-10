@@ -359,6 +359,128 @@ Defaults defaults_for(const Context& ctx) {
         }
     }
 
+    // ---- Thomson forme-couleur + TED -------------------------------------
+    // Swept 2026-06-10 (tools/dither_sweep.py, THOMSON_TED_IMAGES diverse
+    // art/photo/texture set, SSIMULACRA2, strength grid x clamp
+    // {0.20, 0.35, 0.50}) against the segment-scorer encoders -- these
+    // modes previously fell through to the lores-d=5 fallback below.
+    // NOTE: a first pass on the 3-image block-lowres set (C64 blocky art)
+    // over-fit badly -- its optima LOST 0.2-0.6 mean S2 on the full
+    // examples set. Tune these modes on the diverse set only.
+    //
+    // TO7/70's bright-only fixed palette diffuses huge legitimate
+    // residuals (black-mixing), so tight clamps hurt: ec=0.20 costs ~3 S2
+    // vs 0.50. The TED modes also prefer the loose 0.50. TO8's auto
+    // palette is mixed: FS wants the 0.35 default, heavier kernels 0.20.
+    // The FS entry (and bucket default) of each block was re-anchored on
+    // the FULL 23-image examples set — the 6-image margins were inside
+    // noise for FS and the full set reordered them (TO8 FS especially:
+    // 6-image said 0.70/0.50, full set says the old 0.76/0.35 exactly).
+    if (ctx.mode == amiga::Mode::thomson_to7_320x16) {
+        switch (ctx.method) {
+        case dither::Method::floyd_steinberg:
+            return Defaults{0.76f, 0.50f};  // S2 -55.71 (full examples-23)
+        case dither::Method::atkinson:
+            return Defaults{0.80f, 0.50f};  // S2 -51.96
+        case dither::Method::sierra_lite:
+            return Defaults{0.80f, 0.50f};  // S2 -51.20
+        case dither::Method::stucki:
+            return Defaults{0.70f, 0.50f};  // S2 -50.30
+        case dither::Method::jarvis:
+            return Defaults{0.90f, 0.50f};  // S2 -50.56
+        case dither::Method::gilbert:
+            return Defaults{0.50f, 0.35f};  // S2 -72.55 (poor fit; clamp unswept)
+        case dither::Method::riemersma:
+            return Defaults{0.50f, 0.35f};  // S2 -63.24 (poor fit; clamp unswept)
+        case dither::Method::structure_fs:
+            return Defaults{0.80f, 0.35f};  // S2 -50.76
+        case dither::Method::contrast_fs:
+            return Defaults{0.80f, 0.50f};  // S2 -50.70
+        case dither::Method::zhoufang:
+            return Defaults{0.70f, 0.35f};  // S2 -51.25
+        default:
+            return Defaults{0.76f, 0.50f};  // FS tuning as the bucket default
+        }
+    }
+    if (ctx.mode == amiga::Mode::thomson_to8_320x16) {
+        switch (ctx.method) {
+        case dither::Method::floyd_steinberg:
+            return Defaults{0.76f, 0.35f};  // S2 -24.22 (full examples-23)
+        case dither::Method::atkinson:
+            return Defaults{0.80f, 0.20f};  // S2 -6.08
+        case dither::Method::sierra_lite:
+            return Defaults{0.80f, 0.20f};  // S2 -5.88
+        case dither::Method::stucki:
+            return Defaults{0.80f, 0.20f};  // S2 -5.44
+        case dither::Method::jarvis:
+            return Defaults{0.90f, 0.20f};  // S2 -6.02
+        case dither::Method::gilbert:
+            return Defaults{0.50f, 0.35f};  // S2 -28.88 (poor fit; clamp unswept)
+        case dither::Method::riemersma:
+            return Defaults{0.60f, 0.35f};  // S2 -25.30 (poor fit; clamp unswept)
+        case dither::Method::structure_fs:
+            return Defaults{0.80f, 0.20f};  // S2 -7.39
+        case dither::Method::contrast_fs:
+            return Defaults{0.80f, 0.35f};  // S2 -8.76
+        case dither::Method::zhoufang:
+            return Defaults{0.80f, 0.20f};  // S2 -10.47
+        default:
+            return Defaults{0.76f, 0.35f};  // FS tuning as the bucket default
+        }
+    }
+    if (ctx.mode == amiga::Mode::ted_hires) {
+        switch (ctx.method) {
+        case dither::Method::floyd_steinberg:
+            return Defaults{0.70f, 0.50f};  // S2 -2.52 (full examples-23)
+        case dither::Method::atkinson:
+            return Defaults{0.60f, 0.50f};  // S2  -5.55
+        case dither::Method::sierra_lite:
+            return Defaults{0.60f, 0.50f};  // S2  -4.68
+        case dither::Method::stucki:
+            return Defaults{0.60f, 0.50f};  // S2  -6.10
+        case dither::Method::jarvis:
+            return Defaults{0.60f, 0.50f};  // S2  -6.40
+        case dither::Method::gilbert:
+            return Defaults{0.50f, 0.35f};  // S2 -25.02 (poor fit)
+        case dither::Method::riemersma:
+            return Defaults{0.50f, 0.35f};  // S2 -24.80 (poor fit)
+        case dither::Method::structure_fs:
+            return Defaults{0.60f, 0.50f};  // S2 -10.55
+        case dither::Method::contrast_fs:
+            return Defaults{0.70f, 0.50f};  // S2 -14.34
+        case dither::Method::zhoufang:
+            return Defaults{0.60f, 0.50f};  // S2 -10.56
+        default:
+            return Defaults{0.70f, 0.50f};  // FS tuning as the bucket default
+        }
+    }
+    if (ctx.mode == amiga::Mode::ted_multicolor) {
+        switch (ctx.method) {
+        case dither::Method::floyd_steinberg:
+            return Defaults{0.60f, 0.50f};  // S2 21.65 (full examples-23)
+        case dither::Method::atkinson:
+            return Defaults{0.60f, 0.50f};  // S2 17.62
+        case dither::Method::sierra_lite:
+            return Defaults{0.60f, 0.50f};  // S2 18.61
+        case dither::Method::stucki:
+            return Defaults{0.60f, 0.50f};  // S2 16.71
+        case dither::Method::jarvis:
+            return Defaults{0.70f, 0.50f};  // S2 16.17
+        case dither::Method::gilbert:
+            return Defaults{0.50f, 0.35f};  // S2  2.97 (poor fit)
+        case dither::Method::riemersma:
+            return Defaults{0.50f, 0.35f};  // S2  0.40 (poor fit)
+        case dither::Method::structure_fs:
+            return Defaults{0.60f, 0.50f};  // S2  8.67
+        case dither::Method::contrast_fs:
+            return Defaults{0.70f, 0.50f};  // S2  5.48
+        case dither::Method::zhoufang:
+            return Defaults{0.60f, 0.50f};  // S2  8.59
+        default:
+            return Defaults{0.60f, 0.50f};  // FS tuning as the bucket default
+        }
+    }
+
     // ---- Per-method ED fallback ------------------------------------------
     // Reached only when no mode-context entry matched (unsupported modes,
     // chunky / DOS / SNES / Genesis / etc.). These are the lores-d=5 sweep
