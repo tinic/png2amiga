@@ -862,6 +862,45 @@ Result<EncodeResult> encode_hires(const Image& image,
     return res;
 }
 
+namespace {
+
+// Shared FLI/AFLI row-strip pair scoring (ported from thomson.cpp
+// forme-couleur — same per-scanline attribute geometry, retuned for the
+// C64 palette): with a dither method the colors of a strip can MIX, so a
+// candidate set is scored per pixel as the min over its OKLab segments of
+// distance-to-segment plus the mixing-noise penalty λ·u(1−u)·|A−B|²
+// (Bernoulli mix variance — keeps far-apart pairs from winning on mean
+// alone and showing up as checkerboard noise). Plain OKLab distance: the
+// C64 palette has real darks, so Thomson's chroma-weighted metric and
+// neighbor-coherence discount both LOSE here (sweep dcd2f83). The strip
+// decision happens lazily at strip entry inside the ED pass, on the
+// 3×3-blurred target shifted by the damped feedback delta — raw deltas
+// carry dither PHASE error and chasing them oscillates.
+constexpr float kRowPairMixNoiseLambda = 0.1875f;
+constexpr float kRowPairFeedbackScale = 0.5f;
+constexpr float kRowPairFeedbackClamp = 0.04f;
+
+inline float strip_segment_score(const color_space::OKLab& t,
+                                 const color_space::OKLab& a,
+                                 const color_space::OKLab& b) {
+    float dL = b.L - a.L, da = b.a - a.a, db = b.b - a.b;
+    float seg_sq = color_space::fma_dist_sq(dL, da, db);
+    if (seg_sq <= 0.0f) return color_space::fma_dist_sq(t, a);
+    float u = ((t.L - a.L) * dL + (t.a - a.a) * da + (t.b - a.b) * db) / seg_sq;
+    u = std::clamp(u, 0.0f, 1.0f);
+    float eL = t.L - (a.L + u * dL);
+    float ea = t.a - (a.a + u * da);
+    float eb = t.b - (a.b + u * db);
+    return color_space::fma_dist_sq(eL, ea, eb) +
+           kRowPairMixNoiseLambda * u * (1.0f - u) * seg_sq;
+}
+
+inline float damp_feedback(float v) {
+    return std::clamp(v * kRowPairFeedbackScale, -kRowPairFeedbackClamp, kRowPairFeedbackClamp);
+}
+
+}  // namespace
+
 // ---------------------------------------------------------------------------
 // c64-FLI: 160×200 multicolor + per-row (c1, c2) screen colors
 //          within each 4×8 cell + per-cell color_ram (c3) + global bg.
@@ -934,7 +973,15 @@ Result<EncodeResult> encode_fli(const Image& image,
     // pair = top-2 of that row's pixels excluding bg and cr. Same
     // fix as encode_multicolor — stops the per-row 4-color palette
     // from snapping into 1 dominant color and creating cell-boundary
-    // blocking under error diffusion. Ported from png2c64 b46e2a1.
+    // blocking under error diffusion.
+    //
+    // NOTE: the AFLI/Thomson segment-scored quad selection (static
+    // segment-scored cr pre-pass + lazy ED-feedback (c1, c2) per strip,
+    // min over the quad's 6 OKLab segments) was implemented and measured
+    // here 2026-06-09: a quality WASH (examples-23 mean +0.09 dB /
+    // S2 −0.12; λ and feedback probes all worse) at 4× the encode time.
+    // 4 colors per 4-px row is loose enough that the histogram pick
+    // barely binds — don't re-attempt without a new idea.
     if (settings.method != dither::Method::none) {
         auto fs = global_fs_indices(image, pal_lab);
         for (std::size_t cy = 0; cy < kRows; ++cy) {
@@ -1175,22 +1222,9 @@ Result<EncodeResult> encode_afli(const Image& image,
     //   - method == none: per-row brute force C(16,2) = 120 pairs.
     std::vector<std::array<std::array<std::uint8_t, 2>, kHiCellH>> cell_pairs(kHiRows * kHiCols);
 
-    // Dither-aware per-row-strip pair scoring, ported from the Thomson
-    // forme-couleur encoder (src/thomson.cpp) — same 8×1 attribute
-    // geometry. Score all 136 pairs against the 3×3-blurred OKLab target
-    // shifted by the (damped) ED feedback delta at strip entry:
-    //   • distance to the OKLab segment between the pair under a
-    //     chroma-weighted inner product (a,b × kRowPairChromaWeight)
-    //   • mixing-noise penalty λ·u(1−u)·|a−b|² (Bernoulli mix variance)
-    //   • coherence discount for already-decided left/right/above strips
-    // The OKLab segment matches what the OKLab ED pass realizes; the
-    // entry delta is damped ×0.5 and clamped ±0.04/channel because raw
-    // deltas carry dither PHASE error and chasing them oscillates.
-    static constexpr float kRowPairMixNoiseLambda = 0.1875f;
-    static constexpr float kRowPairChromaWeight = 1.0f;
-    static constexpr float kRowPairCoherenceBonus = 0.0f;
-    static constexpr float kRowPairFeedbackScale = 0.5f;
-    static constexpr float kRowPairFeedbackClamp = 0.04f;
+    // Dither-aware per-row-strip pair scoring (shared strip_segment_score
+    // block above encode_fli): all 136 pairs against the 3×3-blurred OKLab
+    // target shifted by the damped ED feedback delta at strip entry.
     std::vector<std::uint8_t> strip_decided(kHiCols * H, 0);
     std::vector<color_space::OKLab> blurred_lab;
     if (settings.method != dither::Method::none) {
@@ -1208,54 +1242,21 @@ Result<EncodeResult> encode_afli(const Image& image,
             const auto& s = blurred_lab[y * W + cx * kHiCellW + px];
             strip[px] = {s.L + delta.L, s.a + delta.a, s.b + delta.b};
         }
-        std::size_t row = y * kHiCols;
-        auto strip_pair = [&](std::size_t sx, std::size_t sy) -> std::array<std::uint8_t, 2>& {
-            return cell_pairs[(sy / kHiCellH) * kHiCols + sx][sy % kHiCellH];
-        };
-        const std::array<std::uint8_t, 2>* nb[3] = {
-            (cx > 0 && strip_decided[row + cx - 1]) ? &strip_pair(cx - 1, y) : nullptr,
-            (cx + 1 < kHiCols && strip_decided[row + cx + 1]) ? &strip_pair(cx + 1, y) : nullptr,
-            (y > 0 && strip_decided[row - kHiCols + cx]) ? &strip_pair(cx, y - 1) : nullptr,
-        };
         float best_err = std::numeric_limits<float>::infinity();
         std::array<std::uint8_t, 2> best{0, 0};
         for (std::size_t i = 0; i < 16; ++i) {
             for (std::size_t j = i; j < 16; ++j) {
-                const auto& a = pal_lab[i];
-                const auto& b = pal_lab[j];
-                constexpr float cw = kRowPairChromaWeight;
-                float dL = b.L - a.L, da = b.a - a.a, db = b.b - a.b;
-                float seg_sq = color_space::fma_dist_sq(dL, da, db);
-                float seg_sq_w = dL * dL + cw * (da * da + db * db);
                 float total = 0.0f;
-                for (std::size_t p = 0; p < kHiCellW; ++p) {
-                    const auto& t = strip[p];
-                    if (seg_sq > 0.0f) {
-                        float u = ((t.L - a.L) * dL + cw * (t.a - a.a) * da +
-                                   cw * (t.b - a.b) * db) /
-                                  seg_sq_w;
-                        u = std::clamp(u, 0.0f, 1.0f);
-                        float eL = t.L - (a.L + u * dL);
-                        float ea = t.a - (a.a + u * da);
-                        float eb = t.b - (a.b + u * db);
-                        total += eL * eL + cw * (ea * ea + eb * eb) +
-                                 kRowPairMixNoiseLambda * u * (1.0f - u) * seg_sq;
-                    } else {
-                        total += color_space::fma_dist_sq(t, a);
-                    }
-                }
-                std::array<std::uint8_t, 2> cand{static_cast<std::uint8_t>(i),
-                                                 static_cast<std::uint8_t>(j)};
-                for (auto* n : nb)
-                    if (n && cand == *n) total -= kRowPairCoherenceBonus;
+                for (std::size_t p = 0; p < kHiCellW; ++p)
+                    total += strip_segment_score(strip[p], pal_lab[i], pal_lab[j]);
                 if (total < best_err) {
                     best_err = total;
-                    best = cand;
+                    best = {static_cast<std::uint8_t>(i), static_cast<std::uint8_t>(j)};
                 }
             }
         }
-        strip_pair(cx, y) = best;
-        strip_decided[row + cx] = 1;
+        cell_pairs[(y / kHiCellH) * kHiCols + cx][y % kHiCellH] = best;
+        strip_decided[y * kHiCols + cx] = 1;
     };
 
     if (settings.method == dither::Method::none) {
@@ -1329,14 +1330,11 @@ Result<EncodeResult> encode_afli(const Image& image,
         std::size_t py = y % kHiCellH;
         if (settings.method != dither::Method::none && !strip_decided[y * kHiCols + cx]) {
             const auto& s = src_lab[y * W + x];
-            auto damp = [](float v) {
-                return std::clamp(v * kRowPairFeedbackScale,
-                                  -kRowPairFeedbackClamp,
-                                  kRowPairFeedbackClamp);
-            };
             decide_row_pair(cx,
                             y,
-                            {damp(target.L - s.L), damp(target.a - s.a), damp(target.b - s.b)});
+                            {damp_feedback(target.L - s.L),
+                             damp_feedback(target.a - s.a),
+                             damp_feedback(target.b - s.b)});
         }
         const auto& pair = cell_pairs[cy * kHiCols + cx][py];
         std::array<color_space::OKLab, 2> cp{
