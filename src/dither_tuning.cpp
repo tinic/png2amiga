@@ -267,7 +267,7 @@ Defaults defaults_for(const Context& ctx) {
     // ---- sliced (per-line palette evolution, no strips) ----------------------
     if (ctx.copper) {
         if (ctx.mode == amiga::Mode::ehb) return Defaults{0.9f, 0.20f};  // mean 37.83
-        if (ctx.mode == amiga::Mode::lores) {
+        if (ctx.mode == amiga::Mode::lores || ctx.mode == amiga::Mode::lores_interlace) {
             if (ctx.chipset == amiga::Chipset::aga) {
                 switch (ctx.depth) {
                 case 4:
@@ -276,6 +276,10 @@ Defaults defaults_for(const Context& ctx) {
                     return Defaults{1.0f, 0.10f};  // mean 37.19
                 case 6:
                     return Defaults{1.0f, 0.06f};  // mean 44.33
+                case 7:
+                    // Was a fall-through hole (switch jumped 6->8). Clamp
+                    // interpolates the 0.06/0.04 ramp; tuning-set mean S2 ~84.2.
+                    return Defaults{1.0f, 0.05f};
                 case 8:
                     return Defaults{1.0f, 0.04f};  // mean 48.14
                 default:
@@ -296,17 +300,33 @@ Defaults defaults_for(const Context& ctx) {
                 }
             }
         }
-        if (ctx.mode == amiga::Mode::hires) {
+        if (ctx.mode == amiga::Mode::hires || ctx.mode == amiga::Mode::hires_interlace) {
             switch (ctx.depth) {
             case 3:
                 return Defaults{1.0f, 0.10f};  // mean 26.48
             case 4:
                 return Defaults{1.0f, 0.20f};  // mean 30.68
+            // d5-8 (AGA-only; OCS hires maxes at 4bpp) were a fall-through
+            // hole -> the loose kFallback{1.0, 0.35} let FS error run away
+            // against the per-line palette, dumping opposite-hue speckle
+            // (chroma streaks) in smooth regions. Swept on the tuning set:
+            // the optimum is flat across 0.72-0.80 x 0.04-0.06; 0.76/0.06 is
+            // best-or-tied at every depth. tuning-set mean S2: d5 67.5,
+            // d6 76.6, d7 82.1, d8 85.1 (was 54.7 / 65.8 / 74.8 / 80.4).
+            case 5:
+            case 6:
+            case 7:
+            case 8:
+                return Defaults{0.76f, 0.06f};
             default:
                 break;
             }
         }
-        return kFallback;
+        // Sliced-safe fallback. Any unlisted sliced combo (low-depth
+        // stragglers: hires/lores d1-d3, OCS hires d1/d2) gets the flat-optimum
+        // tight clamp rather than the global kFallback{1.0, 0.35}, whose loose
+        // error_clamp is what produced the copper chroma-speckle regression.
+        return Defaults{0.76f, 0.06f};
     }
 
     // ---- Standard modes (no copper, no strips) ----------------------------
