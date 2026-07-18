@@ -109,9 +109,11 @@ jobs:
       # corruption) reproducibly, while the same source + gcc 15.2.0
       # UCRT64 toolchain ran clean on a self-hosted Windows builder.
       # Switching to MSVC sidesteps the unreproducible GH-CI failure.
-      # windows-latest ships Visual Studio 2022, so CMake's
-      # `Visual Studio 17 2022` generator finds cl/MSBuild directly
-      # without an extra setup step.
+      # Don't pin the generator: the windows-latest image moves between
+      # VS versions (2022 -> 2026 as of the win25-vs2026 image), so a
+      # hard-coded `Visual Studio 17 2022` breaks on the bump. Let CMake
+      # auto-detect the newest installed VS generator; `-A x64` still
+      # selects the 64-bit platform for whichever VS it picks.
       - name: Setup Python (for Pillow in ctests)
         uses: actions/setup-python@v5
         with:
@@ -123,7 +125,7 @@ jobs:
         run: cmake --version
 
       - name: Configure
-        run: cmake -B build -G "Visual Studio 17 2022" -A x64
+        run: cmake -B build -A x64
 
       - name: Build
         run: cmake --build build --config Release --parallel
