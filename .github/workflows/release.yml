@@ -20,7 +20,7 @@ jobs:
     # image, no third-party APT source needed.
     container: gcc:15
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
         with:
           submodules: true
           fetch-depth: 0  # need full history for git rev-list --count HEAD
@@ -48,7 +48,7 @@ jobs:
         run: ctest --test-dir build --output-on-failure
 
       - name: Upload binary
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v5
         with:
           name: linux-x86_64
           path: build/png2amiga
@@ -58,7 +58,7 @@ jobs:
     name: Build macOS (arm64)
     runs-on: macos-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
         with:
           submodules: true
           fetch-depth: 0  # need full history for git rev-list --count HEAD
@@ -89,7 +89,7 @@ jobs:
         run: ctest --test-dir build --output-on-failure
 
       - name: Upload binary
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v5
         with:
           name: macos-arm64
           path: build/png2amiga
@@ -99,7 +99,7 @@ jobs:
     name: Build Windows (x86_64)
     runs-on: windows-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
         with:
           submodules: true
           fetch-depth: 0  # need full history for git rev-list --count HEAD
@@ -115,7 +115,7 @@ jobs:
       # auto-detect the newest installed VS generator; `-A x64` still
       # selects the 64-bit platform for whichever VS it picks.
       - name: Setup Python (for Pillow in ctests)
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v6
         with:
           python-version: '3.x'
       - run: pip install Pillow numpy
@@ -134,7 +134,7 @@ jobs:
         run: ctest --test-dir build --build-config Release --output-on-failure
 
       - name: Upload binary
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v5
         with:
           name: windows-x86_64
           path: build/Release/png2amiga.exe
@@ -148,7 +148,7 @@ jobs:
       contents: write
     steps:
       - name: Download all build artifacts
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v5
         with:
           path: artifacts
 
@@ -164,7 +164,7 @@ jobs:
           ls -la "../png2amiga-${GITHUB_REF_NAME}.zip"
 
       - name: Create GitHub Release
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@v3
         with:
           files: png2amiga-${{ github.ref_name }}.zip
           generate_release_notes: true
