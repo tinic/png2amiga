@@ -7,7 +7,9 @@ cd "$(cd "$(dirname "$0")/.." && pwd)"
 
 echo "Building WASM..."
 emcmake cmake -B build-wasm -DCMAKE_BUILD_TYPE=Release .
-cmake --build build-wasm
+# --parallel matters more since the SIMD and scalar variants are two full
+# LTO links of the same sources.
+cmake --build build-wasm --parallel
 
 echo "Building web..."
 cd web

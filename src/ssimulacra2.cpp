@@ -11,7 +11,12 @@
 
 // SIMD backend selection — same gates as src/quantize.cpp.
 // x86_64 → AVX2+FMA (256-bit, 8 lanes); AArch64 → NEON (128-bit, 4 lanes);
-// Emscripten → WASM SIMD (128-bit, 4 lanes). No scalar fallback.
+// Emscripten → WASM SIMD (128-bit, 4 lanes); anything else → scalar.
+// The scalar backend is what the baseline x86-64 compat build
+// (-DPNG2AMIGA_BASELINE_SIMD=ON) and the no-SIMD WASM variant compile to.
+// It isn't a separate implementation: every kernel below already ends in a
+// scalar tail loop over the elements the vector arm didn't cover, so with no
+// vector arm the tail simply covers all of them. Same results, ~2-3× slower.
 #if defined(__wasm_simd128__)
 #include <wasm_simd128.h>
 #define PNG2AMIGA_BACKEND_WASM_SIMD 1
@@ -28,12 +33,23 @@
 #define PNG2AMIGA_BACKEND_AVX2 0
 #define PNG2AMIGA_BACKEND_WASM_SIMD 0
 #else
-#error "ssimulacra2.cpp requires AVX2 (x86), NEON (ARM64), or WASM SIMD."
+#define PNG2AMIGA_BACKEND_AVX2 0
+#define PNG2AMIGA_BACKEND_NEON 0
+#define PNG2AMIGA_BACKEND_WASM_SIMD 0
 #endif
 
 namespace png2amiga::ssimulacra2 {
 
 namespace {
+
+// gaussian_blur's interior loops stride by 8 and rely on a vector arm to fill
+// the span; on the scalar backend there is none, so the strided loops have to
+// be given an empty range and the boundary loops widened to the whole row.
+#if PNG2AMIGA_BACKEND_AVX2 || PNG2AMIGA_BACKEND_NEON || PNG2AMIGA_BACKEND_WASM_SIMD
+constexpr bool kHasVectorArm = true;
+#else
+constexpr bool kHasVectorArm = false;
+#endif
 
 // libjxl opsin transform: linear sRGB → mixed LMS → cube-root with bias →
 // (X = (L'-M')/2, Y = (L'+M')/2, B = S').
@@ -260,7 +276,7 @@ void blur_h_pass_row(const AlignedFloatVec& in,
             }
             vst1q_f32(trow + x + lane, acc);
         }
-#else  // WASM SIMD
+#elif PNG2AMIGA_BACKEND_WASM_SIMD
         for (std::size_t lane = 0; lane < 8; lane += 4) {
             v128_t acc = wasm_f32x4_const_splat(0.0f);
             for (int i = 0; i < kBlurSize; ++i) {
@@ -271,6 +287,8 @@ void blur_h_pass_row(const AlignedFloatVec& in,
             wasm_v128_store(trow + x + lane, acc);
         }
 #endif
+        // Scalar backend: simd_end == bx_lo, so this loop never runs and the
+        // interior tail below covers the row.
     }
     // Interior tail (< 8 left).
     for (; x < bx_hi; ++x) {
@@ -306,8 +324,11 @@ void gaussian_blur(const AlignedFloatVec& in,
 
     const std::size_t bx_lo = std::min<std::size_t>(kBlurHalf, w);
     const std::size_t bx_hi = (w >= static_cast<std::size_t>(kBlurHalf)) ? (w - kBlurHalf) : bx_lo;
-    const std::size_t simd_end = (bx_hi > bx_lo) ? (bx_lo + ((bx_hi - bx_lo) & ~7u)) : bx_lo;
-    const std::size_t simd_w_end = w & ~7u;
+    // Empty vector spans on the scalar backend — the per-element loops that
+    // normally handle only the boundaries then handle everything.
+    const std::size_t simd_end =
+        (kHasVectorArm && bx_hi > bx_lo) ? (bx_lo + ((bx_hi - bx_lo) & ~7u)) : bx_lo;
+    const std::size_t simd_w_end = kHasVectorArm ? (w & ~7u) : 0;
 
     // Prime the ring with rows [0, kBlurHalf-1]. Earlier rows
     // (negative indices) are zero-padded by skipping them in the V
@@ -365,7 +386,7 @@ void gaussian_blur(const AlignedFloatVec& in,
                 }
                 vst1q_f32(orow + x + lane, acc);
             }
-#else  // WASM SIMD
+#elif PNG2AMIGA_BACKEND_WASM_SIMD
             for (std::size_t lane = 0; lane < 8; lane += 4) {
                 v128_t acc = wasm_f32x4_const_splat(0.0f);
                 for (int i = 0; i < kBlurSize; ++i) {
@@ -971,7 +992,7 @@ void multiply(const AlignedFloatVec& a, const AlignedFloatVec& b, AlignedFloatVe
         float32x4_t vb = vld1q_f32(pb + i);
         vst1q_f32(po + i, vmulq_f32(va, vb));
     }
-#else  // WASM SIMD
+#elif PNG2AMIGA_BACKEND_WASM_SIMD
     const std::size_t simd_end = n & ~3u;
     for (; i < simd_end; i += 4) {
         v128_t va = wasm_v128_load(pa + i);

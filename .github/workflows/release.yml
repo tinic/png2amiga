@@ -140,6 +140,28 @@ jobs:
           path: build/Release/png2amiga.exe
           if-no-files-found: error
 
+      # Second binary at the plain x86-64 baseline (no AVX2/FMA/SSE4.1) for
+      # pre-Haswell Intel / pre-Zen AMD, where the default build dies with an
+      # illegal instruction before printing anything. Same sources, scalar
+      # kernels — a bit slower, and its output differs from the AVX2 build in
+      # the last fp bits (~55-70 dB PSNR apart, i.e. a handful of pixels
+      # landing on a different palette entry).
+      - name: Configure (baseline SIMD)
+        run: cmake -B build-compat -A x64 -DPNG2AMIGA_BASELINE_SIMD=ON
+
+      - name: Build (baseline SIMD)
+        run: cmake --build build-compat --config Release --parallel
+
+      - name: Test (baseline SIMD)
+        run: ctest --test-dir build-compat --build-config Release --output-on-failure
+
+      - name: Upload compat binary
+        uses: actions/upload-artifact@v5
+        with:
+          name: windows-x86_64-compat
+          path: build-compat/Release/png2amiga.exe
+          if-no-files-found: error
+
   release:
     name: Package and publish
     needs: [build-linux, build-macos, build-windows]
@@ -158,6 +180,8 @@ jobs:
           cp artifacts/linux-x86_64/png2amiga       release/png2amiga-linux-x86_64
           cp artifacts/macos-arm64/png2amiga        release/png2amiga-macos-arm64
           cp artifacts/windows-x86_64/png2amiga.exe release/png2amiga-windows-x86_64.exe
+          cp artifacts/windows-x86_64-compat/png2amiga.exe \
+             release/png2amiga-windows-x86_64-compat.exe
           chmod +x release/png2amiga-linux-x86_64 release/png2amiga-macos-arm64
           cd release
           zip "../png2amiga-${GITHUB_REF_NAME}.zip" *

@@ -119,9 +119,9 @@ cmake -B build -DCMAKE_C_COMPILER=gcc-15 -DCMAKE_CXX_COMPILER=g++-15 .
 cmake --build build
 ctest --test-dir build --output-on-failure
 
-# WASM (requires Emscripten)
+# WASM (requires Emscripten) — builds both the SIMD and scalar variants
 emcmake cmake -B build-wasm -DCMAKE_BUILD_TYPE=Release .
-cmake --build build-wasm
+cmake --build build-wasm --parallel
 
 # Web frontend
 cd web && npm install && npm run dev
@@ -132,6 +132,28 @@ cd web && npm install && npm run dev
 
 Pre-built Linux / macOS / Windows binaries are attached to each
 [GitHub release](https://github.com/tinic/png2amiga/releases).
+
+### CPU requirements
+
+The default x86-64 binaries need **AVX2** — Intel Haswell (2013) or AMD
+Zen (2017) and newer. On an older CPU they die with an illegal
+instruction before printing anything.
+
+For those machines each release also carries
+`png2amiga-windows-x86_64-compat.exe`, built for the plain x86-64
+baseline (no AVX2, no FMA, no SSE4.1). It runs the same encoders through
+their scalar paths: same features, roughly 10-60% slower depending on
+mode, and output that differs from the AVX2 binary only in the last
+floating-point bits. To build one yourself on any platform:
+
+```bash
+cmake -B build-compat -DPNG2AMIGA_BASELINE_SIMD=ON .
+cmake --build build-compat --parallel
+```
+
+The web app handles this automatically: browsers only enable WebAssembly
+SIMD on CPUs with SSE4.1, so [png2amiga.app](https://www.png2amiga.app/)
+detects support and loads a scalar WASM build where it's missing.
 
 ## Usage
 

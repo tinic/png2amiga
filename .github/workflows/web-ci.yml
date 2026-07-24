@@ -69,7 +69,11 @@ jobs:
       - name: Build WASM module
         run: |
           emcmake cmake -B build-wasm -DCMAKE_BUILD_TYPE=Release .
-          cmake --build build-wasm
+          # Builds both variants — png2amiga.{js,wasm} (SIMD) and
+          # png2amiga-nosimd.{js,wasm} (scalar, for browsers on CPUs without
+          # SSE4.1). The worker imports whichever the browser can run, so
+          # Vite needs both present to resolve.
+          cmake --build build-wasm --parallel
 
       - name: Install web deps (lockfile-only)
         working-directory: web

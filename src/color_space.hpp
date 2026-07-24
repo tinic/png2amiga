@@ -196,7 +196,16 @@ constexpr float c9 = +1.4666385867e-01f;
 //   * WASM SIMD (browser)   : measured at integration time
 // ---------------------------------------------------------------------------
 
-#if defined(__x86_64__) || defined(_M_X64)
+// x86-64 path. The kernels below use _mm_fmadd_ps (FMA), _mm_blendv_ps and
+// _mm_round_ps (SSE4.1) — Haswell 2013+ / Zen 2017+. Gate on __FMA__, not on
+// the architecture alone: the baseline compat build
+// (-DPNG2AMIGA_BASELINE_SIMD=ON, see CMakeLists.txt) targets plain x86-64 and
+// must fall through to the scalar path at the bottom of this block. MSVC
+// compiles these intrinsics regardless of /arch:, so an arch-only gate would
+// silently emit vfmadd/vblendvps into the compat binary and SIGILL on exactly
+// the pre-AVX2 CPUs it exists for. GCC/Clang define __FMA__ from -mfma; MSVC
+// never defines it, so CMake defines it explicitly next to /arch:AVX2.
+#if (defined(__x86_64__) || defined(_M_X64)) && defined(__FMA__)
 #include <immintrin.h>
 
 namespace detail {
@@ -575,6 +584,11 @@ PNG2AMIGA_INLINE_HOT OKLab srgb_to_oklab_simd(Color3f c) noexcept {
 }
 
 #else  // No SIMD ISA detected — analytic scalar fallback.
+// linear_to_oklab lives in the OKLab utility block further down (it needs
+// f32x4 / lms_cbrt_to_oklab, both declared after this point). Forward-declare
+// it so this arm can call it; the definition follows in the same TU.
+inline OKLab linear_to_oklab(Color3f c) noexcept;
+
 PNG2AMIGA_INLINE_HOT Color3f srgb_to_linear_simd(Color3f c) noexcept {
     return srgb_to_linear(c);
 }

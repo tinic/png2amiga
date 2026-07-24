@@ -217,3 +217,17 @@ declare module '@wasm/png2amiga.js' {
   const createPng2Amiga: (options?: Png2AmigaModuleOptions) => Promise<Png2AmigaModule>
   export default createPng2Amiga
 }
+
+// Scalar twin of the module above, built without -msimd128 (CMakeLists.txt →
+// png2amiga_wasm_nosimd). Identical embind surface — the worker picks it when
+// the browser can't run WASM SIMD. Re-exports the SIMD module's types so the
+// two stay in sync by construction.
+declare module '@wasm/png2amiga-nosimd.js' {
+  import type {
+    Png2AmigaModule,
+    Png2AmigaModuleOptions,
+  } from '@wasm/png2amiga.js'
+
+  const createPng2Amiga: (options?: Png2AmigaModuleOptions) => Promise<Png2AmigaModule>
+  export default createPng2Amiga
+}

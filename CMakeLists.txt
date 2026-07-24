@@ -14,6 +14,11 @@ if(NOT CMAKE_BUILD_TYPE)
     set(CMAKE_BUILD_TYPE Release)
 endif()
 
+# Compile for the plain x86-64 baseline instead of AVX2+FMA. See the SIMD
+# baseline block further down for what it turns off and why.
+option(PNG2AMIGA_BASELINE_SIMD
+    "x86-64 baseline build: no AVX2/FMA/SSE4.1, runs on pre-2013 CPUs" OFF)
+
 # Capture the total commit count as a monotonically increasing build number.
 # Re-runs of cmake pick up new commits; CI runs cmake fresh each time so the
 # released binary always carries the right number. Falls back to 0 if git is
@@ -90,23 +95,43 @@ if(EMSCRIPTEN)
     # without Metal (Linux / Windows). On macOS-with-Metal the file
     # is compiled separately with apple-clang via a custom command
     # (see below) so the symbols come from there instead.
-    add_executable(png2amiga_wasm
+    # Two variants from identical sources:
+    #   png2amiga_wasm        → png2amiga.js/.wasm, built with -msimd128
+    #   png2amiga_wasm_nosimd → png2amiga-nosimd.js/.wasm, scalar arms only
+    # V8 and SpiderMonkey only enable WASM SIMD on CPUs with SSE4.1, so a
+    # pre-Penryn / pre-Bulldozer machine can't instantiate the SIMD module at
+    # all — it fails at compile time, before any of our code runs, and the app
+    # just never becomes ready. web/src/workers/wasm.worker.ts probes for SIMD
+    # support and imports whichever module the browser can actually run.
+    # Both are always built: the worker's fallback import has to resolve at
+    # Vite build time, so an optional second variant would break the web build.
+    set(PNG2AMIGA_WASM_TARGETS png2amiga_wasm png2amiga_wasm_nosimd)
+    foreach(tgt IN LISTS PNG2AMIGA_WASM_TARGETS)
+    add_executable(${tgt}
         ${PNG2AMIGA_CORE_SOURCES}
         src/quantize_metal.cpp
         src/wasm_bindings.cpp
     )
-    target_include_directories(png2amiga_wasm PRIVATE
+    target_include_directories(${tgt} PRIVATE
         src
         ${CMAKE_SOURCE_DIR}/third_party
         ${CMAKE_BINARY_DIR}/generated)
-    target_link_libraries(png2amiga_wasm PRIVATE stb spng webp_headers webpdecode webpdspdecode webputilsdecode constixel nlohmann_json)
+    target_link_libraries(${tgt} PRIVATE stb spng webp_headers webpdecode webpdspdecode webputilsdecode constixel nlohmann_json)
+    # -msimd128 on the SIMD variant only. Without it every backend gate in
+    # source (__wasm_simd128__) falls through to its scalar arm — same
+    # results, slower.
+    if("${tgt}" STREQUAL "png2amiga_wasm")
+        set(PNG2AMIGA_WASM_SIMD_FLAG -msimd128)
+    else()
+        set(PNG2AMIGA_WASM_SIMD_FLAG)
+    endif()
     # -pthread enables std::thread / std::jthread / std::mutex / std::atomic
     # in WASM via Emscripten's pthreads-on-web-workers shim. Requires the
     # browser to be cross-origin isolated (COOP/COEP headers, see
     # service/nginx.conf and vite.config.js). Pool size = the number of
     # cores reported by navigator.hardwareConcurrency, allocated lazily.
-    target_compile_options(png2amiga_wasm PRIVATE
-        -O3 -msimd128 -flto
+    target_compile_options(${tgt} PRIVATE
+        -O3 ${PNG2AMIGA_WASM_SIMD_FLAG} -flto
         -pthread
         # cga_font.hpp's `kCgaCanonicalBitmaps` consteval table calls
         # `make_glyph_canonical_bitmap` 32 times, each running a 256-step
@@ -115,11 +140,11 @@ if(EMSCRIPTEN)
         # generated at compile time. GCC's limit is much higher; this
         # flag is harmless on builds that don't need it.
         -fconstexpr-steps=10000000)
-    target_link_options(png2amiga_wasm PRIVATE
+    target_link_options(${tgt} PRIVATE
         --bind
         -O3
         -flto
-        -msimd128
+        ${PNG2AMIGA_WASM_SIMD_FLAG}
         -pthread
         # Preserve C++ function names in the .wasm so V8's --prof
         # output and Linux perf jitdump emit readable symbols instead
@@ -154,7 +179,9 @@ if(EMSCRIPTEN)
         -sDEFAULT_PTHREAD_STACK_SIZE=2097152
         -sSTACK_SIZE=2097152
     )
+    endforeach()
     set_target_properties(png2amiga_wasm PROPERTIES OUTPUT_NAME "png2amiga")
+    set_target_properties(png2amiga_wasm_nosimd PROPERTIES OUTPUT_NAME "png2amiga-nosimd")
 else()
     # --- Native CLI build ---
     include(cmake/CompilerWarnings.cmake)
@@ -253,35 +280,49 @@ else()
     target_compile_options(png2amiga PRIVATE ${PNG2AMIGA_WARNING_FLAGS})
 
     # SIMD baseline for the hand-vectorized kernels in quantize.cpp /
-    # ssimulacra2.cpp. Three backends are supported in source:
-    #   - AVX2 + FMA   → x86_64 Windows / Linux / Intel Mac
+    # ssimulacra2.cpp. Four backends are supported in source:
+    #   - AVX2 + FMA   → x86_64 Windows / Linux / Intel Mac (default)
     #   - ARM NEON     → Apple Silicon / ARM64 Linux (implicit on AArch64)
     #   - WASM SIMD    → Emscripten (set via -msimd128 on the WASM target)
-    # No scalar fallback. AVX2 is universal on modern x86_64 (Intel
+    #   - scalar       → the #else arm of every backend gate; what the
+    #                    baseline compat build below compiles down to.
+    # AVX2 is the default because it's universal on modern x86_64 (Intel
     # Haswell 2013+, AMD Zen 2017+); NEON is mandatory on AArch64.
+    #
+    # -DPNG2AMIGA_BASELINE_SIMD=ON drops every extension above the plain
+    # x86-64 baseline (no AVX2, no FMA, no SSE4.1) so the binary also runs
+    # on pre-Haswell Intel / pre-Zen AMD. Slower — the scalar arms replace
+    # the vectorized ones — but it starts instead of dying with an illegal
+    # instruction. Shipped as png2amiga-windows-x86_64-compat.exe; see
+    # .github/workflows/release.yml. On ARM64 the option is a no-op (the
+    # -mavx2 probe already fails there and NEON is the baseline ISA).
+    set(PNG2AMIGA_SIMD_TARGETS
+        png2amiga api_pipeline_smoke bench_ssimulacra2 palette_search)
+    if(PNG2AMIGA_BASELINE_SIMD)
+        message(STATUS "png2amiga: baseline SIMD build (no AVX2/FMA/SSE4.1)")
+    endif()
     if(MSVC)
-        target_compile_options(png2amiga PRIVATE /arch:AVX2)
-        target_compile_options(api_pipeline_smoke PRIVATE /arch:AVX2)
-        target_compile_options(bench_ssimulacra2 PRIVATE /arch:AVX2)
-        target_compile_options(palette_search PRIVATE /arch:AVX2)
         # /fp:contract — enable FMA contraction (a*b + c → vfmadd) only.
         # Stays under /fp:precise so reassociation, FTZ/DAZ, and
         # signed-zeros/NaN handling all keep IEEE semantics — none of
         # the Walczyk cbrt's Newton iterations are affected. Earlier
         # /fp:fast attempt regressed badly (FTZ/DAZ killed the cbrt's
         # subnormal-transit beam-search paths); contract-only avoids that.
-        target_compile_options(png2amiga PRIVATE /fp:contract)
-        target_compile_options(api_pipeline_smoke PRIVATE /fp:contract)
-        target_compile_options(bench_ssimulacra2 PRIVATE /fp:contract)
-        target_compile_options(palette_search PRIVATE /fp:contract)
-        # MSVC's /arch:AVX2 does NOT predefine __AVX2__ (gcc/clang do).
-        # ssimulacra2.cpp's SIMD-backend gate keys on __AVX2__, so define
-        # it explicitly here for the MSVC path. Same for __FMA__ (the
-        # fmadd intrinsics live in the same immintrin.h block).
-        target_compile_definitions(png2amiga PRIVATE __AVX2__ __FMA__)
-        target_compile_definitions(api_pipeline_smoke PRIVATE __AVX2__ __FMA__)
-        target_compile_definitions(bench_ssimulacra2 PRIVATE __AVX2__ __FMA__)
-        target_compile_definitions(palette_search PRIVATE __AVX2__ __FMA__)
+        # Harmless under the baseline build: without /arch:AVX2 there's no
+        # FMA instruction to contract into.
+        foreach(tgt IN LISTS PNG2AMIGA_SIMD_TARGETS)
+            target_compile_options(${tgt} PRIVATE /fp:contract)
+            if(NOT PNG2AMIGA_BASELINE_SIMD)
+                target_compile_options(${tgt} PRIVATE /arch:AVX2)
+                # MSVC's /arch:AVX2 does NOT predefine __AVX2__ (gcc/clang
+                # do). ssimulacra2.cpp's SIMD-backend gate keys on __AVX2__,
+                # so define it explicitly here for the MSVC path. Same for
+                # __FMA__ — which color_space.hpp's x86 block also gates on,
+                # so leaving it undefined is what routes the baseline build
+                # to the scalar kernels instead of emitting vfmadd.
+                target_compile_definitions(${tgt} PRIVATE __AVX2__ __FMA__)
+            endif()
+        endforeach()
         # cga_font.hpp's `kCgaCanonicalBitmaps` consteval table calls
         # `make_glyph_canonical_bitmap` 32 times, each scanning 256
         # glyphs with an O(n²) dedup walk — overshoots MSVC's default
@@ -297,11 +338,10 @@ else()
         # so universal-binary builds switching arch will Do The Right Thing.
         include(CheckCXXCompilerFlag)
         check_cxx_compiler_flag("-mavx2" PNG2AMIGA_HAS_MAVX2)
-        if(PNG2AMIGA_HAS_MAVX2)
-            target_compile_options(png2amiga PRIVATE -mavx2 -mfma)
-            target_compile_options(api_pipeline_smoke PRIVATE -mavx2 -mfma)
-            target_compile_options(bench_ssimulacra2 PRIVATE -mavx2 -mfma)
-            target_compile_options(palette_search PRIVATE -mavx2 -mfma)
+        if(PNG2AMIGA_HAS_MAVX2 AND NOT PNG2AMIGA_BASELINE_SIMD)
+            foreach(tgt IN LISTS PNG2AMIGA_SIMD_TARGETS)
+                target_compile_options(${tgt} PRIVATE -mavx2 -mfma)
+            endforeach()
         endif()
         # -ffp-contract=fast — GCC/Clang equivalent of MSVC's /fp:contract.
         # Allows FMA contraction across separate statements (e.g.
@@ -309,10 +349,9 @@ else()
         # the rest of IEEE semantics intact. See the MSVC branch above
         # for why we don't go further (full -ffast-math regresses the
         # Walczyk cbrt's subnormal transit beam-search paths).
-        target_compile_options(png2amiga PRIVATE -ffp-contract=fast)
-        target_compile_options(api_pipeline_smoke PRIVATE -ffp-contract=fast)
-        target_compile_options(bench_ssimulacra2 PRIVATE -ffp-contract=fast)
-        target_compile_options(palette_search PRIVATE -ffp-contract=fast)
+        foreach(tgt IN LISTS PNG2AMIGA_SIMD_TARGETS)
+            target_compile_options(${tgt} PRIVATE -ffp-contract=fast)
+        endforeach()
         # Native clang (Apple clang / mainline clang) caps constexpr
         # evaluation at 1,048,576 steps — same as the Emscripten path.
         # cga_font.hpp's kCgaCanonicalBitmaps table overshoots that on
