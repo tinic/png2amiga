@@ -141,10 +141,17 @@ instruction before printing anything.
 
 For those machines each release also carries
 `png2amiga-windows-x86_64-compat.exe`, built for the plain x86-64
-baseline (no AVX2, no FMA, no SSE4.1). It runs the same encoders through
-their scalar paths: same features, roughly 10-60% slower depending on
-mode, and output that differs from the AVX2 binary only in the last
-floating-point bits. To build one yourself on any platform:
+baseline (no AVX2, no FMA, no SSE4.1). Same features, same encoders via
+their scalar paths, roughly 10-60% slower depending on mode.
+
+Indexed, EHB, dithered and ordered-dither output is bit-identical to the
+AVX2 binary. HAM output is not: without an FMA instruction the
+multiply-adds in the colour-distance kernels round differently, HAM's
+op selection is sequential so one flipped decision propagates along the
+scanline, and ~3-5% of pixels end up on a different palette entry.
+Quality is unaffected (within 0.02 SSIMULACRA2 / 0.25 dB PSNR of the
+AVX2 build, in both directions) — but two builds' HAM output won't
+compare equal byte-for-byte. To build one yourself on any platform:
 
 ```bash
 cmake -B build-compat -DPNG2AMIGA_BASELINE_SIMD=ON .

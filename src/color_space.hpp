@@ -583,17 +583,47 @@ PNG2AMIGA_INLINE_HOT OKLab srgb_to_oklab_simd(Color3f c) noexcept {
     };
 }
 
-#else  // No SIMD ISA detected — analytic scalar fallback.
+#else  // No SIMD ISA detected — scalar arm.
+// Reached by the baseline x86-64 compat build, the no-SIMD WASM variant, and
+// any target without one of the three ISAs above.
+//
+// This evaluates the SAME fitted degree-9 polynomial as the SSE4/NEON/WASM
+// paths, one channel at a time, rather than calling the exact srgb_to_linear().
+// The exact form would be *more* accurate (the polynomial carries up to
+// 2.06e-04 relative error) but it would disagree with every vector build at
+// nearest-colour tie-breaks — and error diffusion plus HAM's sequential state
+// amplify a single flipped decision into whole runs of visibly different
+// pixels. Agreeing with the binaries we actually ship is worth more than the
+// last 1e-6 of accuracy. Everything downstream (LMS mix, fast_cbrt4, OKLab
+// matrix) is already backend-independent, so this is the only step that has
+// to be kept in step by hand.
+//
 // linear_to_oklab lives in the OKLab utility block further down (it needs
 // f32x4 / lms_cbrt_to_oklab, both declared after this point). Forward-declare
 // it so this arm can call it; the definition follows in the same TU.
 inline OKLab linear_to_oklab(Color3f c) noexcept;
 
+PNG2AMIGA_INLINE_HOT float srgb_to_linear_poly(float s) noexcept {
+    // Horner, same coefficient order as the _mm_fmadd_ps / vfmaq_f32 chains.
+    float p = pow24_fixed::c9;
+    p = PNG2AMIGA_FMA(p, s, pow24_fixed::c8);
+    p = PNG2AMIGA_FMA(p, s, pow24_fixed::c7);
+    p = PNG2AMIGA_FMA(p, s, pow24_fixed::c6);
+    p = PNG2AMIGA_FMA(p, s, pow24_fixed::c5);
+    p = PNG2AMIGA_FMA(p, s, pow24_fixed::c4);
+    p = PNG2AMIGA_FMA(p, s, pow24_fixed::c3);
+    p = PNG2AMIGA_FMA(p, s, pow24_fixed::c2);
+    p = PNG2AMIGA_FMA(p, s, pow24_fixed::c1);
+    p = PNG2AMIGA_FMA(p, s, pow24_fixed::c0);
+    // The vector paths compute both arms and blend; a branch is the same value.
+    return s <= 0.04045f ? s * (1.0f / 12.92f) : p;
+}
+
 PNG2AMIGA_INLINE_HOT Color3f srgb_to_linear_simd(Color3f c) noexcept {
-    return srgb_to_linear(c);
+    return {srgb_to_linear_poly(c.r), srgb_to_linear_poly(c.g), srgb_to_linear_poly(c.b)};
 }
 PNG2AMIGA_INLINE_HOT OKLab srgb_to_oklab_simd(Color3f c) noexcept {
-    return linear_to_oklab(srgb_to_linear(c));
+    return linear_to_oklab(srgb_to_linear_simd(c));
 }
 #endif
 
