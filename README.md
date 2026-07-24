@@ -133,34 +133,10 @@ cd web && npm install && npm run dev
 Pre-built Linux / macOS / Windows binaries are attached to each
 [GitHub release](https://github.com/tinic/png2amiga/releases).
 
-### CPU requirements
-
-The default x86-64 binaries need **AVX2** — Intel Haswell (2013) or AMD
-Zen (2017) and newer. On an older CPU they die with an illegal
-instruction before printing anything.
-
-For those machines each release also carries
-`png2amiga-windows-x86_64-compat.exe`, built for the plain x86-64
-baseline (no AVX2, no FMA, no SSE4.1). Same features, same encoders via
-their scalar paths, roughly 10-60% slower depending on mode.
-
-Indexed, EHB, dithered and ordered-dither output is bit-identical to the
-AVX2 binary. HAM output is not: without an FMA instruction the
-multiply-adds in the colour-distance kernels round differently, HAM's
-op selection is sequential so one flipped decision propagates along the
-scanline, and ~3-5% of pixels end up on a different palette entry.
-Quality is unaffected (within 0.02 SSIMULACRA2 / 0.25 dB PSNR of the
-AVX2 build, in both directions) — but two builds' HAM output won't
-compare equal byte-for-byte. To build one yourself on any platform:
-
-```bash
-cmake -B build-compat -DPNG2AMIGA_BASELINE_SIMD=ON .
-cmake --build build-compat --parallel
-```
-
-The web app handles this automatically: browsers only enable WebAssembly
-SIMD on CPUs with SSE4.1, so [png2amiga.app](https://www.png2amiga.app/)
-detects support and loads a scalar WASM build where it's missing.
+The x86-64 binaries need **AVX2** (Intel Haswell 2013+, AMD Zen 2017+).
+On an older CPU, use `png2amiga-windows-x86_64-compat.exe` from the same
+release — same features, somewhat slower. Building one on any platform:
+`cmake -B build-compat -DPNG2AMIGA_BASELINE_SIMD=ON .`
 
 ## Usage
 
