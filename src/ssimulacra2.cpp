@@ -38,18 +38,18 @@
 #define PNG2AMIGA_BACKEND_WASM_SIMD 0
 #endif
 
+// gaussian_blur's interior loops stride by 8 and need a vector arm to fill the
+// span. A macro rather than a constexpr bool so it can gate the loops with #if:
+// compiling them under `if constexpr` would leave `x < simd_end` comparing
+// against a folded 0 on the scalar backend, which MSVC reports as C4296
+// ("expression is always false") and /WX turns fatal.
+#define PNG2AMIGA_HAS_VECTOR_ARM \
+    (PNG2AMIGA_BACKEND_AVX2 || PNG2AMIGA_BACKEND_NEON || PNG2AMIGA_BACKEND_WASM_SIMD)
+
 namespace png2amiga::ssimulacra2 {
 
 namespace {
 
-// gaussian_blur's interior loops stride by 8 and rely on a vector arm to fill
-// the span; on the scalar backend there is none, so the strided loops have to
-// be given an empty range and the boundary loops widened to the whole row.
-#if PNG2AMIGA_BACKEND_AVX2 || PNG2AMIGA_BACKEND_NEON || PNG2AMIGA_BACKEND_WASM_SIMD
-constexpr bool kHasVectorArm = true;
-#else
-constexpr bool kHasVectorArm = false;
-#endif
 
 // libjxl opsin transform: linear sRGB → mixed LMS → cube-root with bias →
 // (X = (L'-M')/2, Y = (L'+M')/2, B = S').
@@ -233,7 +233,9 @@ void blur_h_pass_row(const AlignedFloatVec& in,
                      std::size_t w,
                      std::size_t bx_lo,
                      std::size_t bx_hi,
-                     std::size_t simd_end) {
+                     // Only read by the vector arm below; unused on the
+                     // scalar backend, where MSVC's C4100 is /WX-fatal.
+                     [[maybe_unused]] std::size_t simd_end) {
     const float* row = in.data() + static_cast<std::size_t>(sy) * w;
     float* trow = tmp.data() + static_cast<std::size_t>(sy & static_cast<int>(kRingMask)) * w;
     // Left boundary: scalar with bounds check.
@@ -252,6 +254,7 @@ void blur_h_pass_row(const AlignedFloatVec& in,
     // form where the compiler schedules better with the natural
     // loop structure.
     std::size_t x = bx_lo;
+#if PNG2AMIGA_HAS_VECTOR_ARM
     for (; x < simd_end; x += 8) {
 #if PNG2AMIGA_BACKEND_AVX2
         __m256 acc = _mm256_setzero_ps();
@@ -287,10 +290,9 @@ void blur_h_pass_row(const AlignedFloatVec& in,
             wasm_v128_store(trow + x + lane, acc);
         }
 #endif
-        // Scalar backend: simd_end == bx_lo, so this loop never runs and the
-        // interior tail below covers the row.
     }
-    // Interior tail (< 8 left).
+#endif  // PNG2AMIGA_HAS_VECTOR_ARM
+    // Interior tail (< 8 left) — the whole interior on the scalar backend.
     for (; x < bx_hi; ++x) {
         float s = 0.0f;
         for (int i = 0; i < kBlurSize; ++i) {
@@ -324,11 +326,8 @@ void gaussian_blur(const AlignedFloatVec& in,
 
     const std::size_t bx_lo = std::min<std::size_t>(kBlurHalf, w);
     const std::size_t bx_hi = (w >= static_cast<std::size_t>(kBlurHalf)) ? (w - kBlurHalf) : bx_lo;
-    // Empty vector spans on the scalar backend — the per-element loops that
-    // normally handle only the boundaries then handle everything.
-    const std::size_t simd_end =
-        (kHasVectorArm && bx_hi > bx_lo) ? (bx_lo + ((bx_hi - bx_lo) & ~7u)) : bx_lo;
-    const std::size_t simd_w_end = kHasVectorArm ? (w & ~7u) : 0;
+    const std::size_t simd_end = (bx_hi > bx_lo) ? (bx_lo + ((bx_hi - bx_lo) & ~7u)) : bx_lo;
+    [[maybe_unused]] const std::size_t simd_w_end = w & ~7u;
 
     // Prime the ring with rows [0, kBlurHalf-1]. Earlier rows
     // (negative indices) are zero-padded by skipping them in the V
@@ -352,6 +351,7 @@ void gaussian_blur(const AlignedFloatVec& in,
         const bool clip = (sy_lo < 0) || (sy_hi >= H);
         float* orow = out.data() + static_cast<std::size_t>(y) * w;
         std::size_t x = 0;
+#if PNG2AMIGA_HAS_VECTOR_ARM
         for (; x < simd_w_end; x += 8) {
 #if PNG2AMIGA_BACKEND_AVX2
             __m256 acc = _mm256_setzero_ps();
@@ -402,7 +402,8 @@ void gaussian_blur(const AlignedFloatVec& in,
             }
 #endif
         }
-        // Tail across x.
+#endif  // PNG2AMIGA_HAS_VECTOR_ARM
+        // Tail across x — the whole row on the scalar backend.
         for (; x < w; ++x) {
             float s = 0.0f;
             for (int i = 0; i < kBlurSize; ++i) {
