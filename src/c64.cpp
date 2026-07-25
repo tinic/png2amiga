@@ -1468,59 +1468,97 @@ Result<EncodeResult> encode_charset_hires(const Image& image,
     auto tap_lookup = [](std::size_t p) -> std::span<const CellTaps<kHiCellW, kHiCellH>::T, 9> {
         return std::span<const CellTaps<kHiCellW, kHiCellH>::T, 9>(taps_ch.taps[p]);
     };
-    std::array<Color3f, kHiCellPx> raw_cell{};
-    std::array<Color3f, kHiCellPx> blurred_src{};
-
     struct CellPick {
         std::array<std::uint8_t, 2> pair;  // (c0, c1) palette indices
         std::uint64_t pattern;             // 64-bit fg/bg mask
     };
     std::vector<CellPick> cells(kCells);
     std::vector<std::array<std::uint8_t, 2>> cell_pair(kCells);
-    std::array<color_space::OKLab, kHiCellPx> cell_lab{};
-    std::array<std::uint8_t, kHiCellPx> pix_idx{};
-    for (std::size_t cy = 0; cy < cs_rows; ++cy) {
-        for (std::size_t cx = 0; cx < cs_cols; ++cx) {
-            for (std::size_t py = 0; py < kHiCellH; ++py) {
-                for (std::size_t px = 0; px < kHiCellW; ++px) {
-                    auto idx = (cy * kHiCellH + py) * W + (cx * kHiCellW + px);
-                    cell_lab[py * kHiCellW + px] = src_lab[idx];
-                    raw_cell[py * kHiCellW + px] = {src_lab[idx].L, src_lab[idx].a, src_lab[idx].b};
-                }
-            }
-            if (metric == Metric::blur) {
-                for (std::size_t p = 0; p < kHiCellPx; ++p) {
-                    Color3f b{0, 0, 0};
-                    for (auto& t : taps_ch.taps[p]) {
-                        b.r += t.w * raw_cell[t.q].r;
-                        b.g += t.w * raw_cell[t.q].g;
-                        b.b += t.w * raw_cell[t.q].b;
+
+    // Standard text mode (ECM/BMM/MCM = 0/0/0) has ONE background for the
+    // whole screen — "0" bits take background colour 0 ($d021), "1" bits
+    // take the colour from bits 8-11 of the video matrix entry, i.e. the
+    // cell's colour RAM nibble (all 16 colours, unlike multicolour text
+    // mode's 3 bits). See Bauer, VIC-Article §3.7.3.1.
+    //
+    // Picking a free colour pair per cell — as this did — is the hires
+    // *bitmap* model, where screen RAM carries both colours per 8×8 block.
+    // It scored a picture the VIC cannot draw in char mode.
+    //
+    // So: brute-force the global bg, and for each candidate take the best
+    // per-cell fg. fg == bg is allowed and useful — it makes the cell a
+    // flat background block whose glyph bits are irrelevant.
+    struct BgTrial {
+        float total = std::numeric_limits<float>::infinity();
+        std::vector<std::uint8_t> fg;
+    };
+    std::vector<BgTrial> per_bg(16);
+
+    pipeline::parallel_for(16, [&](std::size_t bg_idx) {
+        const auto bg = static_cast<std::uint8_t>(bg_idx);
+        // Per-thread scratch.
+        std::array<color_space::OKLab, kHiCellPx> cell_lab{};
+        std::array<Color3f, kHiCellPx> raw_cell{};
+        std::array<Color3f, kHiCellPx> blurred_src{};
+        std::array<std::uint8_t, kHiCellPx> pix_idx{};
+        std::vector<std::uint8_t> fgs(kCells, 0);
+        float total = 0.0f;
+        for (std::size_t cy = 0; cy < cs_rows; ++cy) {
+            for (std::size_t cx = 0; cx < cs_cols; ++cx) {
+                for (std::size_t py = 0; py < kHiCellH; ++py) {
+                    for (std::size_t px = 0; px < kHiCellW; ++px) {
+                        auto idx = (cy * kHiCellH + py) * W + (cx * kHiCellW + px);
+                        cell_lab[py * kHiCellW + px] = src_lab[idx];
+                        raw_cell[py * kHiCellW + px] = {
+                            src_lab[idx].L, src_lab[idx].a, src_lab[idx].b};
                     }
-                    blurred_src[p] = b;
                 }
-            }
-            float best_err = std::numeric_limits<float>::infinity();
-            std::array<std::uint8_t, 2> best_pair{0, 0};
-            for (std::uint8_t i = 0; i < 16; ++i) {
-                for (std::uint8_t j = static_cast<std::uint8_t>(i + 1); j < 16; ++j) {
+                if (metric == Metric::blur) {
+                    for (std::size_t p = 0; p < kHiCellPx; ++p) {
+                        Color3f b{0, 0, 0};
+                        for (auto& t : taps_ch.taps[p]) {
+                            b.r += t.w * raw_cell[t.q].r;
+                            b.g += t.w * raw_cell[t.q].g;
+                            b.b += t.w * raw_cell[t.q].b;
+                        }
+                        blurred_src[p] = b;
+                    }
+                }
+                float best_err = std::numeric_limits<float>::infinity();
+                std::uint8_t best_fg_cell = bg;
+                for (std::uint8_t fg = 0; fg < 16; ++fg) {
                     float err;
+                    // pair[0] is the bg slot, so pattern bit 0 → bg.
+                    std::array<std::uint8_t, 2> pair{bg, fg};
                     if (metric == Metric::mse) {
-                        std::array<std::uint8_t, 2> pair{i, j};
                         err = cell_error_for_pair(cell_lab, pair, pal_lab, &pix_idx);
                     } else {
-                        std::array<Color3f, 2> cand{pal_s[i], pal_s[j]};
+                        std::array<Color3f, 2> cand{pal_s[bg], pal_s[fg]};
                         err = score_cell<2, kHiCellPx>(
                             raw_cell, blurred_src, nullptr, cand, metric, &pix_idx, tap_lookup);
                     }
                     if (err < best_err) {
                         best_err = err;
-                        best_pair = {i, j};
+                        best_fg_cell = fg;
                     }
                 }
+                total += best_err;
+                fgs[cy * cs_cols + cx] = best_fg_cell;
             }
-            cell_pair[cy * cs_cols + cx] = best_pair;
+        }
+        per_bg[bg_idx] = {total, std::move(fgs)};
+    });
+
+    std::uint8_t bg_color = 0;
+    float best_total = std::numeric_limits<float>::infinity();
+    for (std::size_t i = 0; i < 16; ++i) {
+        if (per_bg[i].total < best_total) {
+            best_total = per_bg[i].total;
+            bg_color = static_cast<std::uint8_t>(i);
         }
     }
+    for (std::size_t i = 0; i < kCells; ++i)
+        cell_pair[i] = {bg_color, per_bg[bg_color].fg[i]};
 
     // Pass 2: per-cell mirrored-3×3 ED.
     //
@@ -1685,8 +1723,8 @@ Result<EncodeResult> encode_charset_hires(const Image& image,
     res.unique_glyphs = unique_glyphs;
     res.bitmap = std::move(charset_data);
     res.screen_ram.assign(kCells, 0);  // char codes per cell
-    res.color_ram.assign(kCells, 0);   // upper=c1, lower=c0
-    res.bg_color = 0;
+    res.color_ram.assign(kCells, 0);   // fg nibble ($d800+), bg is global
+    res.bg_color = bg_color;
 
     // Render + pack screen / color. screen_ram[cell] = glyph index.
     for (std::size_t i = 0; i < kCells; ++i) {
@@ -1696,7 +1734,7 @@ Result<EncodeResult> encode_charset_hires(const Image& image,
             std::min(cell_to_glyph[i], std::size_t{255}));
         res.screen_ram[i] = glyph_idx;
         const auto& pair = cells[i].pair;
-        res.color_ram[i] = static_cast<std::uint8_t>(((pair[1] & 0xF) << 4) | (pair[0] & 0xF));
+        res.color_ram[i] = static_cast<std::uint8_t>(pair[1] & 0xF);  // fg only
         // Render: each pixel is c0 (bg) or c1 (fg) per the post-merge
         // glyph pattern.
         std::uint64_t merged_pattern = glyphs[cell_to_glyph[i]];
@@ -1785,21 +1823,30 @@ Result<EncodeResult> encode_charset_multicolor(const Image& image,
         return std::span<const CellTaps<kCellW, kCellH>::T, 9>(taps_mcch.taps[p]);
     };
 
-    constexpr std::uint8_t bg = 0;
     auto kCells = cs_cols * cs_rows;
     constexpr std::size_t kCellPx = kCellW * kCellH;  // 32
 
-    // Outer pass: brute-force shared (mc1, mc2). For each candidate,
-    // iterate cells, pick best fg ∈ remaining 13 colors, sum total
-    // image error. Pick global (mc1, mc2) with lowest total.
-    std::array<color_space::OKLab, kCellPx> cell_lab{};
-    std::array<Color3f, kCellPx> raw_cell{};
-    std::array<Color3f, kCellPx> blurred_src{};
+    // Outer pass: brute-force the shared triple (bg, mc1, mc2) — $d021,
+    // $d022, $d023 are all freely selectable, so pinning bg to black
+    // threw away a whole degree of freedom. 16 × C(15,2) = 1680 trials;
+    // parallel over bg the way encode_petscii does, so the extra
+    // dimension costs ~2× wall time rather than 16×. For each trial,
+    // iterate cells, pick the best per-cell fg ∈ 0-7, sum image error.
+    struct BgTrial {
+        float total = std::numeric_limits<float>::infinity();
+        std::uint8_t mc1 = 1, mc2 = 2;
+        std::vector<std::uint8_t> fg;
+    };
+    std::vector<BgTrial> per_bg(16);
 
-    float best_total = std::numeric_limits<float>::infinity();
-    std::uint8_t best_mc1 = 1, best_mc2 = 2;
-    std::vector<std::uint8_t> best_fg(kCells, 0);
-
+    pipeline::parallel_for(16, [&](std::size_t bg_idx) {
+        const auto bg = static_cast<std::uint8_t>(bg_idx);
+        // Scratch is per-thread — these were shared across the serial
+        // loop before and would race now.
+        std::array<color_space::OKLab, kCellPx> cell_lab{};
+        std::array<Color3f, kCellPx> raw_cell{};
+        std::array<Color3f, kCellPx> blurred_src{};
+        auto& slot = per_bg[bg_idx];
     for (std::uint8_t mc1 = 0; mc1 < 16; ++mc1) {
         if (mc1 == bg) continue;
         for (std::uint8_t mc2 = static_cast<std::uint8_t>(mc1 + 1); mc2 < 16; ++mc2) {
@@ -1829,7 +1876,14 @@ Result<EncodeResult> encode_charset_multicolor(const Image& image,
                     }
                     float cell_best = std::numeric_limits<float>::infinity();
                     std::uint8_t cell_fg = 0;
-                    for (std::uint8_t fg = 0; fg < 16; ++fg) {
+                    // fg comes from bits 8-10 of the video matrix data (colour
+                    // RAM bits 0-2) — three bits, so colours 0-7 only. Bit 11
+                    // is not a colour bit: it selects multicolour vs hires for
+                    // that cell. Searching all 16 here produced cells the VIC
+                    // either renders hires (fg < 8, bit 11 clear) or renders
+                    // multicolour with fg & 7 (fg >= 8) — neither what we
+                    // scored. See Bauer, VIC-Article §3.7.3.2.
+                    for (std::uint8_t fg = 0; fg < 8; ++fg) {
                         if (fg == bg || fg == mc1 || fg == mc2) continue;
                         float err;
                         if (metric == Metric::mse) {
@@ -1854,12 +1908,26 @@ Result<EncodeResult> encode_charset_multicolor(const Image& image,
                     fgs[cy * cs_cols + cx] = cell_fg;
                 }
             }
-            if (total < best_total) {
-                best_total = total;
-                best_mc1 = mc1;
-                best_mc2 = mc2;
-                best_fg = std::move(fgs);
+            if (total < slot.total) {
+                slot.total = total;
+                slot.mc1 = mc1;
+                slot.mc2 = mc2;
+                slot.fg = std::move(fgs);
             }
+        }
+    }
+    });
+
+    float best_total = std::numeric_limits<float>::infinity();
+    std::uint8_t bg = 0, best_mc1 = 1, best_mc2 = 2;
+    std::vector<std::uint8_t> best_fg(kCells, 0);
+    for (std::size_t i = 0; i < 16; ++i) {
+        if (per_bg[i].total < best_total) {
+            best_total = per_bg[i].total;
+            bg = static_cast<std::uint8_t>(i);
+            best_mc1 = per_bg[i].mc1;
+            best_mc2 = per_bg[i].mc2;
+            best_fg = std::move(per_bg[i].fg);
         }
     }
 
@@ -2017,7 +2085,9 @@ Result<EncodeResult> encode_charset_multicolor(const Image& image,
         std::uint8_t glyph_idx = static_cast<std::uint8_t>(
             std::min(cell_to_glyph[i], std::size_t{255}));
         res.screen_ram[i] = glyph_idx;
-        res.color_ram[i] = best_fg[i] & 0xF;
+        // Bit 3 set = "render this cell multicolour". Without it the VIC
+        // draws the cell in standard hires and the 01/10 codes collapse.
+        res.color_ram[i] = static_cast<std::uint8_t>(0x8 | (best_fg[i] & 0x7));
         std::uint64_t merged = glyphs[cell_to_glyph[i]];
         auto cy = i / cs_cols;
         auto cx = i % cs_cols;

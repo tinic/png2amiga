@@ -167,8 +167,11 @@ Result<EncodeResult> encode_petscii(const Image& image,
                                     ProgressCb on_progress = nullptr);
 
 // Encode an arbitrary-size image (W % 8 == 0, H % 8 == 0) to a c64
-// hires charset. Per-cell brute force picks the best 2-color pair
-// (C(16,2) = 120). 8-byte glyph patterns are deduplicated; if more
+// hires charset (standard text mode). One global background ($d021,
+// brute-forced over 16) plus a per-cell foreground from colour RAM —
+// the VIC takes fg from bits 8-11 of the video matrix data, so all 16
+// colours are reachable here (unlike multicolour text mode, which only
+// has bits 8-10). 8-byte glyph patterns are deduplicated; if more
 // than (tile_budget - tile_reserve) unique patterns remain, the
 // closest Hamming-distance pairs are merged until the budget fits.
 //
@@ -185,9 +188,13 @@ Result<EncodeResult> encode_charset_hires(const Image& image,
                                           std::size_t tile_reserve = 0);
 
 // Encode an arbitrary-size image (W % 4 == 0, H % 8 == 0) to a c64
-// multicolor charset. 4×8 cells with shared bg + mc1 + mc2 + per-cell
-// fg. bg fixed at 0; (mc1, mc2) brute-forced globally; per-cell fg
-// picks best of 16. Dedup + Hamming-merge to ≤ (budget - reserve).
+// multicolor charset. 4×8 cells with shared bg ($d021) + mc1 ($d022) +
+// mc2 ($d023) + per-cell fg. bg fixed at 0; (mc1, mc2) brute-forced
+// globally; per-cell fg picks best of 8 — the VIC takes fg from bits
+// 8-10 of the video matrix data, so only colours 0-7 are reachable, and
+// bit 11 (colour RAM bit 3) is the per-cell multicolour flag rather than
+// a colour bit. color_ram entries are emitted with that flag already
+// set. Dedup + Hamming-merge to ≤ (budget - reserve).
 // EncodeResult exposes mc1/mc2 alongside cols/rows/unique_glyphs.
 Result<EncodeResult> encode_charset_multicolor(const Image& image,
                                                Palette pal = Palette::colodore,
