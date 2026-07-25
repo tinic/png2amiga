@@ -10,6 +10,7 @@ import {
   defaultDepth,
   defaultOptions,
   effectiveChipset,
+  isAmigaMode,
   hamType,
   isAtariMode,
   isCgaMode,
@@ -49,6 +50,22 @@ describe('mode predicates', () => {
     expect(isHamMode('ham8-hires')).toBe(true)
     expect(isHamMode('lores')).toBe(false)
     expect(isHamMode('ehb')).toBe(false)
+  })
+
+  it('isAmigaMode gates the copper-only controls', () => {
+    expect(isAmigaMode('lores')).toBe(true)
+    expect(isAmigaMode('ham8-hires-lace')).toBe(true)
+    expect(isAmigaMode('ehb')).toBe(true)
+    // The tile-freeform modes are the ones that leaked: isFixedBufferMode()
+    // reports false for them so Native PAR survives Resize, which used to let
+    // the Sliced toggle show up on the c64 charset modes.
+    expect(isAmigaMode('c64-charset-hires')).toBe(false)
+    expect(isAmigaMode('c64-charset-multicolor')).toBe(false)
+    expect(isAmigaMode('snes-mode7-256')).toBe(false)
+    expect(isAmigaMode('genesis-h40')).toBe(false)
+    expect(isAmigaMode('c64-multicolor')).toBe(false)
+    expect(isAmigaMode('vga-13h')).toBe(false)
+    expect(isAmigaMode('nonexistent-mode')).toBe(false)
   })
 
   it('isEhbMode covers both progressive and interlace', () => {

@@ -15,7 +15,7 @@ import {
   CHIPSETS, DITHER_METHODS, ALPHA_DITHER_METHODS, isNonSquareDither,
   SLIDERS, CGA_TEXT_METRICS, CGA_TEXT_KERNELS, C64_PALETTES, C64_METRICS, c64PaletteRgb, EXAMPLES, examplesForChipset,
   defaultOptions, isHamMode, hamType, isEhbMode, isAtariMode,
-  isDosMode, isVgaMode, isEgaMode, isSnesMode, isSnesDirectMode, isGenesisMode, isGbaMode, isGbaDirectMode, isC64Mode, isC64CharsetMode, isThomsonMode, isTedMode, isCgaMode, isCgaText, isTileFreeformMode, isFixedBufferMode, isInterlaceMode, modePar,
+  isDosMode, isVgaMode, isEgaMode, isSnesMode, isSnesDirectMode, isGenesisMode, isGbaMode, isGbaDirectMode, isC64Mode, isC64CharsetMode, isThomsonMode, isTedMode, isCgaMode, isCgaText, isTileFreeformMode, isFixedBufferMode, isAmigaMode, supportsCustomPalette, isInterlaceMode, modePar,
   maxDepth, defaultDepth, effectiveChipset, previewScale,
   modesForChipset,
 } from '../lib/options.js'
@@ -726,9 +726,12 @@ const showDepthSlider = computed(() => {
   // Sega Genesis (4bpp tiles), and c64 charset (1bpp/2bpp fixed by
   // mode). Tile-freeform modes left isFixedBufferMode in the recent
   // refactor but their depth is still hardware-fixed.
-  return !isHamMode(options.mode) && !isEhbMode(options.mode) &&
-         !isAtariMode(options.mode) && !isFixedBufferMode(options.mode) &&
-         !isTileFreeformMode(options.mode)
+  // Positive gate: depth means bitplanes, which is an Amiga concept. The old
+  // negation chain relied on every non-Amiga family being classified as
+  // fixed-buffer or tile-freeform — true today, but it silently opens up for
+  // any family added later that isn't.
+  return isAmigaMode(options.mode) && !isHamMode(options.mode) &&
+         !isEhbMode(options.mode)
 })
 
 // Raw export tooltip with format layout (HTML for fixed-width font).
@@ -822,9 +825,16 @@ const isEffectiveFixedBuffer = computed(() =>
 // 320×400 with two 8-color playfields fine, even though the
 // combination flickers on consumer monitors without scan-doubling.
 // AGA hires + DPF (depth=4 → 4+4) is also fine.
+// Sliced palette — Amiga copper only, and meaningless with a user-supplied
+// palette (the per-line variants are derived from the encoder's own).
+const slicedAvailable = computed(() => isAmigaMode(options.mode) && !paletteData.value)
+
 const dpfAvailable = computed(() => {
   const m = options.mode
-  if (isHamMode(m) || isEhbMode(m) || isAtariMode(m) || isFixedBufferMode(m)) return false
+  // Amiga-only, same reason as the Sliced toggle: isFixedBufferMode() lets
+  // the tile-freeform modes (c64-charset, Genesis, SNES) through.
+  if (!isAmigaMode(m)) return false
+  if (isHamMode(m) || isEhbMode(m) || isAtariMode(m)) return false
   const cs = effectiveChipset(m, options.chipset)
   if (cs === 'aga') return options.depth === 4
   return options.depth === 3 && !m.includes('hires')
@@ -992,7 +1002,12 @@ watch(() => options.mode, (mode, oldMode) => {
   if (sizeOverride.value && isFixedBufferMode(mode)) {
     sizeOverride.value = false
   }
-  // DPF and strips both require chipset-/depth-specific shapes.
+  // Sliced / DPF / strips all require chipset-/depth-specific shapes. Clear
+  // any that the new mode can't express — otherwise the flag stays set in the
+  // options dict and api.cpp rejects the convert outright ("--sliced/--copper
+  // ... not supported"), which surfaces as a failed encode rather than a
+  // hidden toggle.
+  if (!slicedAvailable.value) options.copper = false
   if (!dpfAvailable.value) options.dualPlayfield = false
   if (!scapAvailable.value) options.scap = false
   track('mode-change', { from: oldMode, to: mode })
@@ -2533,9 +2548,8 @@ async function loadExample(example: typeof EXAMPLES[number]) {
                 </div>
               </div>
 
-              <!-- sliced — Sliced palette (Amiga copper only; not any
-                   fixed-buffer console/DOS mode, SNES, or Genesis) -->
-              <div v-if="!isFixedBufferMode(options.mode) && !isSnesMode(options.mode) && !isGenesisMode(options.mode) && !paletteData" class="grid align-items-center">
+              <!-- sliced — Sliced palette (Amiga copper only) -->
+              <div v-if="slicedAvailable" class="grid align-items-center">
                 <label class="col-4 text-xs text-color-secondary font-semibold" title="Sliced palette: per-scanline palette swaps via the Copper coprocessor, picked greedily by OKLab error reduction. Each row gets its own per-line variant of the base palette. Composes with --dpf (palette evolves across the upper PF2 register bank).">Sliced</label>
                 <div class="col-8 flex align-items-center gap-2">
                   <ToggleSwitch v-model="options.copper" />
@@ -2799,10 +2813,12 @@ async function loadExample(example: typeof EXAMPLES[number]) {
 
             <!-- Advanced section -->
             <Panel header="Advanced" toggleable collapsed class="mt-2">
-              <!-- Custom palette: HAM has dynamic per-pixel palette; Genesis
-                   builds 4 separate palette lines from k-means clustering, so
-                   a single uploaded palette has no clean mapping. -->
-              <div v-if="!isHamMode(options.mode) && !isGenesisMode(options.mode)">
+              <!-- Custom palette: HAM has a dynamic per-pixel palette, and
+                   supportsCustomPalette() covers the targets where an uploaded
+                   palette is either ignored by the encoder (C64, CGA text,
+                   SNES, Genesis) or rejected outright (Thomson, TED, GBA
+                   direct). -->
+              <div v-if="!isHamMode(options.mode) && supportsCustomPalette(options.mode)">
                 <label class="block text-xs text-color-secondary font-semibold mb-1">Custom Palette</label>
                 <div class="flex gap-2 align-items-center">
                   <Button label="Load" icon="pi pi-upload" size="small" severity="secondary" @click="loadPalette" :disabled="converting" />

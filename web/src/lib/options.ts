@@ -744,6 +744,32 @@ export function isGbaDirectMode(mode: string): boolean {
 export function isC64Mode(mode: string): boolean {
   return mode.startsWith('c64-')
 }
+// Copper-driven features — sliced palette, strips, dual playfield — exist
+// only on Amiga. Gate them on this rather than on !isFixedBufferMode():
+// that predicate deliberately reports false for tile-freeform modes
+// (c64-charset, Genesis, SNES) so Native PAR survives Resize, which let the
+// Sliced toggle leak into the c64 charset modes.
+export function isAmigaMode(mode: string): boolean {
+  const cs = ALL_MODES.find(m => m.value === mode)?.chipset
+  return cs === 'ocs' || cs === 'aga'
+}
+// Modes where loading an external palette actually reaches the encoder.
+// Verified against the CLI per family, not inferred:
+//   applied  — Amiga (incl. HAM), VGA/EGA/CGA-320, CGA composite, GBA
+//              mode4, Atari ST/STE
+//   ignored  — C64 (VIC-II palette fixed in hardware), CGA text (fixed
+//              16-colour attribute set), SNES Mode 7, Genesis (per-tile
+//              palette lines)
+//   rejected — Thomson / TED / GBA direct (api.cpp returns unsupported_mode)
+// Offering the picker for the last two groups is worse than useless: it
+// either silently does nothing or fails the convert.
+export function supportsCustomPalette(mode: string): boolean {
+  if (isC64Mode(mode) || isCgaText(mode)) return false
+  if (isSnesMode(mode) || isGenesisMode(mode)) return false
+  if (isThomsonMode(mode) || isTedMode(mode)) return false
+  if (isGbaDirectMode(mode)) return false
+  return true
+}
 export function isThomsonMode(mode: string): boolean {
   return mode.startsWith('thomson-')
 }
