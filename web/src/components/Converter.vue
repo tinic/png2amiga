@@ -150,7 +150,7 @@ function renderCrt() {
   //      filter can address every source pixel (don't OVERshoot it
   //      though — backing > CSS×DPR forces a browser downsample which
   //      aliases the mask back into giant fringes).
-  const DPR = globalThis.window.devicePixelRatio || 1
+  const DPR = window.devicePixelRatio || 1
   const isInterlace = isInterlaceMode(options.mode)
   const minDw = lastSrc.w
   const minDh = lastSrc.h * (isInterlace ? 2 : 4)
@@ -626,9 +626,9 @@ function reserveCellEnter(idx: number) {
   else if (reserveDragMode.value === 'clear') clearReserve(idx)
 }
 function endReserveDrag() { reserveDragMode.value = null }
-globalThis.addEventListener('mouseup', endReserveDrag)
+addEventListener('mouseup', endReserveDrag)
 onBeforeUnmount(() => {
-  globalThis.removeEventListener('mouseup', endReserveDrag)
+  removeEventListener('mouseup', endReserveDrag)
 })
 // CSS background fill for one reserve-grid cell — reads the palette
 // byte triple. Returns transparent for indices beyond the palette.

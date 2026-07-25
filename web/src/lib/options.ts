@@ -769,10 +769,13 @@ export function isC64CharsetMode(mode: string): boolean {
 // True for any cga-text super-chunky mode (80×{200, 100, 50, 25}).
 // All four use the same encoder + UI shape; only the cell height (and
 // hence row count / output buffer size) differs.
+const CGA_TEXT_MODES = new Set([
+  'cga-text80x200', 'cga-text80x100',
+  'cga-text80x50', 'cga-text80x25',
+  'cga-text40x200', 'cga-text40x100',
+])
 export function isCgaText(mode: string): boolean {
-  return mode === 'cga-text80x200' || mode === 'cga-text80x100'
-      || mode === 'cga-text80x50'  || mode === 'cga-text80x25'
-      || mode === 'cga-text40x200' || mode === 'cga-text40x100'
+  return CGA_TEXT_MODES.has(mode)
 }
 // per-platform tile size (8×8 for c64-charset / Genesis / SNES Mode 7).
 // At freeform mode the Native PAR / fixed-buffer behavior is replaced

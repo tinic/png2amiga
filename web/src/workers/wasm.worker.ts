@@ -267,7 +267,6 @@ async function handleMessage(e: MessageEvent<IncomingMessage>): Promise<void> {
 // (`?worker` import in useWasm.ts). The browser only delivers messages
 // from the parent realm; sonarjs/post-message can't tell that apart from
 // cross-window postMessage flows.
-// eslint-disable-next-line sonarjs/post-message
-globalThis.addEventListener('message', (e: MessageEvent<IncomingMessage>) => {
+addEventListener('message', (e: MessageEvent<IncomingMessage>) => {
   void handleMessage(e)
 })

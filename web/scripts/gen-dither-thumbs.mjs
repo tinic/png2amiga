@@ -102,7 +102,7 @@ async function readDitherMethods() {
   const m = /export const DITHER_METHODS:[^=]*=\s*(\[[\s\S]*?\n\])/.exec(src)
   if (!m) throw new Error('DITHER_METHODS array not found in options.ts')
   // Match every `value: '<method>'` inside the array.
-  const values = [...m[1].matchAll(/value:\s*'([^']+)'/g)].map(x => x[1])
+  const values = m[1].matchAll(/value:\s*'([^']+)'/g).map(x => x[1]).toArray()
   if (values.length === 0) throw new Error('No dither values parsed from options.ts')
   return values
 }

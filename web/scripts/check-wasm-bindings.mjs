@@ -23,22 +23,22 @@ if (!bindingsBlock) {
   process.exit(2)
 }
 const cppExports = new Set(
-  [...bindingsBlock[1].matchAll(/function\("([^"]+)"/g)].map(m => m[1])
+  bindingsBlock[1].matchAll(/function\("([^"]+)"/g).map(m => m[1])
 )
 
 // Extract the Png2AmigaModule interface and pull every method-like line:
 // `name(args): ReturnType`.
-const moduleBlock = /interface\s+Png2AmigaModule\s*\{([\s\S]*?)\n\s*\}/.exec(dts)
+const moduleBlock = /interface[ \t]+Png2AmigaModule[ \t]*\{([\s\S]*?)\n[ \t]*\}/.exec(dts)
 if (!moduleBlock) {
   console.error('check-wasm-bindings: Png2AmigaModule interface not found in ' + DTS_PATH)
   process.exit(2)
 }
 const dtsExports = new Set(
-  [...moduleBlock[1].matchAll(/^\s*([A-Za-z_$][A-Za-z0-9_$]*)\s*\(/gm)].map(m => m[1])
+  moduleBlock[1].matchAll(/^[ \t]*([A-Za-z_$][A-Za-z0-9_$]*)[ \t]*\(/gm).map(m => m[1])
 )
 
-const missingInDts = [...cppExports].filter(n => !dtsExports.has(n))
-const missingInCpp = [...dtsExports].filter(n => !cppExports.has(n))
+const missingInDts = [...cppExports.difference(dtsExports)]
+const missingInCpp = [...dtsExports.difference(cppExports)]
 
 console.log(`  C++ exports (${cppExports.size}): ${[...cppExports].sort().join(', ')}`)
 console.log(`  TS exports  (${dtsExports.size}): ${[...dtsExports].sort().join(', ')}`)
@@ -58,23 +58,23 @@ if (missingInDts.length > 0 || missingInCpp.length > 0) {
 // Cross-check 2: WasmOptions key set vs parse_js_options hasOwnProperty checks.
 // `onProgress` is special — it's injected by the worker, not read by C++.
 const cppOptionKeys = new Set(
-  [...cpp.matchAll(/hasOwnProperty\("([^"]+)"\)/g)].map(m => m[1])
+  cpp.matchAll(/hasOwnProperty\("([^"]+)"\)/g).map(m => m[1])
 )
 cppOptionKeys.delete('onProgress')
 
-const optionsBlock = /interface\s+WasmOptions\s*\{([\s\S]*?)\n\s*\}/.exec(dts)
+const optionsBlock = /interface[ \t]+WasmOptions[ \t]*\{([\s\S]*?)\n[ \t]*\}/.exec(dts)
 if (!optionsBlock) {
   console.error('check-wasm-bindings: WasmOptions interface not found in ' + DTS_PATH)
   process.exit(2)
 }
 // Match `name?: …` and `name: …` field declarations (skip comments).
 const dtsOptionKeys = new Set(
-  [...optionsBlock[1].matchAll(/^\s*([a-zA-Z_$][a-zA-Z0-9_$]*)\??\s*:/gm)].map(m => m[1])
+  optionsBlock[1].matchAll(/^[ \t]*([a-zA-Z_$][a-zA-Z0-9_$]*)\??[ \t]*:/gm).map(m => m[1])
 )
 dtsOptionKeys.delete('onProgress')
 
-const optMissingInDts = [...cppOptionKeys].filter(k => !dtsOptionKeys.has(k))
-const optMissingInCpp = [...dtsOptionKeys].filter(k => !cppOptionKeys.has(k))
+const optMissingInDts = [...cppOptionKeys.difference(dtsOptionKeys)]
+const optMissingInCpp = [...dtsOptionKeys.difference(cppOptionKeys)]
 
 console.log(`  C++ options (${cppOptionKeys.size}): ${[...cppOptionKeys].sort().join(', ')}`)
 console.log(`  TS  options (${dtsOptionKeys.size}): ${[...dtsOptionKeys].sort().join(', ')}`)

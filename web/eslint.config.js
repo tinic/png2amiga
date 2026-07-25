@@ -183,7 +183,8 @@ export default [
       // Catch the "destructure a ref" footgun: `const { value } = myRef`
       // gives you a value, not reactivity, and silently breaks subsequent
       // updates.
-      'vue/no-ref-object-destructure': 'error',
+      // (renamed from vue/no-ref-object-destructure, removed in plugin v10)
+      'vue/no-ref-object-reactivity-loss': 'error',
       // Keep <script setup> macros in a consistent order so PRs don't churn
       // on stylistic ordering: defineOptions → defineProps → defineEmits →
       // defineSlots (the eslint-plugin-vue default).
@@ -256,6 +257,33 @@ export default [
 
       // unicorn — relax the noisiest stylistic ones; keep the substantive checks
       'unicorn/prevent-abbreviations': 'off',
+      // v72 split prevent-abbreviations into these two. Same call as above:
+      // they want opts→options, el→element, ctx→context, buf→buffer and
+      // isX/hasX prefixes on every boolean — 216 renames across the app for
+      // no correctness gain.
+      'unicorn/name-replacements': 'off',
+      'unicorn/consistent-boolean-name': 'off',
+      // Module-level mutable state is deliberate here: the debounce/spinner
+      // timers, the worker's Module singleton, and Converter.vue's generation
+      // counters all have to outlive the functions that set them.
+      'unicorn/no-top-level-assignment-in-function': 'off',
+      // `self` is the idiomatic global inside a Web Worker — it reads as
+      // "this worker" where globalThis reads as "whatever scope this is".
+      'unicorn/prefer-global-this': 'off',
+      // Shape-of-the-code opinions, and the autofix for the first one emits
+      // tab-indented semicolon lines into our 2-space semicolon-free files.
+      'unicorn/prefer-early-return': 'off',
+      'unicorn/prefer-minimal-ternary': 'off',
+      'unicorn/prefer-simple-condition-first': 'off',
+      'unicorn/no-declarations-before-early-exit': 'off',
+      'unicorn/consistent-conditional-object-spread': 'off',
+      // Every .sort() here is over ASCII identifiers or filenames, where the
+      // default code-unit comparator is exactly what we want — the rule's
+      // suggested localeCompare would *change* the ordering.
+      'unicorn/require-array-sort-compare': 'off',
+      // Canvas preview draws once per encode, not in an animation loop, so
+      // caching a Path2D would trade clarity for nothing.
+      'unicorn/prefer-path2d': 'off',
       'unicorn/filename-case': 'off',
       'unicorn/no-null': 'off',
       'unicorn/prefer-module': 'off',
