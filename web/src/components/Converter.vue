@@ -432,10 +432,10 @@ function paletteHitAt(clientX: number, clientY: number): PaletteHit | null {
 }
 // When a palette swatch is hovered, the preview canvas is repainted
 // with all pixels NOT matching the swatch hidden (alpha=0). When the
-// encoder emits a per-pixel index map (lastIndices, non-HAM modes)
-// the filter uses index equality — distinguishes slots that resolve
-// to the same RGB (e.g. EHB's slot 0 black-base vs slot 32 black-
-// halfbrite). For HAM and other modes without indices we fall back
+// encoder emits a per-pixel index map (lastIndices — all indexed
+// modes including sliced/strips, where the slot is the stable
+// identity and its RGB varies per scanline) the filter uses index
+// equality. For HAM and other modes without indices we fall back
 // to RGB-equality. Cleared on mouseleave.
 const hoveredPaletteHit = ref<PaletteHit | null>(null)
 function paletteHover(ev: MouseEvent) {
@@ -472,9 +472,11 @@ function paletteHoverLeave() {
 // Build a copy of lastRgba where pixels NOT matching `target` are
 // turned transparent (alpha=0). When lastIndices is available we use
 // per-pixel INDEX equality (so two slots with the same RGB still
-// distinguish — EHB slot 0 vs 32 are both black but different idx).
-// When indices are absent (HAM / sliced / strips / tile modes) we
-// fall back to RGB equality. Returns rgba unchanged when target=null.
+// distinguish — EHB slot 0 vs 32 are both black but different idx,
+// and sliced/strips slots keep their identity as the copper changes
+// their RGB per scanline). When indices are absent (HAM / tile
+// modes) we fall back to RGB equality. Returns rgba unchanged when
+// target=null.
 function maskByIndex(rgba: Uint8Array, indices: Uint8Array,
                      targetIdx: number, n: number): Uint8ClampedArray {
   const out = new Uint8ClampedArray(n * 4)

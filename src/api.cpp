@@ -3986,6 +3986,13 @@ Result<PipelineResult> run_pipeline(const std::uint8_t* input_data,
         }
         if (!copper_result) return std::unexpected{copper_result.error()};
 
+        // Per-pixel slot indices for the web palette-hover highlight —
+        // with per-scanline palettes the slot, not the RGB value, is the
+        // stable identity. Decode before any DPF expansion; shifted below
+        // alongside the palettes when DPF interleaves PF1 zeros.
+        std::vector<std::uint8_t> slot_indices;
+        if (auto dec = bitplane::decode(copper_result->planes)) slot_indices = *std::move(dec);
+
         // Render preview BEFORE any DPF expansion: render_copper builds a
         // combined palette index from all planes which would land on
         // non-contiguous slots once PF1 zeros are interleaved. Capped
@@ -4021,6 +4028,8 @@ Result<PipelineResult> run_pipeline(const std::uint8_t* input_data,
                 for (auto& ch : line)
                     ch.reg = static_cast<std::uint8_t>(ch.reg + pf2_base);
             copper_result->num_colors += pf2_base;
+            for (auto& idx : slot_indices)
+                idx = static_cast<std::uint8_t>(idx + pf2_base);
         }
 
         // Use the first scanline's palette as the nominal palette
@@ -4037,6 +4046,7 @@ Result<PipelineResult> run_pipeline(const std::uint8_t* input_data,
         result.dpf = use_dpf;
         result.copper = true;
         result.aga = is_aga;
+        result.indices = std::move(slot_indices);
         result.scanline_palettes = std::move(copper_result->scanline_palettes);
         result.scanline_changes = std::move(copper_result->scanline_changes);
         result.copper_num_colors = copper_result->num_colors;
@@ -4229,6 +4239,25 @@ Result<PipelineResult> run_pipeline(const std::uint8_t* input_data,
         result.strips_avg_visible_moves_per_line = strips_res->avg_visible_moves_per_line;
         result.strips_max_visible_moves_per_line = strips_res->max_visible_moves_per_line;
         result.strips_slot_count = strips_res->slot_table.slots.size();
+
+        // Per-pixel slot indices for the web palette-hover highlight
+        // (indexed variants only — HAM6 strips pixels are ops, not
+        // slots). DPF strips planes come pre-expanded from the encoder
+        // (content in planes 1/3/5 = PF2), so compress the odd bits
+        // back to the PF2 index and shift into the CLUT upper half the
+        // way the palette already is.
+        if (!strips_ham6) {
+            if (auto dec = bitplane::decode(result.planes)) {
+                result.indices = *std::move(dec);
+                if (strips_dpf) {
+                    for (auto& v : result.indices) {
+                        auto pf2 = static_cast<std::uint8_t>(
+                            ((v >> 1) & 1u) | (((v >> 3) & 1u) << 1) | (((v >> 5) & 1u) << 2));
+                        v = static_cast<std::uint8_t>(pf2 + 8);
+                    }
+                }
+            }
+        }
 
         // Synthesize per-line palette snapshots for the web tool's
         // per-scanline strip view. Strips planner only retains the
