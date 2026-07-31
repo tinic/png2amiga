@@ -59,7 +59,13 @@ function onStopEncode(): void {
   }
   resultInfo.value = 'stopped'
 }
-const { imageBytes, imageName, imageUrl, imageWidth, imageHeight, dragOver, uploadTimestamp, onDrop, onDragOver, onDragLeave, openPicker } = useImageUpload()
+const { imageBytes, imageName, imageUrl, imageWidth, imageHeight, dragOver, uploadTimestamp, onDrop, onDragOver, onDragLeave, openPicker, pasteFromClipboard } = useImageUpload()
+
+async function pasteImage(): Promise<void> {
+  dismissHint()
+  const ok = await pasteFromClipboard()
+  if (!ok) errorMsg.value = 'No image in the clipboard — copy an image first, or press Ctrl/Cmd+V.'
+}
 
 const showUploadHint = ref(true)
 
@@ -2402,9 +2408,10 @@ async function loadExample(example: typeof EXAMPLES[number]) {
               <template v-else>
                 <i class="pi pi-image text-4xl text-color-secondary mb-2"></i>
                 <div class="font-semibold text-sm">Drop image here</div>
-                <div class="text-xs text-color-secondary">or click to browse</div>
+                <div class="text-xs text-color-secondary">or click to browse, or paste (Ctrl/Cmd+V)</div>
               </template>
             </div>
+            <Button label="Paste from clipboard" icon="pi pi-clipboard" size="small" severity="secondary" class="w-full mt-2" @click="pasteImage" />
             <div class="mt-3">
               <label class="block text-xs text-color-secondary font-semibold mb-2">Examples</label>
               <div class="flex flex-wrap gap-1">
