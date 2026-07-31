@@ -111,6 +111,36 @@ const snesTilesCanvasRef = useTemplateRef<HTMLCanvasElement>('snesTilesCanvasRef
 const scanlinePaletteCanvasRef = useTemplateRef<HTMLCanvasElement>('scanlinePaletteCanvasRef')
 const hasScanlinePalette = ref(false)
 const crtEnabled = ref(false)
+
+// Split compare view: original image overlaid on the converted preview,
+// clipped at a draggable divider. The original is CSS-stretched to the
+// preview's display size so content lines up 1:1 (both render the same
+// source region; letterboxed native-par fixed-buffer modes are the one
+// case where alignment is approximate).
+const splitView = ref(false)
+const splitPos = ref(0.5)
+const previewStackRef = useTemplateRef<HTMLDivElement>('previewStackRef')
+
+function splitToggle(): void {
+  splitView.value = !splitView.value
+  track('split-toggle', { enabled: splitView.value })
+}
+function splitDragMove(e: PointerEvent): void {
+  if (e.buttons === 0) return
+  const rect = previewStackRef.value?.getBoundingClientRect()
+  if (!rect || rect.width === 0) return
+  splitPos.value = Math.min(1, Math.max(0, (e.clientX - rect.left) / rect.width))
+}
+function splitDragStart(e: PointerEvent): void {
+  ;(e.currentTarget as HTMLElement).setPointerCapture(e.pointerId)
+  splitDragMove(e)
+}
+function splitKeydown(e: KeyboardEvent): void {
+  if (e.key === 'ArrowLeft') splitPos.value = Math.max(0, splitPos.value - 0.02)
+  else if (e.key === 'ArrowRight') splitPos.value = Math.min(1, splitPos.value + 0.02)
+  else return
+  e.preventDefault()
+}
 const converting = ref(false)
 const progress = ref(0)         // 0..100 — encoder progress for slow paths
 const progressStage = ref('')
@@ -2971,9 +3001,22 @@ async function loadExample(example: typeof EXAMPLES[number]) {
                       class="scanline-palette-strip"
                       style="margin-right: 8px;"
                       title="Per-scanline base palette — one column per slot, one row per scanline." />
-              <div class="preview-stack relative">
+              <div class="preview-stack relative" ref="previewStackRef">
               <canvas ref="canvasRef" class="preview-canvas" v-show="!crtEnabled" />
               <canvas ref="crtCanvasRef" class="preview-canvas" v-show="crtEnabled" />
+              <div v-if="splitView && imageUrl" class="split-overlay" aria-hidden="true"
+                   :style="{ clipPath: `inset(0 ${(1 - splitPos) * 100}% 0 0)` }">
+                <img :src="imageUrl" alt="" class="split-original" />
+              </div>
+              <!-- Focusable separator with keyboard support; the rule's
+                   interactive-role list doesn't include separator. -->
+              <!-- eslint-disable-next-line vuejs-accessibility/no-static-element-interactions -->
+              <div v-if="splitView" class="split-divider" role="separator" aria-orientation="vertical"
+                   aria-label="Drag to compare original and converted" tabindex="0"
+                   :aria-valuenow="Math.round(splitPos * 100)" aria-valuemin="0" aria-valuemax="100"
+                   :style="{ left: `calc(${splitPos * 100}% - 6px)` }"
+                   @pointerdown.stop="splitDragStart" @pointermove.stop="splitDragMove" @pointerup.stop
+                   @keydown="splitKeydown"></div>
               <div v-if="converting" class="overlay flex flex-column align-items-center justify-content-center" style="gap: 0.5rem">
                 <ProgressSpinner v-if="!progress" style="width: 2rem; height: 2rem" />
                 <div v-else style="width: 70%; max-width: 22rem; text-align: center;">
@@ -3005,6 +3048,9 @@ async function loadExample(example: typeof EXAMPLES[number]) {
             </button>
             <button class="loupe-btn crt-btn" :class="{ active: crtEnabled }" @click.stop="crtEnabled = !crtEnabled" title="CRT preview — Commodore 1084S RGB monitor simulation (slot mask, scanlines, bloom)">
               <i class="pi pi-desktop"></i>
+            </button>
+            <button class="loupe-btn split-btn" :class="{ active: splitView }" @click.stop="splitToggle" title="Split view — original left of the divider, converted right">
+              <i class="pi pi-arrows-h"></i>
             </button>
           </div>
           <div class="flex justify-content-between align-items-center px-1">
@@ -3320,6 +3366,9 @@ async function loadExample(example: typeof EXAMPLES[number]) {
      button when present). */
   right: 4.4rem;
 }
+.loupe-btn.split-btn {
+  right: 6.4rem;
+}
 .loupe-btn:disabled {
   cursor: not-allowed;
   opacity: 0.4;
@@ -3450,5 +3499,35 @@ async function loadExample(example: typeof EXAMPLES[number]) {
   position: absolute;
   inset: 0;
   background: rgba(0, 0, 0, 0.5);
+}
+
+.split-overlay {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+}
+.split-original {
+  display: block;
+  width: 100%;
+  height: 100%;
+  object-fit: fill;
+}
+.split-divider {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  width: 12px;
+  cursor: ew-resize;
+  touch-action: none;
+  background: linear-gradient(
+    to right,
+    transparent 5px,
+    rgba(255, 255, 255, 0.9) 5px,
+    rgba(255, 255, 255, 0.9) 7px,
+    transparent 7px
+  );
+}
+.split-divider:focus-visible {
+  outline: 2px solid var(--p-primary-color);
 }
 </style>
