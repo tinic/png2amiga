@@ -16,8 +16,6 @@ uniform float u_hardScan;
 uniform float u_hardPix;
 uniform float u_maskDark;
 uniform float u_maskLight;
-uniform float u_warpX;
-uniform float u_warpY;
 uniform float u_bloom;
 uniform float u_brightness;    // post-mask brightness boost
 uniform float u_maskPeriod;    // device pixels per RGB triad (≈0.42mm × DPR × 96/25.4)
@@ -39,11 +37,14 @@ uniform float u_phosphorPersist;
 uniform float u_time;
 
 // sRGB ↔ linear (gamma 2.2 approximation, ample for the simulation).
+// Decode and encode exponents must match — an asymmetric pair (e.g.
+// encode at 1/2.4) maps every flat color to c^(2.2/2.4), a visible
+// brightness lift + desaturation relative to the source.
 vec3 toLinear(vec3 c) {
   return pow(max(c, vec3(0.0)), vec3(2.2));
 }
 vec3 toSrgb(vec3 c) {
-  return pow(max(c, vec3(0.0)), vec3(1.0 / 2.4));
+  return pow(max(c, vec3(0.0)), vec3(1.0 / 2.2));
 }
 
 // Gaussian weight. scale < 0; the more negative, the tighter.
@@ -240,39 +241,8 @@ vec3 mask(vec2 pos) {
   return mix(vec3(u_maskDark), vec3(u_maskLight), raw);
 }
 
-// Geometric residual warp — what's left of the tube's deflection
-// distortion after the chassis pincushion-correction circuit kicks
-// in. Lottes form: only off-axis points bow, so center-axis lines
-// (the central crosshair) stay straight — matches what a real, well-
-// adjusted 1084S looks like under a service-manual cross-hatch test
-// pattern. kx > ky reflects the 90° tube's larger horizontal
-// deflection angle (≈38.7° H vs ≈31° V on 4:3); horizontal bow is
-// always ≥ vertical bow on a real 1084S. See the warpX/warpY uniform
-// assignments for the numeric derivation.
-//
-// Inverse mapping: warp() takes the output uv and returns the source
-// uv to sample. Positive kx, ky push source-corner samples outside
-// [0,1] → output corners go to the bezel; the visible image bulges
-// at the screen-edge midpoints (a horizontal line near the top of the
-// source appears highest in the middle, lower at its ends). That's
-// the "outward bow" residual a real 1084S exhibits — slight over-
-// correction of the deflection pincushion. Flipping the signs would
-// invert it into the under-corrected (inward bow) regime.
-vec2 warp(vec2 uv) {
-  uv = uv * 2.0 - 1.0;
-  uv *= vec2(1.0 + (uv.y * uv.y) * u_warpX,
-             1.0 + (uv.x * uv.x) * u_warpY);
-  return uv * 0.5 + 0.5;
-}
-
 void main() {
-  vec2 uv = warp(v_uv);
-  // Discard pixels that warped outside the source image — keeps the
-  // black "bezel" around a curved-tube look.
-  if (any(lessThan(uv, vec2(0.0))) || any(greaterThan(uv, vec2(1.0)))) {
-    gl_FragColor = vec4(0.0, 0.0, 0.0, 1.0);
-    return;
-  }
+  vec2 uv = v_uv;
   vec3 col = tri(uv);
   // Add bloom on top — only the parts brighter than a threshold halate.
   col += u_bloom * bloom(uv);
@@ -306,4 +276,4 @@ void main() {
   col *= u_brightness;
   gl_FragColor = vec4(toSrgb(col), 1.0);
 }
-`),s=t(i,a,o),c=i.createBuffer();i.bindBuffer(i.ARRAY_BUFFER,c),i.bufferData(i.ARRAY_BUFFER,new Float32Array([-1,-1,1,-1,-1,1,1,1]),i.STATIC_DRAW);let l=i.createTexture();i.bindTexture(i.TEXTURE_2D,l),i.texParameteri(i.TEXTURE_2D,i.TEXTURE_MIN_FILTER,i.NEAREST),i.texParameteri(i.TEXTURE_2D,i.TEXTURE_MAG_FILTER,i.NEAREST),i.texParameteri(i.TEXTURE_2D,i.TEXTURE_WRAP_S,i.CLAMP_TO_EDGE),i.texParameteri(i.TEXTURE_2D,i.TEXTURE_WRAP_T,i.CLAMP_TO_EDGE);let u={src:i.getUniformLocation(s,`u_src`),srcSize:i.getUniformLocation(s,`u_srcSize`),outSize:i.getUniformLocation(s,`u_outSize`),hardScan:i.getUniformLocation(s,`u_hardScan`),hardPix:i.getUniformLocation(s,`u_hardPix`),maskDark:i.getUniformLocation(s,`u_maskDark`),maskLight:i.getUniformLocation(s,`u_maskLight`),warpX:i.getUniformLocation(s,`u_warpX`),warpY:i.getUniformLocation(s,`u_warpY`),bloom:i.getUniformLocation(s,`u_bloom`),brightness:i.getUniformLocation(s,`u_brightness`),palMode:i.getUniformLocation(s,`u_palMode`),maskPeriod:i.getUniformLocation(s,`u_maskPeriod`),interlaceFlicker:i.getUniformLocation(s,`u_interlaceFlicker`),phosphorPersist:i.getUniformLocation(s,`u_phosphorPersist`),time:i.getUniformLocation(s,`u_time`)},d=i.getAttribLocation(s,`a_pos`),f=0,p=3,m=0,h=0,g=0,_=0,v=0,y=0,b=performance.now()/1e3;function x(e){f=+!!e}function S(e){p=Math.max(3,Number.isFinite(e)?e:3)}let C=!1;function w(e){C=e;let t=+!!e;t!==m&&(m=t,t&&y===0&&h>0&&T(),!t&&y!==0&&E())}function T(){let e=()=>{h>0&&D(),y=requestAnimationFrame(e)};y=requestAnimationFrame(e)}function E(){y!==0&&cancelAnimationFrame(y),y=0}function D(){let e=h>=480,t=C,n=t?-1:-8,r=e?-5:-3,a=t?.1:.18,o=t?1:1.2;m>.5&&(o*=2/1.4),i.viewport(0,0,_,v),i.clearColor(0,0,0,1),i.clear(i.COLOR_BUFFER_BIT),i.useProgram(s),i.activeTexture(i.TEXTURE0),i.bindTexture(i.TEXTURE_2D,l),i.uniform1i(u.src,0),i.uniform2f(u.srcSize,h,g),i.uniform2f(u.outSize,_,v),i.uniform1f(u.hardScan,n),i.uniform1f(u.hardPix,r),i.uniform1f(u.maskDark,.5),i.uniform1f(u.maskLight,1.5),i.uniform1f(u.warpX,.03),i.uniform1f(u.warpY,.022),i.uniform1f(u.bloom,a),i.uniform1f(u.brightness,o),i.uniform1f(u.palMode,f),i.uniform1f(u.maskPeriod,p),i.uniform1f(u.interlaceFlicker,m),i.uniform1f(u.phosphorPersist,.4),i.uniform1f(u.time,performance.now()/1e3-b),i.bindBuffer(i.ARRAY_BUFFER,c),i.enableVertexAttribArray(d),i.vertexAttribPointer(d,2,i.FLOAT,!1,0,0),i.drawArrays(i.TRIANGLE_STRIP,0,4)}function O(e,t,r,a,o){n.width!==a&&(n.width=a),n.height!==o&&(n.height=o),i.bindTexture(i.TEXTURE_2D,l),i.pixelStorei(i.UNPACK_FLIP_Y_WEBGL,!0),i.texImage2D(i.TEXTURE_2D,0,i.RGBA,t,r,0,i.RGBA,i.UNSIGNED_BYTE,e),h=t,g=r,_=a,v=o,D(),m>.5&&y===0&&T()}function k(){E(),i.deleteProgram(s),i.deleteShader(a),i.deleteShader(o),i.deleteBuffer(c),i.deleteTexture(l)}return{render:O,setPalMode:x,setMaskPeriod:S,setInterlaceMode:w,dispose:k}}export{n as createCrtRenderer};
+`),s=t(i,a,o),c=i.createBuffer();i.bindBuffer(i.ARRAY_BUFFER,c),i.bufferData(i.ARRAY_BUFFER,new Float32Array([-1,-1,1,-1,-1,1,1,1]),i.STATIC_DRAW);let l=i.createTexture();i.bindTexture(i.TEXTURE_2D,l),i.texParameteri(i.TEXTURE_2D,i.TEXTURE_MIN_FILTER,i.NEAREST),i.texParameteri(i.TEXTURE_2D,i.TEXTURE_MAG_FILTER,i.NEAREST),i.texParameteri(i.TEXTURE_2D,i.TEXTURE_WRAP_S,i.CLAMP_TO_EDGE),i.texParameteri(i.TEXTURE_2D,i.TEXTURE_WRAP_T,i.CLAMP_TO_EDGE);let u={src:i.getUniformLocation(s,`u_src`),srcSize:i.getUniformLocation(s,`u_srcSize`),outSize:i.getUniformLocation(s,`u_outSize`),hardScan:i.getUniformLocation(s,`u_hardScan`),hardPix:i.getUniformLocation(s,`u_hardPix`),maskDark:i.getUniformLocation(s,`u_maskDark`),maskLight:i.getUniformLocation(s,`u_maskLight`),bloom:i.getUniformLocation(s,`u_bloom`),brightness:i.getUniformLocation(s,`u_brightness`),palMode:i.getUniformLocation(s,`u_palMode`),maskPeriod:i.getUniformLocation(s,`u_maskPeriod`),interlaceFlicker:i.getUniformLocation(s,`u_interlaceFlicker`),phosphorPersist:i.getUniformLocation(s,`u_phosphorPersist`),time:i.getUniformLocation(s,`u_time`)},d=i.getAttribLocation(s,`a_pos`),f=0,p=3,m=0,h=0,g=0,_=0,v=0,y=0,b=performance.now()/1e3;function x(e){f=+!!e}function S(e){p=Math.max(3,Number.isFinite(e)?e:3)}let C=!1;function w(e){C=e;let t=+!!e;t!==m&&(m=t,t&&y===0&&h>0&&T(),!t&&y!==0&&E())}function T(){let e=()=>{h>0&&D(),y=requestAnimationFrame(e)};y=requestAnimationFrame(e)}function E(){y!==0&&cancelAnimationFrame(y),y=0}function D(){let e=h>=480,t=C,n=t?-1:-8,r=e?-5:-3,a=t?.1:.18,o=t?1:1.2;m>.5&&(o*=2/1.4),i.viewport(0,0,_,v),i.clearColor(0,0,0,1),i.clear(i.COLOR_BUFFER_BIT),i.useProgram(s),i.activeTexture(i.TEXTURE0),i.bindTexture(i.TEXTURE_2D,l),i.uniform1i(u.src,0),i.uniform2f(u.srcSize,h,g),i.uniform2f(u.outSize,_,v),i.uniform1f(u.hardScan,n),i.uniform1f(u.hardPix,r),i.uniform1f(u.maskDark,.5),i.uniform1f(u.maskLight,1.5),i.uniform1f(u.bloom,a),i.uniform1f(u.brightness,o),i.uniform1f(u.palMode,f),i.uniform1f(u.maskPeriod,p),i.uniform1f(u.interlaceFlicker,m),i.uniform1f(u.phosphorPersist,.4),i.uniform1f(u.time,performance.now()/1e3-b),i.bindBuffer(i.ARRAY_BUFFER,c),i.enableVertexAttribArray(d),i.vertexAttribPointer(d,2,i.FLOAT,!1,0,0),i.drawArrays(i.TRIANGLE_STRIP,0,4)}function O(e,t,r,a,o){n.width!==a&&(n.width=a),n.height!==o&&(n.height=o),i.bindTexture(i.TEXTURE_2D,l),i.pixelStorei(i.UNPACK_FLIP_Y_WEBGL,!0),i.texImage2D(i.TEXTURE_2D,0,i.RGBA,t,r,0,i.RGBA,i.UNSIGNED_BYTE,e),h=t,g=r,_=a,v=o,D(),m>.5&&y===0&&T()}function k(){E(),i.deleteProgram(s),i.deleteShader(a),i.deleteShader(o),i.deleteBuffer(c),i.deleteTexture(l)}return{render:O,setPalMode:x,setMaskPeriod:S,setInterlaceMode:w,dispose:k}}export{n as createCrtRenderer};
