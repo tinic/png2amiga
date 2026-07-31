@@ -119,6 +119,10 @@ const crtEnabled = ref(false)
 // case where alignment is approximate).
 const splitView = ref(false)
 const splitPos = ref(0.5)
+// True when the source image is pixel-1:1 with the encoded buffer. The
+// overlay then renders nearest-neighbour so it stays crisp under the 4x
+// loupe like the preview canvases; scaled sources keep smooth sampling.
+const splitOriginal1to1 = ref(false)
 const previewStackRef = useTemplateRef<HTMLDivElement>('previewStackRef')
 
 function splitToggle(): void {
@@ -1886,6 +1890,8 @@ async function paintAndCacheResult(result: ConvertResult): Promise<boolean> {
   lastRgba = new Uint8Array(result.rgba)
   lastIndices = result.indices ? new Uint8Array(result.indices) : null
   lastSrc = { w: result.width, h: result.height }
+  splitOriginal1to1.value =
+    result.width === imageWidth.value && result.height === imageHeight.value
   lastDst = { w: cssW, h: cssH }
   if (crtEnabled.value) {
     const r = await ensureCrtRenderer()
@@ -3008,7 +3014,7 @@ async function loadExample(example: typeof EXAMPLES[number]) {
               <canvas ref="crtCanvasRef" class="preview-canvas" v-show="crtEnabled" />
               <div v-if="splitView && imageUrl" class="split-overlay" aria-hidden="true"
                    :style="{ clipPath: `inset(0 ${(1 - splitPos) * 100}% 0 0)` }">
-                <img :src="imageUrl" alt="" class="split-original" />
+                <img :src="imageUrl" alt="" class="split-original" :class="{ 'split-original-nn': splitOriginal1to1 }" />
               </div>
               <!-- Focusable separator with keyboard support; the rule's
                    interactive-role list doesn't include separator. -->
@@ -3513,6 +3519,10 @@ async function loadExample(example: typeof EXAMPLES[number]) {
   width: 100%;
   height: 100%;
   object-fit: fill;
+}
+.split-original-nn {
+  image-rendering: pixelated;
+  image-rendering: crisp-edges;
 }
 .split-divider {
   position: absolute;
