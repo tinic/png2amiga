@@ -221,7 +221,8 @@ pages; raw_frame = pageA ++ pageB.
 | `ted-multicolor` | 160×200 | 4 / 4×8 cell | multicolor: 2 global + 2 per-cell |
 
 Plus/4 / C16. Fixed 121-color palette (`palette::kTedPalette`, 128 entries
-indexed `(luma<<4)|chroma`; chroma 0 = black at every luma → 121 unique).
+indexed `(luma<<4)|chroma`; chroma 0 = black at every luma → 121 distinct
+hardware colours, of which 111 are unique RGB — Colodore saturates at luma 7).
 `src/ted.{hpp,cpp}`. Per-cell brute force over the 121 colors in OKLab; the
 LUMA / CHROMA bytes pack two 3-bit lumas and two 4-bit chromas per cell.
 Multicolor adds a 2-color global background pair (`$FF15`/`$FF16`). raw_frame

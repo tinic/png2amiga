@@ -355,8 +355,12 @@ inline constexpr std::array<std::array<std::uint8_t, 3>, 16> kThomsonTo770Idx = 
 // ---------------------------------------------------------------------------
 // Commodore TED (Plus/4, C16) FIXED palette — 128 entries indexed by the
 // color byte (luma<<4)|chroma. luma = bits 6-4 (0..7), chroma = bits 3-0
-// (0..15). chroma 0 = black at every luma → 121 unique colors. Source:
-// VICE colodore_ted.vpl. (Reference copy at /tmp/ted_palette.txt.)
+// (0..15). chroma 0 = black at every luma → 121 distinct hardware colours,
+// which is what ted_colors() enumerates. Note the rendered gamut is smaller:
+// Colodore's PAL decoding saturates at luma 7, where 7 chromas land on pure
+// white and two more pairs collide, so the table holds 111 unique RGB values.
+// That is faithful to the source, not a transcription error — verified
+// against VICE's colodore_ted.vpl byte for byte.
 // ---------------------------------------------------------------------------
 inline constexpr std::array<std::uint32_t, 128> kTedPalette = {
     // luma 0
