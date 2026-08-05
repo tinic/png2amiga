@@ -114,9 +114,9 @@ const crtEnabled = ref(false)
 
 // Split compare view: original image overlaid on the converted preview,
 // clipped at a draggable divider. The original is CSS-stretched to the
-// preview's display size so content lines up 1:1 (both render the same
-// source region; letterboxed native-par fixed-buffer modes are the one
-// case where alignment is approximate).
+// preview's display size so content lines up 1:1. Native PAR letterboxes
+// the source inside the hardware buffer, so the overlay switches to
+// object-fit: contain there to land on the same rect.
 const splitView = ref(false)
 const splitPos = ref(0.5)
 // True when the source image is pixel-1:1 with the encoded buffer. The
@@ -3014,7 +3014,7 @@ async function loadExample(example: typeof EXAMPLES[number]) {
               <canvas ref="crtCanvasRef" class="preview-canvas" v-show="crtEnabled" />
               <div v-if="splitView && imageUrl" class="split-overlay" aria-hidden="true"
                    :style="{ clipPath: `inset(0 ${(1 - splitPos) * 100}% 0 0)` }">
-                <img :src="imageUrl" alt="" class="split-original" :class="{ 'split-original-nn': splitOriginal1to1 }" />
+                <img :src="imageUrl" alt="" class="split-original" :class="{ 'split-original-nn': splitOriginal1to1 }" :style="{ objectFit: options.nativePar && isEffectiveFixedBuffer ? 'contain' : 'fill' }" />
               </div>
               <!-- Focusable separator with keyboard support; the rule's
                    interactive-role list doesn't include separator. -->
