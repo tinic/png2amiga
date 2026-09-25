@@ -104,6 +104,7 @@ const crtCanvasRef = useTemplateRef<HTMLCanvasElement>('crtCanvasRef')  // WebGL
 const charsetCanvasRef = useTemplateRef<HTMLCanvasElement>('charsetCanvasRef')
 const genesisTilesCanvasRef = useTemplateRef<HTMLCanvasElement>('genesisTilesCanvasRef')
 const snesTilesCanvasRef = useTemplateRef<HTMLCanvasElement>('snesTilesCanvasRef')
+const smsTilesCanvasRef = useTemplateRef<HTMLCanvasElement>('smsTilesCanvasRef')
 // Sliced / strips / copper-HAM modes evolve their palette per scanline.
 // We render the per-row base palette as a vertical strip beside the
 // preview: backing is N×H pixels (one column per slot, one row per
@@ -1327,6 +1328,13 @@ function formatTileStatsCgaText(result: ConvertResult): string {
   return `${t} cells (${cols}×${rows})`
 }
 
+// Hard VRAM tile caps: SNES Mode 7 256, SMS / Game Gear 448.
+function vramTileBudget(mode: string): number {
+  if (isSnesMode(mode)) return 256
+  if (isSmsMode(mode)) return SMS_TILE_BUDGET
+  return 0
+}
+
 function formatTileStatsTiled(result: ConvertResult, mode: string): string {
   if (!result.genesisTotalCells || result.genesisUniqueTiles == null) return ''
   const u = result.genesisUniqueTiles
@@ -1339,9 +1347,8 @@ function formatTileStatsTiled(result: ConvertResult, mode: string): string {
       (options.tileBudget || 256) - (options.tileReserve || 0))
     return formatTileStatsBudget(u, t, ram_kb, budget, 'charset')
   }
-  if (isSnesMode(mode)) {
-    return formatTileStatsBudget(u, t, ram_kb, 256, 'VRAM')
-  }
+  const vram = vramTileBudget(mode)
+  if (vram) return formatTileStatsBudget(u, t, ram_kb, vram, 'VRAM')
   return formatTileStatsGenesis(u, t, ram_kb)
 }
 
@@ -1813,6 +1820,98 @@ function paintGenesisTilesCanvas(result: ConvertResult): void {
 }
 
 // ---------------------------------------------------------------------------
+// SMS / Game Gear tile diagnostic (VDP mode 4).
+// ---------------------------------------------------------------------------
+
+// 448 tiles fit below the name table at $3800.
+const SMS_TILE_BUDGET = 448
+
+// Tilemap entry: bits 0-8 tile, bit 11 palette (0 = CRAM 0-15, 1 = 16-31).
+// Each tile is drawn with the palette of the first cell that uses it.
+function smsFirstPalettes(tilemap: Uint8Array, uniqueTiles: number): Int8Array {
+  const first = new Int8Array(uniqueTiles).fill(-1)
+  for (let c = 0; c < tilemap.length / 2; c++) {
+    const word = ((tilemap[c * 2 + 1] ?? 0) << 8) | (tilemap[c * 2] ?? 0)
+    const idx = word & 0x01FF
+    if (idx < uniqueTiles && first[idx] === -1) first[idx] = (word >> 11) & 1
+  }
+  return first
+}
+
+// Tile rows are 4 bytes, one per bitplane; bit 7 is the leftmost pixel.
+function smsTilePixel(tileBytes: Uint8Array, g: number, r: number, p: number): number {
+  let v = 0
+  for (let plane = 0; plane < 4; plane++) {
+    const byte = tileBytes[g * 32 + r * 4 + plane] ?? 0
+    v |= ((byte >> (7 - p)) & 1) << plane
+  }
+  return v
+}
+
+function smsRgb(pal: Uint8Array, entry: number): [number, number, number] {
+  return [pal[entry * 3] ?? 0, pal[entry * 3 + 1] ?? 0, pal[entry * 3 + 2] ?? 0]
+}
+
+function paintSmsTile(ctx: { px: Uint8ClampedArray; pixelW: number; cols: number;
+    tileBytes: Uint8Array; pal: Uint8Array }, g: number, line: number): void {
+  const gx0 = (g % ctx.cols) * 8
+  const gy0 = Math.floor(g / ctx.cols) * 8
+  for (let r = 0; r < 8; r++) {
+    for (let p = 0; p < 8; p++) {
+      paintTilePixel({
+        px: ctx.px, pixelW: ctx.pixelW, scale: 1, x: gx0 + p, y: gy0 + r,
+        rgb: smsRgb(ctx.pal, line * 16 + smsTilePixel(ctx.tileBytes, g, r, p)),
+      })
+    }
+  }
+}
+
+interface SmsTileInputs {
+  tileBytes: Uint8Array
+  tilemap: Uint8Array
+  pal: Uint8Array
+  unique: number
+}
+
+function smsTileInputs(result: ConvertResult): SmsTileInputs | null {
+  const tileBytes = result.genesisTileBytes
+  const tilemap = result.genesisTilemapBytes
+  const pal = result.paletteBytes
+  const unique = result.genesisUniqueTiles ?? 0
+  if (!tileBytes || !tilemap || !pal || unique === 0) return null
+  return { tileBytes, tilemap, pal, unique }
+}
+
+// 16 tiles per row, shown at 2x.
+function sizeTileCanvas(canvas: HTMLCanvasElement, unique: number, cols: number): void {
+  canvas.width = cols * 8
+  canvas.height = Math.ceil(unique / cols) * 8
+  canvas.style.width = `${canvas.width * 2}px`
+  canvas.style.height = `${canvas.height * 2}px`
+  canvas.style.imageRendering = 'pixelated'
+}
+
+function paintSmsTilesCanvas(result: ConvertResult): void {
+  const canvas = smsTilesCanvasRef.value
+  if (!canvas || !isSmsMode(options.mode)) return
+  const inputs = smsTileInputs(result)
+  if (!inputs) return
+  const first = smsFirstPalettes(inputs.tilemap, inputs.unique)
+  const cols = 16
+  sizeTileCanvas(canvas, inputs.unique, cols)
+  const ctx2d = canvas.getContext('2d')
+  if (!ctx2d) return
+  const imgData = ctx2d.createImageData(canvas.width, canvas.height)
+  const ctx = { px: imgData.data, pixelW: canvas.width, cols,
+    tileBytes: inputs.tileBytes, pal: inputs.pal }
+  for (let g = 0; g < inputs.unique; g++) {
+    const line = first[g] ?? -1
+    if (line !== -1) paintSmsTile(ctx, g, line)
+  }
+  ctx2d.putImageData(imgData, 0, 0)
+}
+
+// ---------------------------------------------------------------------------
 // SNES Mode 7 tile diagnostic.
 // ---------------------------------------------------------------------------
 
@@ -1899,6 +1998,7 @@ async function paintAndCacheResult(result: ConvertResult): Promise<boolean> {
   }
   paintCharsetCanvas(result)
   paintGenesisTilesCanvas(result)
+  paintSmsTilesCanvas(result)
   paintSnesTilesCanvas(result)
   paintScanlinePaletteStrip(result, cssH)
   return true
@@ -3136,6 +3236,10 @@ async function loadExample(example: typeof EXAMPLES[number]) {
           <div v-if="isSnesMode(options.mode)"
                class="surface-card border-round-lg p-2">
             <canvas ref="snesTilesCanvasRef" class="charset-canvas" />
+          </div>
+          <div v-if="isSmsMode(options.mode)"
+               class="surface-card border-round-lg p-2">
+            <canvas ref="smsTilesCanvasRef" class="charset-canvas" />
           </div>
           <!-- Floating tooltip that tracks the cursor across palette
                swatches. Fixed-position so it stays under the mouse

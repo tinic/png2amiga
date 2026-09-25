@@ -5304,7 +5304,11 @@ ConvertResult make_result(std::vector<std::uint8_t> data, const PipelineResult& 
     }
     // Genesis tile diagnostic: u16 vectors get serialised as little-endian
     // 2-byte sequences so JS can DataView them with .getUint16(off, true).
-    if (amiga::is_genesis(p.mode) && !p.genesis_tile_bytes.empty()) {
+    // SMS / Game Gear reuse the same fields: 32-byte planar tiles and u16
+    // tilemap entries in the VDP mode 4 layout (the web decodes per mode).
+    // Their palette is the 32-entry CRAM already in paletteBytes.
+    if ((amiga::is_genesis(p.mode) || amiga::is_sms(p.mode)) &&
+        !p.genesis_tile_bytes.empty()) {
         r.genesisTileBytes = p.genesis_tile_bytes;
         auto u16_to_bytes = [](const std::vector<std::uint16_t>& src) {
             std::vector<std::uint8_t> out(src.size() * 2);
