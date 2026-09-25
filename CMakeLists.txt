@@ -207,6 +207,20 @@ else()
     target_link_libraries(api_pipeline_smoke PRIVATE stb spng webp_headers webpdecode webpdspdecode webputilsdecode constixel nlohmann_json)
     target_compile_options(api_pipeline_smoke PRIVATE ${PNG2AMIGA_WARNING_FLAGS})
 
+    # iff_camg_check: the CAMG viewport bits api::convert_iff (the web
+    # export path) writes, per mode.  Issue #13: hires exports had no
+    # HIRES bit.
+    add_executable(iff_camg_check
+        tools/iff_camg_check.cpp
+        ${PNG2AMIGA_CORE_SOURCES}
+    )
+    target_include_directories(iff_camg_check PRIVATE
+        src
+        ${CMAKE_SOURCE_DIR}/third_party
+        ${CMAKE_BINARY_DIR}/generated)
+    target_link_libraries(iff_camg_check PRIVATE stb spng webp_headers webpdecode webpdspdecode webputilsdecode constixel nlohmann_json)
+    target_compile_options(iff_camg_check PRIVATE ${PNG2AMIGA_WARNING_FLAGS})
+
     # palette_search: experimental population-based palette search for
     # small palettes (lores OCS d ≤ 4). --best does k-means + 161
     # jittered restarts which rarely escapes basins at d=2/3 (sparse
@@ -297,7 +311,7 @@ else()
     # .github/workflows/release.yml. On ARM64 the option is a no-op (the
     # -mavx2 probe already fails there and NEON is the baseline ISA).
     set(PNG2AMIGA_SIMD_TARGETS
-        png2amiga api_pipeline_smoke bench_ssimulacra2 palette_search)
+        png2amiga api_pipeline_smoke iff_camg_check bench_ssimulacra2 palette_search)
     if(PNG2AMIGA_BASELINE_SIMD)
         message(STATUS "png2amiga: baseline SIMD build (no AVX2/FMA/SSE4.1)")
     endif()
@@ -430,6 +444,7 @@ else()
         # bool/int stubs that quantize_metal_wrap.cpp links against.
         target_sources(png2amiga PRIVATE src/quantize_metal.cpp)
         target_sources(api_pipeline_smoke PRIVATE src/quantize_metal.cpp)
+        target_sources(iff_camg_check PRIVATE src/quantize_metal.cpp)
         target_sources(palette_search PRIVATE src/quantize_metal.cpp)
     endif()
 
@@ -520,6 +535,14 @@ else()
         add_dependencies(api_pipeline_smoke quantize_metal_obj)
         target_link_libraries(api_pipeline_smoke PRIVATE ${_metal_cpp_obj})
         target_link_libraries(api_pipeline_smoke PRIVATE -lc++ -lc++abi)
+
+        # iff_camg_check: same core sources, same Metal hook-up.
+        target_compile_definitions(iff_camg_check PRIVATE PNG2AMIGA_HAVE_METAL=1)
+        target_link_libraries(iff_camg_check PRIVATE
+            "-framework Foundation" "-framework Metal" "-framework QuartzCore")
+        add_dependencies(iff_camg_check quantize_metal_obj)
+        target_link_libraries(iff_camg_check PRIVATE ${_metal_cpp_obj})
+        target_link_libraries(iff_camg_check PRIVATE -lc++ -lc++abi)
 
         # palette_search uses the same core sources (quantize::quantize
         # → ocs_bruteforce → maybe gpu_restart on Metal-enabled). Same
@@ -2125,6 +2148,9 @@ sys.exit(0 if got==expect else (print(f'expected {expect}, got {got}') or 1))"
     # ---------------------------------------------------------------
     set(_equiv_chk
         "${PNG2AMIGA_PYTHON};${CMAKE_SOURCE_DIR}/tools/check_api_equiv.py;--cli;$<TARGET_FILE:png2amiga>;--api;$<TARGET_FILE:api_pipeline_smoke>")
+
+    add_test(NAME "iff-camg-web-export"
+        COMMAND $<TARGET_FILE:iff_camg_check> ${CMAKE_SOURCE_DIR}/examples/brick.png)
 
     add_test(NAME "api-equiv-lores-plain"
         COMMAND ${_equiv_chk}

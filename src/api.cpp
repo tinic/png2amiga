@@ -5360,7 +5360,9 @@ ConvertResult convert_iff(const std::uint8_t* input_data,
     if (!result) return make_error(result.error().message);
 
     iff::IffOptions iff_opts;
+    iff_opts.hires = result->hires;
     iff_opts.interlace = result->interlace;
+    iff_opts.has_transparency = result->has_transparency;
     iff_opts.dpf = result->dpf;
     if (result->copper && !result->scanline_palettes.empty()) {
         iff_opts.scanline_palettes = &result->scanline_palettes;
@@ -6205,6 +6207,7 @@ ConvertResult convert_mask_iff(const std::uint8_t* input_data,
     };
 
     iff::IffOptions iff_opts;
+    iff_opts.hires = result->hires;
     iff_opts.interlace = result->interlace;
 
     auto iff_data = iff::write_ilbm(*planes, mask_palette, amiga::Mode::lores, iff_opts);
