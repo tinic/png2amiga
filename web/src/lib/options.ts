@@ -254,11 +254,11 @@ export const CHIPSETS: ChipsetOption[] = [
   { value: 'ega',     label: 'IBM PC EGA (6-bit IrgbIRGB)' },
   { value: 'cga',     label: 'IBM PC CGA (fixed palette)' },
   { value: 'snes',    label: 'SNES Mode 7' },
+  { value: 'sms',     label: 'Sega Master System / Game Gear' },
   { value: 'genesis', label: 'Sega Genesis / Mega Drive' },
   { value: 'gba',     label: 'Game Boy Advance' },
   { value: 'thomson', label: 'Thomson TO7/70 + TO8' },
   { value: 'ted',     label: 'Commodore Plus/4 (TED)' },
-  { value: 'sms',     label: 'Sega Master System / Game Gear' },
   { value: 'cpc',     label: 'Amstrad CPC (27 colors)' },
   { value: 'cpcplus', label: 'Amstrad CPC Plus (4096 colors)' },
 ]
