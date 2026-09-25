@@ -643,23 +643,26 @@ TargetDims compute_target_dims(std::size_t src_w,
         auto w = static_cast<std::size_t>(std::lround(static_cast<double>(h) * src_aspect / par));
         return {w, h};
     }
-    // Neither: use mode default width, but don't upscale small images
-    auto w = std::min(mode_w, src_w);
-    // For Amiga hires, always use the full mode width.
-    if (params.is_hires) w = mode_w;
-    auto h = round_height(static_cast<double>(w) * par / src_aspect, interlace);
-    // Fixed-buffer modes (Atari, VGA, EGA, CGA): by default stretch-fit the
-    // source to the full hardware buffer. With --native-par, preserve source
-    // aspect by reducing target_h (letterbox) or target_w (pillarbox).
+    // Fixed-buffer modes (Atari, VGA, EGA, CGA, ...): by default stretch-fit
+    // the source to the full hardware buffer. With --native-par, preserve
+    // source aspect by reducing target_h (letterbox) or target_w (pillarbox).
     auto mode_h = params.screen_height;
+    bool is_fixed_buffer = mode_h > 0 &&
+                           (amiga::is_atari(mode) || amiga::is_vga(mode) ||
+                            amiga::is_ega(mode) || amiga::is_cga(mode) ||
+                            amiga::is_cga_text(mode) || amiga::is_snes(mode) ||
+                            amiga::is_genesis(mode) || amiga::is_c64(mode) ||
+                            amiga::is_gba(mode) || amiga::is_thomson(mode) ||
+                            amiga::is_ted(mode) || amiga::is_sms(mode) ||
+                            amiga::is_cpc(mode));
+    // Neither: use mode default width, but don't upscale small images.  Amiga
+    // hires and every fixed-buffer mode always take the full width: the buffer
+    // is the display, so a small source is fitted into it, not left small
+    // inside black bars.
+    auto w = std::min(mode_w, src_w);
+    if (params.is_hires || is_fixed_buffer) w = mode_w;
+    auto h = round_height(static_cast<double>(w) * par / src_aspect, interlace);
     if (mode_h > 0) {
-        bool is_fixed_buffer = amiga::is_atari(mode) || amiga::is_vga(mode) ||
-                               amiga::is_ega(mode) || amiga::is_cga(mode) ||
-                               amiga::is_cga_text(mode) || amiga::is_snes(mode) ||
-                               amiga::is_genesis(mode) || amiga::is_c64(mode) ||
-                               amiga::is_gba(mode) || amiga::is_thomson(mode) ||
-                               amiga::is_ted(mode) || amiga::is_sms(mode) ||
-                               amiga::is_cpc(mode);
         if (is_fixed_buffer && !options.native_par) {
             h = mode_h;  // stretch to fill
         } else if (h > mode_h) {

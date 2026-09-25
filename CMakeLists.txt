@@ -1733,6 +1733,23 @@ sys.exit(0 if got==expect else (print(f'expected {expect}, got {got}') or 1))"
                              PROPERTIES DEPENDS "smoke-smscpc-${ext}")
     endforeach()
 
+    # --native-par with a source narrower than the buffer: a fixed-buffer
+    # mode fits the image to its buffer (photo.jpg is 540x360, 3:2).  The
+    # old "don't upscale small sources" rule left cpc-mode2 at 540x180,
+    # boxed on all four sides; it must pillarbox to the full height.
+    foreach(np_spec "cpc-mode2|600x200" "cpc-mode1|300x200" "stf-med|640x178")
+        string(REPLACE "|" ";" np_parts ${np_spec})
+        list(GET np_parts 0 np_mode)
+        list(GET np_parts 1 np_dims)
+        add_test(
+            NAME "native-par-small-source-${np_mode}"
+            COMMAND png2amiga --mode ${np_mode} --native-par
+                    ${CMAKE_SOURCE_DIR}/examples/photo.jpg
+                    ${CMAKE_BINARY_DIR}/native-par-small-${np_mode}.png)
+        set_tests_properties("native-par-small-source-${np_mode}"
+                             PROPERTIES PASS_REGULAR_EXPRESSION "Target: +${np_dims} ")
+    endforeach()
+
     # Output sizes: CPC screen 16384, .scr = 128-byte AMSDOS header +
     # screen (checksum over bytes 0..66), .pal = 1 Gate Array byte per ink
     # (classic) or 2 ASIC bytes per ink (Plus); SMS .bin = 32 B/tile

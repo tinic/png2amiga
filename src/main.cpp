@@ -6783,23 +6783,27 @@ int run_main(int argc, char* argv[]) {
                 std::lround(static_cast<double>(target_h) * src_aspect / par));
         }
     } else {
-        // Use mode default width. For lores modes, don't upscale if source
-        // is smaller. For hires, always use 640 (that's the point of hires).
-        target_w = params.is_hires ? params.screen_width : std::min(params.screen_width, src_w);
-        target_h = round_h(static_cast<double>(target_w) * par / src_aspect);
-        // Fixed-buffer modes (Atari, VGA, CGA): by default stretch-fit the
-        // source to the full buffer. With --native-par, preserve source
+        // Fixed-buffer modes (Atari, VGA, CGA, ...): by default stretch-fit
+        // the source to the full buffer. With --native-par, preserve source
         // aspect on hardware — letterbox (reduce target_h) or pillarbox
         // (reduce target_w) to fit inside screen_height. Later padding
         // expands the encoded image to full buffer dimensions with black.
+        bool is_fixed_buffer =
+            params.screen_height > 0 &&
+            (amiga::is_atari(config->mode) || amiga::is_vga(config->mode) ||
+             amiga::is_cga(config->mode) || amiga::is_ega(config->mode) ||
+             amiga::is_snes(config->mode) || amiga::is_genesis(config->mode) ||
+             amiga::is_c64(config->mode) || amiga::is_gba(config->mode) ||
+             amiga::is_thomson(config->mode) || amiga::is_ted(config->mode) ||
+             amiga::is_sms(config->mode) || amiga::is_cpc(config->mode));
+        // Use mode default width. For lores modes, don't upscale if source
+        // is smaller. Hires always uses 640 (that's the point of hires), and a
+        // fixed-buffer mode always fills its buffer width: the buffer is the
+        // display, so a small source is fitted into it, not left small.
+        target_w = (params.is_hires || is_fixed_buffer) ? params.screen_width
+                                                        : std::min(params.screen_width, src_w);
+        target_h = round_h(static_cast<double>(target_w) * par / src_aspect);
         if (params.screen_height > 0) {
-            bool is_fixed_buffer = amiga::is_atari(config->mode) || amiga::is_vga(config->mode) ||
-                                   amiga::is_cga(config->mode) || amiga::is_ega(config->mode) ||
-                                   amiga::is_snes(config->mode) ||
-                                   amiga::is_genesis(config->mode) || amiga::is_c64(config->mode) ||
-                                   amiga::is_gba(config->mode) || amiga::is_thomson(config->mode) ||
-                                   amiga::is_ted(config->mode) || amiga::is_sms(config->mode) ||
-                                   amiga::is_cpc(config->mode);
             if (is_fixed_buffer && !config->native_par) {
                 target_h = params.screen_height;  // stretch to fill
             } else if (target_h > params.screen_height) {
