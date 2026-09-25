@@ -1736,41 +1736,38 @@ Result<Palette> refine_with_dither(const Image& image,
 // ---------------------------------------------------------------------------
 // EGA histogram quantizer — see quantize.hpp for rationale.
 // ---------------------------------------------------------------------------
-Palette ega_histogram(const Image& image, std::size_t K) {
-    std::array<std::uint64_t, 64> hist{};
-    for (std::size_t y = 0; y < image.height(); ++y) {
-        for (std::size_t x = 0; x < image.width(); ++x) {
-            auto e = palette::linear_to_ega(image[x, y]);
-            hist[e]++;
-        }
-    }
-    std::array<color_space::OKLab, 64> gamut_lab;
-    std::array<Color3f, 64> gamut_rgb;
-    for (std::size_t i = 0; i < 64; ++i) {
-        gamut_rgb[i] = palette::ega_to_linear(static_cast<std::uint8_t>(i));
-        gamut_lab[i] = color_space::linear_to_oklab(gamut_rgb[i]);
-    }
+namespace {
 
-    std::vector<std::uint8_t> picked;
+// Shared core of ega_histogram / gamut_histogram: k-means++ seeding over a
+// per-gamut-entry histogram, then Lloyd refinement that snaps each centroid
+// back to the closest still-available gamut entry.
+Palette histogram_pick(std::span<const std::uint64_t> hist,
+                       std::span<const Color3f> gamut_rgb,
+                       std::span<const color_space::OKLab> gamut_lab,
+                       std::size_t K,
+                       const char* name) {
+    const std::size_t G = gamut_rgb.size();
+
+    std::vector<std::size_t> picked;
     picked.reserve(K);
 
     // Seed 1: highest-frequency non-zero bucket.
     {
         std::uint64_t best_count = 0;
-        std::uint8_t best = 0;
-        for (std::size_t i = 0; i < 64; ++i)
+        std::size_t best = 0;
+        for (std::size_t i = 0; i < G; ++i)
             if (hist[i] > best_count) {
                 best_count = hist[i];
-                best = static_cast<std::uint8_t>(i);
+                best = i;
             }
         picked.push_back(best);
     }
 
     // Seed 2..K: weighted by (count × min_d²_to_existing_picks).
     while (picked.size() < K) {
-        std::array<double, 64> score{};
+        std::vector<double> score(G, 0.0);
         double total = 0;
-        for (std::size_t i = 0; i < 64; ++i) {
+        for (std::size_t i = 0; i < G; ++i) {
             if (hist[i] == 0) continue;
             double min_d = std::numeric_limits<double>::infinity();
             for (auto p : picked) {
@@ -1790,12 +1787,12 @@ Palette ega_histogram(const Image& image, std::size_t K) {
             total += score[i];
         }
         if (total <= 0) break;
-        std::uint8_t best = 0;
+        std::size_t best = 0;
         double best_s = -1;
-        for (std::size_t i = 0; i < 64; ++i)
+        for (std::size_t i = 0; i < G; ++i)
             if (score[i] > best_s) {
                 best_s = score[i];
-                best = static_cast<std::uint8_t>(i);
+                best = i;
             }
         picked.push_back(best);
     }
@@ -1808,7 +1805,7 @@ Palette ega_histogram(const Image& image, std::size_t K) {
             double w{};
         };
         std::vector<Acc> acc(picked.size());
-        for (std::size_t i = 0; i < 64; ++i) {
+        for (std::size_t i = 0; i < G; ++i) {
             if (hist[i] == 0) continue;
             float best_d = std::numeric_limits<float>::infinity();
             std::size_t best_k = 0;
@@ -1828,8 +1825,8 @@ Palette ega_histogram(const Image& image, std::size_t K) {
             acc[best_k].b += static_cast<double>(gamut_lab[i].b) * w;
             acc[best_k].w += w;
         }
-        std::vector<std::uint8_t> new_picked(picked.size());
-        std::array<bool, 64> taken{};
+        std::vector<std::size_t> new_picked(picked.size());
+        std::vector<bool> taken(G, false);
         bool changed = false;
         std::vector<std::size_t> order(picked.size());
         for (std::size_t i = 0; i < order.size(); ++i)
@@ -1847,16 +1844,16 @@ Palette ega_histogram(const Image& image, std::size_t K) {
                                                             static_cast<float>(acc[k].a / acc[k].w),
                                                             static_cast<float>(acc[k].b / acc[k].w)}
                                        : gamut_lab[picked[k]];
-            std::uint8_t best = 0;
+            std::size_t best = 0;
             float best_d = std::numeric_limits<float>::infinity();
-            for (std::size_t g = 0; g < 64; ++g) {
+            for (std::size_t g = 0; g < G; ++g) {
                 if (taken[g]) continue;
                 auto& gl = gamut_lab[g];
                 float dL = cent.L - gl.L, da = cent.a - gl.a, db = cent.b - gl.b;
                 float d = dL * dL + da * da + db * db;
                 if (d < best_d) {
                     best_d = d;
-                    best = static_cast<std::uint8_t>(g);
+                    best = g;
                 }
             }
             new_picked[k] = best;
@@ -1868,11 +1865,53 @@ Palette ega_histogram(const Image& image, std::size_t K) {
     }
 
     Palette pal;
-    pal.name = "ega";
+    pal.name = name;
     pal.colors.reserve(picked.size());
     for (auto p : picked)
         pal.colors.push_back(gamut_rgb[p]);
     return pal;
+}
+
+}  // namespace
+
+Palette ega_histogram(const Image& image, std::size_t K) {
+    std::array<std::uint64_t, 64> hist{};
+    for (std::size_t y = 0; y < image.height(); ++y) {
+        for (std::size_t x = 0; x < image.width(); ++x) {
+            auto e = palette::linear_to_ega(image[x, y]);
+            hist[e]++;
+        }
+    }
+    std::array<color_space::OKLab, 64> gamut_lab;
+    std::array<Color3f, 64> gamut_rgb;
+    for (std::size_t i = 0; i < 64; ++i) {
+        gamut_rgb[i] = palette::ega_to_linear(static_cast<std::uint8_t>(i));
+        gamut_lab[i] = color_space::linear_to_oklab(gamut_rgb[i]);
+    }
+    return histogram_pick(hist, gamut_rgb, gamut_lab, K, "ega");
+}
+
+Palette gamut_histogram(const Image& image, std::size_t K, std::span<const Color3f> gamut) {
+    std::vector<color_space::OKLab> gamut_lab(gamut.size());
+    for (std::size_t i = 0; i < gamut.size(); ++i)
+        gamut_lab[i] = color_space::linear_to_oklab(gamut[i]);
+    std::vector<std::uint64_t> hist(gamut.size(), 0);
+    for (auto c : image.pixels()) {
+        auto lab = color_space::linear_to_oklab(c);
+        std::size_t best = 0;
+        float best_d = std::numeric_limits<float>::infinity();
+        for (std::size_t g = 0; g < gamut.size(); ++g) {
+            float dL = lab.L - gamut_lab[g].L, da = lab.a - gamut_lab[g].a,
+                  db = lab.b - gamut_lab[g].b;
+            float d = dL * dL + da * da + db * db;
+            if (d < best_d) {
+                best_d = d;
+                best = g;
+            }
+        }
+        hist[best]++;
+    }
+    return histogram_pick(hist, gamut, gamut_lab, K, "gamut");
 }
 
 }  // namespace png2amiga::quantize

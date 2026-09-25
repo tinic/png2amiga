@@ -27,6 +27,7 @@
 #include "quantize.hpp"
 #include "quantize_metal.hpp"
 #include "scale.hpp"
+#include "sms.hpp"
 #include "types.hpp"
 #include "version.hpp"
 
@@ -1169,6 +1170,9 @@ void print_usage() {
         "    Thomson: thomson-to7-320x16 | thomson-to8-320x16 |\n"
         "            thomson-to8-160x16 | thomson-to8-320x4 | thomson-to8-640x2\n"
         "    TED:    ted-hires | ted-multicolor\n"
+        "    Sega:   sms-mode4 | gg-mode4\n"
+        "    CPC:    cpc-mode0 | cpc-mode1 | cpc-mode2 |\n"
+        "            cpc-plus-mode0 | cpc-plus-mode1 | cpc-plus-mode2\n"
         "  --depth <1-8>                   Bitplane depth (default: 5)\n"
         "  --chipset ocs|aga               Amiga chipset (default: auto)\n"
         "  --dual-playfield, --dpf         Encode into PF2 (depth 3 OCS / 4 AGA)\n"
@@ -2104,6 +2108,22 @@ Result<Config> parse_args(int argc, char* argv[]) {
                     config.mode = amiga::Mode::ted_hires;
                 else if (v == "ted-multicolor")
                     config.mode = amiga::Mode::ted_multicolor;
+                else if (v == "sms-mode4")
+                    config.mode = amiga::Mode::sms_mode4;
+                else if (v == "gg-mode4")
+                    config.mode = amiga::Mode::gg_mode4;
+                else if (v == "cpc-mode0")
+                    config.mode = amiga::Mode::cpc_mode0;
+                else if (v == "cpc-mode1")
+                    config.mode = amiga::Mode::cpc_mode1;
+                else if (v == "cpc-mode2")
+                    config.mode = amiga::Mode::cpc_mode2;
+                else if (v == "cpc-plus-mode0")
+                    config.mode = amiga::Mode::cpc_plus_mode0;
+                else if (v == "cpc-plus-mode1")
+                    config.mode = amiga::Mode::cpc_plus_mode1;
+                else if (v == "cpc-plus-mode2")
+                    config.mode = amiga::Mode::cpc_plus_mode2;
                 else if (v == "png") {
                     // Benchmark-only path: emit indexed PNG-8 directly
                     // (no Amiga encoding). Used to compare our quantizer
@@ -2368,7 +2388,7 @@ Result<Config> parse_args(int argc, char* argv[]) {
         bool non_amiga = amiga::is_atari(m) || amiga::is_vga(m) || amiga::is_ega(m) ||
                          amiga::is_cga(m) || amiga::is_c64(m) || amiga::is_snes(m) ||
                          amiga::is_genesis(m) || amiga::is_gba(m) || amiga::is_thomson(m) ||
-                         amiga::is_ted(m);
+                         amiga::is_ted(m) || amiga::is_sms(m) || amiga::is_cpc(m);
         if (non_amiga) {
             std::string which;
             if (config.copper) which += "--sliced/--copper ";
@@ -2854,6 +2874,22 @@ std::string_view mode_to_options_string(amiga::Mode m) {
         return "ted-hires";
     case amiga::Mode::ted_multicolor:
         return "ted-multicolor";
+    case amiga::Mode::sms_mode4:
+        return "sms-mode4";
+    case amiga::Mode::gg_mode4:
+        return "gg-mode4";
+    case amiga::Mode::cpc_mode0:
+        return "cpc-mode0";
+    case amiga::Mode::cpc_mode1:
+        return "cpc-mode1";
+    case amiga::Mode::cpc_mode2:
+        return "cpc-mode2";
+    case amiga::Mode::cpc_plus_mode0:
+        return "cpc-plus-mode0";
+    case amiga::Mode::cpc_plus_mode1:
+        return "cpc-plus-mode1";
+    case amiga::Mode::cpc_plus_mode2:
+        return "cpc-plus-mode2";
     default:
         return "lores";
     }
@@ -3648,6 +3684,23 @@ std::pair<std::size_t, std::size_t> preview_display_dims(
             sy = 2;
             break;
         }
+    } else if (amiga::is_cpc(mode)) {
+        // Same physical-width scheme as Thomson: 160 → 4×, 320 → 2×, 640 → 1×.
+        switch (amiga::cpc_screen_mode(mode)) {
+        case 0:
+            sx = 4;
+            break;
+        case 1:
+            sx = 2;
+            break;
+        default:
+            sx = 1;
+            break;
+        }
+        sy = 2;
+    } else if (amiga::is_sms(mode)) {
+        sx = 2;
+        sy = 2;
     } else if (amiga::is_thomson(mode) || amiga::is_ted(mode)) {
         // 160-wide modes double again (sx=4) so they fill the same physical
         // width as the 320-wide modes (the hardware doubles 160→320); the
@@ -3722,7 +3775,8 @@ std::pair<std::size_t, std::size_t> preview_display_dims(
     //    the web's freshly-opened-mode state.
     if (amiga::is_cga(mode) || amiga::is_ega(mode) || amiga::is_vga(mode) || amiga::is_c64(mode) ||
         amiga::is_atari(mode) || amiga::is_snes(mode) || amiga::is_genesis(mode) ||
-        amiga::is_thomson(mode) || amiga::is_ted(mode)) {
+        amiga::is_thomson(mode) || amiga::is_ted(mode) || amiga::is_sms(mode) ||
+        amiga::is_cpc(mode)) {
         auto params = amiga::get_mode_params(mode);
         double par = static_cast<double>(params.par);
         if (par > 0 && w > 0) {
@@ -5666,6 +5720,14 @@ int run_main(int argc, char* argv[]) {
                 "gba-mode3",
                 "gba-mode4",
                 "gba-mode5",
+                "sms-mode4",
+                "gg-mode4",
+                "cpc-mode0",
+                "cpc-mode1",
+                "cpc-mode2",
+                "cpc-plus-mode0",
+                "cpc-plus-mode1",
+                "cpc-plus-mode2",
             };
             for (std::size_t i = 0; i < std::size(modes); ++i) {
                 std::print("    \"{}\"{}\n", modes[i], i + 1 < std::size(modes) ? "," : "");
@@ -5687,6 +5749,8 @@ int run_main(int argc, char* argv[]) {
                        "thomson-to8-160x16,");
             cli_status("            thomson-to8-320x4, thomson-to8-640x2");
             cli_status("  TED:      ted-hires, ted-multicolor");
+            cli_status("  Sega:     sms-mode4, gg-mode4");
+            cli_status("  CPC:      cpc-mode0, cpc-mode1, cpc-mode2 (+ cpc-plus- variants)");
         }
         return exit_code::ok;
     }
@@ -6121,7 +6185,8 @@ int run_main(int argc, char* argv[]) {
             !amiga::is_ega(config->mode) && !amiga::is_cga(config->mode) &&
             !amiga::is_snes(config->mode) && !amiga::is_genesis(config->mode) &&
             !amiga::is_c64(config->mode) && !amiga::is_gba(config->mode) &&
-            !amiga::is_thomson(config->mode) && !amiga::is_ted(config->mode)) {
+            !amiga::is_thomson(config->mode) && !amiga::is_ted(config->mode) &&
+            !amiga::is_sms(config->mode) && !amiga::is_cpc(config->mode)) {
             auto max_d = amiga::max_user_depth(config->mode, cs);
             if (config->depth > max_d) {
                 auto mp = amiga::get_mode_params(config->mode);
@@ -6733,7 +6798,8 @@ int run_main(int argc, char* argv[]) {
                                    amiga::is_snes(config->mode) ||
                                    amiga::is_genesis(config->mode) || amiga::is_c64(config->mode) ||
                                    amiga::is_gba(config->mode) || amiga::is_thomson(config->mode) ||
-                                   amiga::is_ted(config->mode);
+                                   amiga::is_ted(config->mode) || amiga::is_sms(config->mode) ||
+                                   amiga::is_cpc(config->mode);
             if (is_fixed_buffer && !config->native_par) {
                 target_h = params.screen_height;  // stretch to fill
             } else if (target_h > params.screen_height) {
@@ -6914,7 +6980,8 @@ int run_main(int argc, char* argv[]) {
              amiga::is_ega(config->mode) || amiga::is_cga(config->mode) ||
              amiga::is_snes(config->mode) || amiga::is_genesis(config->mode) ||
              amiga::is_c64(config->mode) || amiga::is_gba(config->mode) ||
-             amiga::is_thomson(config->mode) || amiga::is_ted(config->mode)) {
+             amiga::is_thomson(config->mode) || amiga::is_ted(config->mode) ||
+             amiga::is_sms(config->mode) || amiga::is_cpc(config->mode)) {
         // Atari/DOS/SNES/Genesis/C64 modes have their bitplane depth baked
         // into the hardware (ST Low=4, VGA 13h=8, EGA=4, CGA 320=2,
         // cga-text80x100=4 attribute, SNES Mode 7=8 chunky, Genesis tiles=4,
@@ -6944,8 +7011,9 @@ int run_main(int argc, char* argv[]) {
         auto early_chipset = effective_chipset(*config);
         print_depth = (early_chipset == amiga::Chipset::aga) ? 8 : 6;
     }
-    if (amiga::is_thomson(config->mode) || amiga::is_ted(config->mode)) {
-        // Thomson / TED have no Amiga bitplanes — report the buffer dims +
+    if (amiga::is_thomson(config->mode) || amiga::is_ted(config->mode) ||
+        amiga::is_sms(config->mode) || amiga::is_cpc(config->mode)) {
+        // Thomson / TED / SMS / CPC have no Amiga bitplanes — report the buffer dims +
         // color count (16 / 4 / 2 for Thomson; 121-color palette for TED).
         // No transparency-slot-0 semantics either: clear lock_color0 so
         // the palette dump doesn't mislabel slot 0 as 🔒 (the encoder
@@ -7032,7 +7100,8 @@ int run_main(int argc, char* argv[]) {
                          !amiga::is_cga_text(config->mode) && !amiga::is_c64(config->mode) &&
                          !amiga::is_snes(config->mode) && !amiga::is_genesis(config->mode) &&
                          !amiga::is_gba(config->mode) && !amiga::is_thomson(config->mode) &&
-                         !amiga::is_ted(config->mode);
+                         !amiga::is_ted(config->mode) && !amiga::is_sms(config->mode) &&
+                         !amiga::is_cpc(config->mode);
     if (amiga_chipset) cli_print_chipset(chipset);
 
     // Dual playfield: encoded image lives in PF2 of a 2N-plane display, with
@@ -7321,6 +7390,138 @@ int run_main(int argc, char* argv[]) {
                 config->palette_file,
             };
             write_depfile(config->depfile, config->output_path, inputs);
+        }
+        return exit_code::ok;
+    }
+
+    // --- Sega Master System / Game Gear and Amstrad CPC / CPC Plus ---
+    // Fixed-buffer modes. PNG preview + .h + raw .bin (SMS: tiles ++
+    // tilemap ++ CRAM; CPC: the 16 KB screen + companion .pal) + CPC .scr
+    // (AMSDOS header + screen). Reject .iff / viewer outputs.
+    if (amiga::is_sms(config->mode) || amiga::is_cpc(config->mode)) {
+        const bool is_cpc = amiga::is_cpc(config->mode);
+        if (has_transparency) {
+            for (std::size_t i = 0; i < transparency_mask.size(); ++i)
+                if (transparency_mask[i]) image->pixels()[i] = Color3f{0, 0, 0};
+        }
+        auto src_png = png_io::encode(*image);
+        if (!src_png) {
+            std::println(stderr, "source re-encode failed: {}", src_png.error().message);
+            return exit_code::internal;
+        }
+        auto aopts = make_api_options(*config);
+        neutralize_preprocess(aopts);
+        aopts.mode = std::string(mode_to_options_string(config->mode));
+        aopts.width = 0;
+        aopts.height = 0;
+        aopts.on_progress = make_cli_progress_reporter();
+        auto enc = api::encode_state_image(*image, aopts);
+        if (!enc.ok()) {
+            std::println(stderr, "encode error: {}", enc.error_msg);
+            return exit_code::internal;
+        }
+        auto& st = enc.state;
+        std::string mode_desc;
+        if (is_cpc) {
+            mode_desc = std::format("Amstrad CPC{} mode {} ({}x{}, {} inks{})",
+                                    amiga::is_cpc_plus(config->mode) ? " Plus" : "",
+                                    amiga::cpc_screen_mode(config->mode),
+                                    st.rendered.width(),
+                                    st.rendered.height(),
+                                    st.palette.size(),
+                                    amiga::is_cpc_plus(config->mode) ? " of 4096"
+                                                                     : " of 27");
+        } else {
+            mode_desc = std::format("{} mode 4 ({}x{}, 2 x 16 of {})",
+                                    amiga::is_game_gear(config->mode) ? "Game Gear"
+                                                                      : "Master System",
+                                    st.rendered.width(),
+                                    st.rendered.height(),
+                                    amiga::is_game_gear(config->mode) ? 4096 : 64);
+        }
+        cli_status("Mode:     {}", mode_desc);
+        if (!st.palette.empty()) cli_dump_palette(std::span<const Color3f>(st.palette), *config);
+        cli_print_dither(config->dither_method,
+                         resolved_dither_strength(make_api_options(*config)));
+        if (!is_cpc) {
+            cli_status("Tiles:    {} unique / {} cells (max {})",
+                       st.genesis_unique_tiles,
+                       st.genesis_total_cells,
+                       sms::kMaxTiles);
+        }
+        cli_print_encoded_other(std::format("{} bytes (frame)", st.raw_frame.size()),
+                                static_cast<std::size_t>(count_unique_colors(st.rendered)),
+                                static_cast<double>(st.quant_error),
+                                st.psnr,
+                                st.ssimulacra2_score);
+
+        if (config->preview)
+            show_terminal_preview(st.rendered, config->mode, /*hires=*/false,
+                                  /*interlace=*/false, st.has_transparency,
+                                  st.transparency_mask);
+
+        auto write_bytes = [&](const std::string& path, std::span<const std::uint8_t> bytes) {
+            std::ofstream of(path, std::ios::binary);
+            of.write(reinterpret_cast<const char*>(bytes.data()),
+                     static_cast<std::streamsize>(bytes.size()));
+            return static_cast<bool>(of);
+        };
+        const auto& out = config->output_path;
+        if (out.empty()) {
+            // No -o — skip output.
+        } else if (ends_with(out, ".iff") || ends_with(out, ".lbm") || ends_with(out, ".cpp") ||
+                   ends_with(out, ".c") || ends_with(out, ".pi1") || ends_with(out, ".pi2") ||
+                   ends_with(out, ".pi3") || (!is_cpc && ends_with(out, ".scr"))) {
+            std::println(stderr,
+                         "{} modes support .png, .h, {}and .bin/.raw output (got '{}').",
+                         is_cpc ? "CPC" : "Master System / Game Gear",
+                         is_cpc ? ".scr, " : "",
+                         out);
+            return exit_code::cant_create;
+        } else if (ends_with(out, ".bin") || ends_with(out, ".raw") || ends_with(out, ".scr")) {
+            std::vector<std::uint8_t> bytes = st.raw_frame;
+            if (ends_with(out, ".scr"))
+                bytes = api::cpc_scr_bytes(
+                    st.raw_frame, std::filesystem::path{out}.filename().string());
+            if (!write_bytes(out, bytes)) {
+                std::println(stderr, "write error: {}", out);
+                return exit_code::internal;
+            }
+            cli_status("Raw:      {} ({} bytes)", out, bytes.size());
+            if (is_cpc) {
+                std::filesystem::path pal_path{out};
+                pal_path.replace_extension(".pal");
+                auto pal = api::cpc_pal_bytes(config->mode, st.palette);
+                if (!write_bytes(pal_path.string(), pal)) {
+                    std::println(stderr, "write error: {}", pal_path.string());
+                    return exit_code::internal;
+                }
+                cli_status("Pal:      {} ({} bytes)", pal_path.string(), pal.size());
+            }
+        } else if (ends_with(out, ".h")) {
+            auto cr = api::convert_cheader(src_png->data(), src_png->size(), aopts);
+            if (!cr.error.empty()) {
+                std::println(stderr, "header: {}", cr.error);
+                return exit_code::internal;
+            }
+            if (!write_bytes(out, cr.data)) {
+                std::println(stderr, "write error: {}", out);
+                return exit_code::internal;
+            }
+            cli_status("Header:   {} ({} bytes)", out, cr.data.size());
+        } else {
+            auto r = save_preview(out, st.rendered, has_transparency, transparency_mask,
+                                  config->mode, /*hires=*/false, /*interlace=*/false);
+            if (!r) {
+                std::println(stderr, "PNG write error: {}", r.error().message);
+                return exit_code::internal;
+            }
+            cli_status("PNG:      {}", out);
+        }
+
+        if (!config->depfile.empty() && !out.empty()) {
+            std::array<std::string_view, 2> inputs{config->input_path, config->palette_file};
+            write_depfile(config->depfile, out, inputs);
         }
         return exit_code::ok;
     }

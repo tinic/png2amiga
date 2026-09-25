@@ -201,6 +201,26 @@ enum class Mode : unsigned char {
     //     C64-multicolor-like).
     ted_hires,  // TED hires, 320×200, 2 colors/8×8 cell
     ted_multicolor,  // TED multicolor, 160×200, 4 colors/4×8 cell
+
+    // Sega Master System / Game Gear — VDP mode 4. 8×8 4bpp planar tiles,
+    // two 16-color palettes (BG CRAM 0-15 and sprite CRAM 16-31; tilemap
+    // bit 11 selects), H/V flip per cell. VRAM holds 448 tiles below the
+    // name table at $3800.
+    //   SMS: 256×192, RGB222 (64 colors, --BBGGRR), 768 cells → merged
+    //        down to ≤ 448 unique tiles.
+    //   GG:  160×144 visible, RGB444 (4096 colors, 0x0BGR LE), 360 cells.
+    sms_mode4,  // SMS, 256×192, 2 × 16 of 64
+    gg_mode4,   // Game Gear, 160×144, 2 × 16 of 4096
+
+    // Amstrad CPC Gate Array (27-color firmware palette) and CPC Plus ASIC
+    // (4096-color RGB444). 16 KB screen at &C000, 80 bytes/line, line
+    // address (y/8)*80 + (y%8)*2048.
+    cpc_mode0,       // 160×200, 16 inks, wide pixels
+    cpc_mode1,       // 320×200, 4 inks
+    cpc_mode2,       // 640×200, 2 inks, tall pixels
+    cpc_plus_mode0,  // Plus: 160×200, 16 of 4096
+    cpc_plus_mode1,  // Plus: 320×200, 4 of 4096
+    cpc_plus_mode2,  // Plus: 640×200, 2 of 4096
 };
 
 // ---------------------------------------------------------------------------
@@ -425,6 +445,24 @@ constexpr ModeParams get_mode_params(Mode mode) noexcept {
         return {320, 200, 1, 2, false, false, false, false, 1, 1, 0.936f};
     case Mode::ted_multicolor:
         return {160, 200, 2, 4, false, false, false, false, 2, 1, 1.872f};
+    // Sega 8-bit VDP: same ~5.37 MHz pixel clock as NES/SNES/Genesis H32,
+    // so a 256-wide line displays at 8:7. The Game Gear LCD is treated
+    // as square.
+    case Mode::sms_mode4:
+        return {256, 192, 4, 32, false, false, false, false, 1, 1, 1.143f};
+    case Mode::gg_mode4:
+        return {160, 144, 4, 32, false, false, false, false, 1, 1, 1.0f};
+    // Amstrad CPC: mode 1 is ~square, mode 0 doubles width, mode 2 halves
+    // it (same shapes as Amiga lores-lace / hires).
+    case Mode::cpc_mode0:
+    case Mode::cpc_plus_mode0:
+        return {160, 200, 4, 16, false, false, false, false, 2, 1, 2.0f};
+    case Mode::cpc_mode1:
+    case Mode::cpc_plus_mode1:
+        return {320, 200, 2, 4, false, false, false, false, 1, 1, 1.0f};
+    case Mode::cpc_mode2:
+    case Mode::cpc_plus_mode2:
+        return {640, 200, 1, 2, false, false, false, false, 1, 2, 0.5f};
     }
     std::unreachable();
 }
@@ -654,6 +692,41 @@ constexpr bool is_ted_multicolor(Mode mode) noexcept {
     return mode == Mode::ted_multicolor;
 }
 
+// Sega Master System / Game Gear VDP mode 4.
+constexpr bool is_sms(Mode mode) noexcept {
+    return mode == Mode::sms_mode4 || mode == Mode::gg_mode4;
+}
+
+constexpr bool is_game_gear(Mode mode) noexcept {
+    return mode == Mode::gg_mode4;
+}
+
+// Amstrad CPC (classic Gate Array + Plus ASIC).
+constexpr bool is_cpc(Mode mode) noexcept {
+    return mode == Mode::cpc_mode0 || mode == Mode::cpc_mode1 || mode == Mode::cpc_mode2 ||
+           mode == Mode::cpc_plus_mode0 || mode == Mode::cpc_plus_mode1 ||
+           mode == Mode::cpc_plus_mode2;
+}
+
+constexpr bool is_cpc_plus(Mode mode) noexcept {
+    return mode == Mode::cpc_plus_mode0 || mode == Mode::cpc_plus_mode1 ||
+           mode == Mode::cpc_plus_mode2;
+}
+
+// Gate Array screen mode number (0 / 1 / 2).
+constexpr int cpc_screen_mode(Mode mode) noexcept {
+    switch (mode) {
+    case Mode::cpc_mode0:
+    case Mode::cpc_plus_mode0:
+        return 0;
+    case Mode::cpc_mode1:
+    case Mode::cpc_plus_mode1:
+        return 1;
+    default:
+        return 2;
+    }
+}
+
 // Maximum bitplane depth for a chipset (raw hardware limit)
 constexpr std::size_t max_depth(Chipset chipset) noexcept {
     switch (chipset) {
@@ -681,6 +754,7 @@ constexpr std::size_t max_user_depth(Mode mode, Chipset chipset) noexcept {
     if (is_gba(mode)) return get_mode_params(mode).bitplane_depth;
     // Thomson / TED buffers are fixed by the hardware video mode.
     if (is_thomson(mode) || is_ted(mode)) return get_mode_params(mode).bitplane_depth;
+    if (is_sms(mode) || is_cpc(mode)) return get_mode_params(mode).bitplane_depth;
 
     // AGA standard modes
     if (chipset == Chipset::aga) return 8;

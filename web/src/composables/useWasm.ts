@@ -171,6 +171,7 @@ export interface UseWasmReturn {
   convertRaw: (bytes: Uint8Array, opts: WasmOptions, onProgress?: ProgressCallback) => Promise<ConvertResult>
   convertPRG: (bytes: Uint8Array, opts: WasmOptions, onProgress?: ProgressCallback) => Promise<ConvertResult>
   convertKoa: (bytes: Uint8Array, opts: WasmOptions, onProgress?: ProgressCallback) => Promise<ConvertResult>
+  convertScr: (bytes: Uint8Array, opts: WasmOptions, onProgress?: ProgressCallback) => Promise<ConvertResult>
   convertHir: (bytes: Uint8Array, opts: WasmOptions, onProgress?: ProgressCallback) => Promise<ConvertResult>
   convertMask: (bytes: Uint8Array, opts: WasmOptions, onProgress?: ProgressCallback) => Promise<ConvertResult>
   convertMaskRaw: (bytes: Uint8Array, opts: WasmOptions, onProgress?: ProgressCallback) => Promise<ConvertResult>
@@ -221,6 +222,7 @@ export function useWasm(): UseWasmReturn {
     convertRaw:     (b, o, p) => callConvert('convertRaw',     [b, o],    p),
     convertPRG:     (b, o, p) => callConvert('convertPRG',     [b, o],    p),
     convertKoa:     (b, o, p) => callConvert('convertKoa',     [b, o],    p),
+    convertScr:     (b, o, p) => callConvert('convertScr',     [b, o],    p),
     convertHir:     (b, o, p) => callConvert('convertHir',     [b, o],    p),
     convertMask:    (b, o, p) => callConvert('convertMask',    [b, o],    p),
     convertMaskRaw: (b, o, p) => callConvert('convertMaskRaw', [b, o],    p),

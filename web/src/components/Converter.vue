@@ -15,7 +15,7 @@ import {
   CHIPSETS, DITHER_METHODS, ALPHA_DITHER_METHODS, isNonSquareDither,
   SLIDERS, CGA_TEXT_METRICS, CGA_TEXT_KERNELS, C64_PALETTES, C64_METRICS, c64PaletteRgb, EXAMPLES, examplesForChipset,
   defaultOptions, isHamMode, hamType, isEhbMode, isAtariMode,
-  isDosMode, isVgaMode, isEgaMode, isSnesMode, isSnesDirectMode, isGenesisMode, isGbaMode, isGbaDirectMode, isC64Mode, isC64CharsetMode, isThomsonMode, isTedMode, isCgaMode, isCgaText, isTileFreeformMode, isFixedBufferMode, isAmigaMode, supportsCustomPalette, isInterlaceMode, modePar,
+  isDosMode, isVgaMode, isEgaMode, isSnesMode, isSnesDirectMode, isGenesisMode, isGbaMode, isGbaDirectMode, isC64Mode, isC64CharsetMode, isThomsonMode, isTedMode, isSmsMode, isCpcMode, isCgaMode, isCgaText, isTileFreeformMode, isFixedBufferMode, isAmigaMode, supportsCustomPalette, isInterlaceMode, modePar,
   maxDepth, defaultDepth, effectiveChipset, previewScale,
   modesForChipset,
 } from '../lib/options.js'
@@ -25,7 +25,7 @@ import { useWasm } from '../composables/useWasm.js'
 
 import DitherGallery from './DitherGallery.vue'
 
-const { loading: wasmLoading, error: wasmError, abort: abortWasm, convertRGBA, convertPNG, convertIFF, convertHeader, convertViewer, convertDegas, convertRaw, convertPRG, convertKoa, convertHir, convertMask, convertMaskRaw } = useWasm()
+const { loading: wasmLoading, error: wasmError, abort: abortWasm, convertRGBA, convertPNG, convertIFF, convertHeader, convertViewer, convertDegas, convertRaw, convertPRG, convertKoa, convertScr, convertHir, convertMask, convertMaskRaw } = useWasm()
 
 function onStopEncode(): void {
   abortWasm()
@@ -564,7 +564,7 @@ const reservablePaletteSize = computed(() => {
 // rejects OCS-snapping onto reserved colors.
 function modeHasNoReservableClut(m: string): boolean {
   const fixedOrDynamic = [isHamMode, isGenesisMode, isSnesMode, isC64Mode,
-    isThomsonMode, isTedMode, isCgaMode, isCgaText, isGbaDirectMode]
+    isThomsonMode, isTedMode, isSmsMode, isCpcMode, isCgaMode, isCgaText, isGbaDirectMode]
   return fixedOrDynamic.some(p => p(m))
 }
 const reservesSupported = computed(() => !modeHasNoReservableClut(options.mode))
@@ -2096,9 +2096,24 @@ async function downloadRaw() {
     const result = await convertRaw(imageBytes.value, buildWasmOptions())
     if (result.error) { errorMsg.value = result.error; return }
     if (!result.data) return
-    downloadBlob(result.data, baseStem() + '.raw', 'application/octet-stream')
+    const ext = isSmsMode(options.mode) || isCpcMode(options.mode) ? '.bin' : '.raw'
+    downloadBlob(result.data, baseStem() + ext, 'application/octet-stream')
     exportCount++
     track('export', { format: 'raw', mode: options.mode, exportCount })
+  } catch (error) { errorMsg.value = errorMessage(error) }
+  converting.value = false
+}
+
+async function downloadScr() {
+  if (!imageBytes.value) return
+  converting.value = true
+  try {
+    const result = await convertScr(imageBytes.value, buildWasmOptions())
+    if (result.error) { errorMsg.value = result.error; return }
+    if (!result.data) return
+    downloadBlob(result.data, baseStem() + '.scr', 'application/octet-stream')
+    exportCount++
+    track('export', { format: 'scr', mode: options.mode, exportCount })
   } catch (error) { errorMsg.value = errorMessage(error) }
   converting.value = false
 }
@@ -2834,8 +2849,29 @@ async function loadExample(example: typeof EXAMPLES[number]) {
               <Button label="raw" icon="pi pi-download" class="flex-1" severity="secondary" :disabled="!imageBytes || converting" @click="downloadRaw"
                 title="Download native-layout raw bytes (Thomson: pageA then pageB; TED: bitmap, luma, chroma, then globals)." />
             </div>
+            <!-- Master System / Game Gear export: PNG + devkitSMS .h +
+                 raw .bin (tiles, tilemap, CRAM). -->
+            <div v-if="isSmsMode(options.mode)" class="flex gap-2">
+              <Button label="png" icon="pi pi-download" class="flex-1" :disabled="!imageBytes || converting" @click="downloadPNG"
+                title="Download the converted image as a PNG preview file." />
+              <Button label="h" icon="pi pi-download" class="flex-1" severity="secondary" :disabled="!imageBytes || converting" @click="downloadHeader"
+                title="Download a devkitSMS C header: tiles, tilemap (unsigned short), and CRAM palette bytes." />
+              <Button label="bin" icon="pi pi-download" class="flex-1" severity="secondary" :disabled="!imageBytes || converting" @click="downloadRaw"
+                title="Download raw bytes: tiles (32 B each), tilemap (u16 LE per cell), then CRAM." />
+            </div>
+            <!-- Amstrad CPC export: PNG + .h + AMSDOS .scr + raw screen. -->
+            <div v-if="isCpcMode(options.mode)" class="flex gap-2">
+              <Button label="png" icon="pi pi-download" class="flex-1" :disabled="!imageBytes || converting" @click="downloadPNG"
+                title="Download the converted image as a PNG preview file." />
+              <Button label="h" icon="pi pi-download" class="flex-1" severity="secondary" :disabled="!imageBytes || converting" @click="downloadHeader"
+                title="Download a C header: the 16 KB &C000 screen plus the inks." />
+              <Button label="scr" icon="pi pi-download" class="flex-1" severity="secondary" :disabled="!imageBytes || converting" @click="downloadScr"
+                title="Download the screen as .scr: 128-byte AMSDOS header (load &C000) + 16 KB." />
+              <Button label="bin" icon="pi pi-download" class="flex-1" severity="secondary" :disabled="!imageBytes || converting" @click="downloadRaw"
+                title="Download the raw 16 KB screen (no header)." />
+            </div>
             <!-- Amiga export buttons -->
-            <div v-if="!isAtariMode(options.mode) && !isDosMode(options.mode) && !isSnesMode(options.mode) && !isGenesisMode(options.mode) && !isC64Mode(options.mode) && !isGbaMode(options.mode) && !isThomsonMode(options.mode) && !isTedMode(options.mode)" class="flex gap-2">
+            <div v-if="!isAtariMode(options.mode) && !isDosMode(options.mode) && !isSnesMode(options.mode) && !isGenesisMode(options.mode) && !isC64Mode(options.mode) && !isGbaMode(options.mode) && !isThomsonMode(options.mode) && !isTedMode(options.mode) && !isSmsMode(options.mode) && !isCpcMode(options.mode)" class="flex gap-2">
               <Button label="png" icon="pi pi-download" class="flex-1" :disabled="!imageBytes || converting" @click="downloadPNG"
                 title="Download the converted image as a PNG preview file." />
               <Button label="iff" icon="pi pi-download" class="flex-1" :disabled="!imageBytes || converting" @click="downloadIFF"
@@ -2845,7 +2881,7 @@ async function loadExample(example: typeof EXAMPLES[number]) {
               <Button label="adf" icon="pi pi-download" class="flex-1" :disabled="!imageBytes || converting" @click="compileAndDownload('adf')"
                 title="Download bootable Amiga floppy disk image (ADF)." />
             </div>
-            <div v-if="!isAtariMode(options.mode) && !isDosMode(options.mode) && !isSnesMode(options.mode) && !isGenesisMode(options.mode) && !isC64Mode(options.mode) && !isGbaMode(options.mode) && !isThomsonMode(options.mode) && !isTedMode(options.mode)" class="flex gap-2">
+            <div v-if="!isAtariMode(options.mode) && !isDosMode(options.mode) && !isSnesMode(options.mode) && !isGenesisMode(options.mode) && !isC64Mode(options.mode) && !isGbaMode(options.mode) && !isThomsonMode(options.mode) && !isTedMode(options.mode) && !isSmsMode(options.mode) && !isCpcMode(options.mode)" class="flex gap-2">
               <Button label="exe" icon="pi pi-download" class="flex-1" severity="secondary" :disabled="!imageBytes || converting" @click="compileAndDownload('exe')"
                 title="Download compiled AmigaOS executable. Click left mouse button to exit." />
               <Button label="cpp" icon="pi pi-download" class="flex-1" severity="secondary" :disabled="!imageBytes || converting" @click="downloadViewer"

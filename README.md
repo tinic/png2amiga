@@ -69,6 +69,15 @@ unique 8×8 tiles via greedy distance-merging when content overflows.
 BGR555 direct). PNG preview + devkitARM/grit-style `.h` header +
 raw `.bin` (Mode 4 also writes a companion `.pal`).
 
+**Sega Master System / Game Gear**: VDP mode 4 (SMS 256×192 RGB222,
+GG 160×144 RGB444). 8×8 4bpp tiles, two 16-color palettes, H/V-flip
+tile dedup and merging down to the 448-tile VRAM budget. devkitSMS
+`.h` / `.bin` output.
+
+**Amstrad CPC / CPC Plus**: modes 0 / 1 / 2 (16 / 4 / 2 inks) from the
+27-color firmware palette or the Plus 4096-color palette. 16 KB `&C000`
+screen as `.bin` or AMSDOS `.scr`, companion `.pal`, and `.h`.
+
 **Palette quantizers**: GPU-accelerated parallel-restart Lloyd
 k-means in OKLab on Apple GPU (default for AGA / VGA when Xcode's
 Metal toolchain is available; mean ΔS2 +2.6..+3.4 vs pngquant on
@@ -196,6 +205,14 @@ release — same features, somewhat slower. Building one on any platform:
 ./build/png2amiga --mode gba-mode3 input.png output.h          # 16bpp BGR555 bitmap header
 ./build/png2amiga --mode gba-mode4 input.png output.bin        # 8bpp indices + companion .pal
 ./build/png2amiga --mode gba-mode5 input.png output.png        # 160×128 preview
+
+# Sega Master System / Game Gear
+./build/png2amiga --mode sms-mode4 input.png output.h          # devkitSMS header
+./build/png2amiga --mode gg-mode4 input.png output.bin         # tiles + tilemap + CRAM
+
+# Amstrad CPC
+./build/png2amiga --mode cpc-mode0 input.png output.scr        # AMSDOS .scr + companion .pal
+./build/png2amiga --mode cpc-plus-mode1 input.png output.h     # screen + ASIC palette bytes
 ```
 
 Run `./build/png2amiga --help` for the full flag reference.
@@ -288,6 +305,43 @@ bitmap, luma, chroma, then the two global bytes). The programmable TO8
 modes also write a companion `.pal`. `--depth` / `--chipset` are no-ops;
 reserve / lock / external-palette flags and `.iff` / viewer outputs are
 rejected (fixed or auto-quantized palettes).
+
+## Sega Master System / Game Gear Modes
+
+| Mode | Resolution | Colors | Notes |
+|------|-----------|--------|-------|
+| `sms-mode4` | 256×192 | 2 × 16 of 64 | RGB222 CRAM, ≤ 448 unique tiles (768 cells merged) |
+| `gg-mode4` | 160×144 | 2 × 16 of 4096 | RGB444 CRAM, 360 cells |
+
+8×8 4bpp planar tiles; each cell picks one of the two palettes (tilemap
+bit 11: CRAM 0-15 or 16-31) and H/V flips. Output: PNG preview + devkitSMS
+`.h` (`_tiles` / `_palette` as `unsigned char`, `_tilemap` as `unsigned
+short`, `_size` defines in bytes) + raw `.bin` = tiles (32 bytes each) ++
+tilemap (u16 LE per cell, row-major) ++ CRAM (SMS 32 bytes `--BBGGRR`, GG
+64 bytes `----BBBBGGGGRRRR` LE). The GG tilemap is the 20×18 visible area
+(load it at name-table column 6, row 3).
+
+## Amstrad CPC Modes
+
+| Mode | Resolution | Inks | Palette |
+|------|-----------|------|---------|
+| `cpc-mode0` | 160×200 | 16 | 27-color firmware palette |
+| `cpc-mode1` | 320×200 | 4 | 27-color firmware palette |
+| `cpc-mode2` | 640×200 | 2 | 27-color firmware palette |
+| `cpc-plus-mode0` | 160×200 | 16 | 4096-color RGB444 (ASIC) |
+| `cpc-plus-mode1` | 320×200 | 4 | 4096-color RGB444 (ASIC) |
+| `cpc-plus-mode2` | 640×200 | 2 | 4096-color RGB444 (ASIC) |
+
+Mode 0 pixels are 2:1 wide, mode 2 pixels 1:2 tall. The screen is the
+16 KB `&C000` layout (line y at `(y/8)*80 + (y%8)*2048`). Output: PNG
+preview + `.bin` (raw 16384 bytes) or `.scr` (128-byte AMSDOS header, load
+`&C000`, + 16384 bytes), both with a companion `.pal` (classic: one Gate
+Array byte `0x40|hw` per ink; Plus: `R<<4|B`, `G` per ink, the ASIC
+palette-RAM order) + `.h` (screen + inks as firmware numbers and Gate
+Array bytes, or Plus `0x0GRB` words and ASIC bytes).
+
+SMS / GG + CPC: `--depth` / `--chipset` are no-ops; reserve / lock /
+external-palette flags and `.iff` / viewer outputs are rejected.
 
 ## Sliced palette (per-line copper swaps)
 
@@ -600,6 +654,9 @@ Modes:
     Thomson: thomson-to7-320x16 | thomson-to8-320x16 |
             thomson-to8-160x16 | thomson-to8-320x4 | thomson-to8-640x2
     TED:    ted-hires | ted-multicolor
+    Sega:   sms-mode4 | gg-mode4
+    CPC:    cpc-mode0 | cpc-mode1 | cpc-mode2 |
+            cpc-plus-mode0 | cpc-plus-mode1 | cpc-plus-mode2
   --depth <1-8>                   Bitplane depth (default: 5)
   --chipset ocs|aga               Amiga chipset (default: auto)
   --dual-playfield, --dpf         Encode into PF2 (depth 3 OCS / 4 AGA)

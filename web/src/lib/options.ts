@@ -1,6 +1,6 @@
 // Type-side declarations.
 
-export type Chipset = 'ocs' | 'aga' | 'stf' | 'ste' | 'vga' | 'ega' | 'cga' | 'snes' | 'genesis' | 'c64' | 'gba' | 'thomson' | 'ted'
+export type Chipset = 'ocs' | 'aga' | 'stf' | 'ste' | 'vga' | 'ega' | 'cga' | 'snes' | 'genesis' | 'c64' | 'gba' | 'thomson' | 'ted' | 'sms' | 'cpc' | 'cpcplus'
 
 export interface ModeOption {
   value: string
@@ -205,11 +205,21 @@ const ALL_MODES: ModeOption[] = [
   // Commodore TED (Plus/4, C16) — fixed 121-color palette.
   { value: 'ted-multicolor', label: 'Multicolor (160x200, 4/cell)', chipset: 'ted' },
   { value: 'ted-hires', label: 'Hires (320x200, 2/cell)',      chipset: 'ted' },
+  // Sega Master System / Game Gear — VDP mode 4 tiles, 2 × 16 colors.
+  { value: 'sms-mode4', label: 'Master System (256×192)', chipset: 'sms' },
+  { value: 'gg-mode4',  label: 'Game Gear (160×144)',     chipset: 'sms' },
+  // Amstrad CPC — 27-color firmware palette / CPC Plus 4096 colors.
+  { value: 'cpc-mode0', label: 'Mode 0 (160×200, 16 inks)', chipset: 'cpc' },
+  { value: 'cpc-mode1', label: 'Mode 1 (320×200, 4 inks)',  chipset: 'cpc' },
+  { value: 'cpc-mode2', label: 'Mode 2 (640×200, 2 inks)',  chipset: 'cpc' },
+  { value: 'cpc-plus-mode0', label: 'Mode 0 (160×200, 16 inks)', chipset: 'cpcplus' },
+  { value: 'cpc-plus-mode1', label: 'Mode 1 (320×200, 4 inks)',  chipset: 'cpcplus' },
+  { value: 'cpc-plus-mode2', label: 'Mode 2 (640×200, 2 inks)',  chipset: 'cpcplus' },
 ]
 
 // Chipsets whose mode list is exactly `m.chipset === chipset`.
 const FIXED_CHIPSETS = new Set<Chipset>(
-  ['stf', 'ste', 'vga', 'ega', 'cga', 'snes', 'genesis', 'c64', 'gba', 'thomson', 'ted'])
+  ['stf', 'ste', 'vga', 'ega', 'cga', 'snes', 'genesis', 'c64', 'gba', 'thomson', 'ted', 'sms', 'cpc', 'cpcplus'])
 
 // Filter modes available for a given chipset
 export function modesForChipset(chipset: Chipset): ModeOption[] {
@@ -248,6 +258,9 @@ export const CHIPSETS: ChipsetOption[] = [
   { value: 'gba',     label: 'Game Boy Advance' },
   { value: 'thomson', label: 'Thomson TO7/70 + TO8' },
   { value: 'ted',     label: 'Commodore Plus/4 (TED)' },
+  { value: 'sms',     label: 'Sega Master System / Game Gear' },
+  { value: 'cpc',     label: 'Amstrad CPC (27 colors)' },
+  { value: 'cpcplus', label: 'Amstrad CPC Plus (4096 colors)' },
 ]
 
 // VIC-II palette options — only meaningful when chipset is 'c64'.
@@ -602,6 +615,9 @@ const EXAMPLES_BY_CHIPSET: Record<Chipset, Example[]> = {
   gba:     AMIGA_EXAMPLES,
   thomson: AMIGA_EXAMPLES,
   ted:     AMIGA_EXAMPLES,
+  sms:     AMIGA_EXAMPLES,
+  cpc:     AMIGA_EXAMPLES,
+  cpcplus: AMIGA_EXAMPLES,
 }
 
 export function examplesForChipset(chipset: Chipset): Example[] {
@@ -760,15 +776,15 @@ export function isAmigaMode(mode: string): boolean {
 //   ignored  — C64 (VIC-II palette fixed in hardware), CGA text (fixed
 //              16-colour attribute set), SNES Mode 7, Genesis (per-tile
 //              palette lines)
-//   rejected — Thomson / TED / GBA direct (api.cpp returns unsupported_mode)
+//   rejected — Thomson / TED / SMS / CPC / GBA direct (api.cpp returns unsupported_mode)
 // Offering the picker for the last two groups is worse than useless: it
 // either silently does nothing or fails the convert.
+const NO_CUSTOM_PALETTE = [
+  isC64Mode, isCgaText, isSnesMode, isGenesisMode, isThomsonMode, isTedMode,
+  isSmsMode, isCpcMode, isGbaDirectMode,
+] as const
 export function supportsCustomPalette(mode: string): boolean {
-  if (isC64Mode(mode) || isCgaText(mode)) return false
-  if (isSnesMode(mode) || isGenesisMode(mode)) return false
-  if (isThomsonMode(mode) || isTedMode(mode)) return false
-  if (isGbaDirectMode(mode)) return false
-  return true
+  return NO_CUSTOM_PALETTE.every(p => !p(mode))
 }
 export function isThomsonMode(mode: string): boolean {
   return mode.startsWith('thomson-')
@@ -781,6 +797,14 @@ export function isThomsonFormeCouleur(mode: string): boolean {
 }
 export function isTedMode(mode: string): boolean {
   return mode.startsWith('ted-')
+}
+// Sega Master System / Game Gear VDP mode 4.
+export function isSmsMode(mode: string): boolean {
+  return mode === 'sms-mode4' || mode === 'gg-mode4'
+}
+// Amstrad CPC + CPC Plus.
+export function isCpcMode(mode: string): boolean {
+  return mode.startsWith('cpc-')
 }
 // c64 charset modes accept arbitrary width/height (padded to cell size)
 // and a configurable tile-budget. Distinguished from the bitmap c64
@@ -826,9 +850,11 @@ export function isFixedBufferMode(mode: string): boolean {
   // fixed-buffer when Resize is enabled; the UI uses isEffectiveFixedBuffer
   // (Vue side) to keep Native PAR available at default size.
   if (isTileFreeformMode(mode)) return false
-  return isDosMode(mode) || isC64Mode(mode) || isAtariMode(mode) || isGbaMode(mode) ||
-         isThomsonMode(mode) || isTedMode(mode)
+  return FIXED_BUFFER_FAMILIES.some(p => p(mode))
 }
+const FIXED_BUFFER_FAMILIES = [
+  isDosMode, isC64Mode, isAtariMode, isGbaMode, isThomsonMode, isTedMode, isSmsMode, isCpcMode,
+] as const
 
 // Hardware Pixel Aspect Ratio (display_pixel_width / display_pixel_height).
 // Mirrors ModeParams::par in src/amiga.hpp. Used to CSS-stretch the preview
@@ -894,6 +920,14 @@ const MODE_PAR: Record<string, number> = {
   // Commodore TED — same PAL VIC-II geometry as the C64.
   'ted-hires': 0.936,
   'ted-multicolor': 1.872,
+  // Sega 8-bit VDP: 256-wide line at 8:7 (same pixel clock as SNES /
+  // Genesis H32); Game Gear LCD square.
+  'sms-mode4': 1.143,
+  'gg-mode4':  1,
+  // Amstrad CPC: mode 1 ~square, mode 0 wide (2:1), mode 2 tall (1:2).
+  'cpc-mode0': 2,   'cpc-plus-mode0': 2,
+  'cpc-mode1': 1,   'cpc-plus-mode1': 1,
+  'cpc-mode2': 0.5, 'cpc-plus-mode2': 0.5,
 }
 
 export function modePar(mode: string): number { return MODE_PAR[mode] ?? 1 }
@@ -955,6 +989,15 @@ const DOS_PREVIEW_SCALE: Record<string, PreviewScale> = {
   // TED — hires 320 (2×2), multicolor 160 (4×2).
   'ted-hires':         { sx: 2, sy: 2 },
   'ted-multicolor':         { sx: 4, sy: 2 },
+  'sms-mode4':         { sx: 2, sy: 2 },
+  'gg-mode4':          { sx: 2, sy: 2 },
+  // CPC — all three modes land on a 640×400 backing canvas.
+  'cpc-mode0':      { sx: 4, sy: 2 },
+  'cpc-mode1':      { sx: 2, sy: 2 },
+  'cpc-mode2':      { sx: 1, sy: 2 },
+  'cpc-plus-mode0': { sx: 4, sy: 2 },
+  'cpc-plus-mode1': { sx: 2, sy: 2 },
+  'cpc-plus-mode2': { sx: 1, sy: 2 },
 }
 
 // Generic Amiga-mode preview scale by (hires?, interlace?). 1×1 for
@@ -998,7 +1041,7 @@ export function decomposeMode(uiMode: string): DecomposedMode {
 // constraints) report 0 to mean "no user-adjustable depth slider".
 const FIXED_DEPTH_PREDICATES = [
   isHamMode, isEhbMode, isAtariMode, isDosMode, isC64Mode, isGbaMode,
-  isThomsonMode, isTedMode,
+  isThomsonMode, isTedMode, isSmsMode, isCpcMode,
 ] as const
 export function maxDepth(mode: string, chipset: Chipset): number {
   for (const p of FIXED_DEPTH_PREDICATES) if (p(mode)) return 0
@@ -1023,6 +1066,11 @@ const FIXED_DEFAULT_DEPTH: Record<string, number> = {
   'thomson-to8-320x4': 2, 'thomson-to8-640x2': 1,
   // TED: hires 1bpp (2/cell), multicolor 2bpp (4/cell).
   'ted-hires': 1, 'ted-multicolor': 2,
+  // SMS / GG: 4bpp tiles, 2 × 16 colors.
+  'sms-mode4': 4, 'gg-mode4': 4,
+  // CPC: 16 / 4 / 2 inks.
+  'cpc-mode0': 4, 'cpc-mode1': 2, 'cpc-mode2': 1,
+  'cpc-plus-mode0': 4, 'cpc-plus-mode1': 2, 'cpc-plus-mode2': 1,
 }
 
 // Family-level fallbacks for defaultDepth. Tried in order after the
@@ -1059,7 +1107,14 @@ export function numColors(mode: string, depth: number): string {
   if (isGbaDirectMode(mode)) return '32768'
   // TED: fixed 121-color palette; the per-cell color count is the depth.
   if (isTedMode(mode)) return `${1 << depth}/cell (121 palette)`
-  return String(1 << depth)
+  return FIXED_COLOR_LABELS[mode] ?? String(1 << depth)
+}
+// Modes whose color count is a fixed gamut label rather than 1 << depth.
+const FIXED_COLOR_LABELS: Record<string, string> = {
+  'sms-mode4': '2 × 16 of 64',
+  'gg-mode4':  '2 × 16 of 4096',
+  'cpc-mode0': '16 of 27', 'cpc-mode1': '4 of 27', 'cpc-mode2': '2 of 27',
+  'cpc-plus-mode0': '16 of 4096', 'cpc-plus-mode1': '4 of 4096', 'cpc-plus-mode2': '2 of 4096',
 }
 
 // Bitplane count for display

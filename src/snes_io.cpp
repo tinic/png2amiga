@@ -5,6 +5,7 @@
 #include "dither.hpp"
 #include "oklab_simd.hpp"
 #include "quantize.hpp"
+#include "tile_merge.hpp"
 
 #include <algorithm>
 #include <array>
@@ -114,85 +115,40 @@ Result<Mode7PackResult> pack_snes_mode7_frame(
     res.unique_after_dedup = slots.size();
     res.merges_done = 0;
 
-    // 3. Merge if over budget. Walks all alive pairs in order of
-    //    increasing perceptual distance, collapsing closest pairs first.
+    // 3. Merge if over budget (tile_merge::merge_to_budget — closest
+    //    pairs first, larger slot survives).
     if (slots.size() > kMaxTiles) {
-        std::vector<std::size_t> alive;
-        alive.reserve(slots.size());
-        for (std::size_t i = 0; i < slots.size(); ++i)
-            alive.push_back(i);
-        auto merges_needed = alive.size() - kMaxTiles;
-
-        struct Pair {
-            std::size_t a, b;
-            float distance;
-        };
-        const std::size_t Na = alive.size();
-        const auto num_pairs = Na * (Na - 1) / 2;
-        std::vector<Pair> pairs(num_pairs);
-        // Pairwise distance is the dominant cost when content has many
-        // unique tiles (O(n² × 64)). Each pair is independent, so we
-        // chunk by outer row i and pre-index the output slot. Triangular
-        // load — pipeline::parallel_for's fetch_add work-stealing
-        // balances this naturally across threads.
-        //
-        // If the caller supplied cached_distance.prepare, we build a
-        // SlotPre (e.g. OKLab + blurred-OKLab) once per alive slot and
-        // call score(SlotPre&, SlotPre&) inside the pair loop. That
-        // collapses N(N-1) per-pair lab+blur computes to N once.
+        // If the caller supplied cached_distance.prepare, build a SlotPre
+        // (e.g. OKLab + blurred-OKLab) once per slot and score pairs from
+        // the cache — collapses N(N-1) per-pair lab+blur computes to N.
         const bool use_cache = static_cast<bool>(cached_distance.prepare);
         std::vector<SlotPre> slot_pre;
         if (use_cache) {
-            slot_pre.resize(Na);
-            pipeline::parallel_for(Na, [&](std::size_t i) {
-                slot_pre[i] = cached_distance.prepare(slots[alive[i]].pattern);
+            slot_pre.resize(slots.size());
+            pipeline::parallel_for(slots.size(), [&](std::size_t i) {
+                slot_pre[i] = cached_distance.prepare(slots[i].pattern);
             });
         }
-        report(0.0f, "merging tiles");
-        if (use_cache) {
-            pipeline::parallel_for(Na, [&](std::size_t i) {
-                const std::size_t base = i * (2 * Na - i - 1) / 2;
-                for (std::size_t j = i + 1; j < Na; ++j) {
-                    pairs[base + (j - i - 1)] = {
-                        alive[i], alive[j], cached_distance.score(slot_pre[i], slot_pre[j])};
-                }
-            });
-        } else {
-            pipeline::parallel_for(Na, [&](std::size_t i) {
-                const std::size_t base = i * (2 * Na - i - 1) / 2;
-                for (std::size_t j = i + 1; j < Na; ++j) {
-                    pairs[base + (j - i - 1)] = {
-                        alive[i],
-                        alive[j],
-                        distance(slots[alive[i]].pattern, slots[alive[j]].pattern)};
-                }
-            });
+        std::vector<std::vector<std::size_t>> slot_cells(slots.size());
+        for (std::size_t i = 0; i < slots.size(); ++i)
+            slot_cells[i] = std::move(slots[i].cell_indices);
+        std::vector<bool> alive(slots.size(), true);
+        res.merges_done = tile_merge::merge_to_budget(
+            slot_cells,
+            alive,
+            kMaxTiles,
+            [&](std::size_t a, std::size_t b) -> tile_merge::PairScore {
+                if (use_cache) return {cached_distance.score(slot_pre[a], slot_pre[b]), 0};
+                return {distance(slots[a].pattern, slots[b].pattern), 0};
+            },
+            {},
+            report);
+        for (std::size_t i = 0; i < slots.size(); ++i) {
+            slots[i].alive = alive[i];
+            slots[i].cell_indices = std::move(slot_cells[i]);
+            for (auto ci : slots[i].cell_indices)
+                cell_to_slot[ci] = i;
         }
-        report(0.95f, "sorting pairs");
-        report(0.96f, "sorting pairs");
-        std::ranges::sort(pairs, {}, &Pair::distance);
-        report(0.98f, "merging tiles");
-
-        std::vector<bool> is_alive(slots.size(), true);
-        std::size_t merges_done = 0;
-        for (auto& p : pairs) {
-            if (merges_done >= merges_needed) break;
-            if (!is_alive[p.a] || !is_alive[p.b]) continue;
-            // Keep the slot with more cells; reassign discard's cells
-            // to keep, then mark discard dead.
-            auto keep = p.a, discard = p.b;
-            if (slots[keep].cell_indices.size() < slots[discard].cell_indices.size())
-                std::swap(keep, discard);
-            for (auto ci : slots[discard].cell_indices) {
-                cell_to_slot[ci] = keep;
-                slots[keep].cell_indices.push_back(ci);
-            }
-            slots[discard].cell_indices.clear();
-            slots[discard].alive = false;
-            is_alive[discard] = false;
-            ++merges_done;
-        }
-        res.merges_done = merges_done;
     }
 
     // 4. Compact the alive slots into the output tile array; remap
