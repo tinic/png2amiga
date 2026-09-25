@@ -530,6 +530,21 @@ ConvertResult convert_raw(const std::uint8_t* input_data,
 // linear-RGB palette; channels are snapped to the nearest intens[] level.
 std::vector<std::uint8_t> thomson_pal_bytes(std::span<const Color3f> palette);
 
+// Amstrad CPC companion .pal bytes: classic = one Gate Array color byte per
+// ink (0x40 | hardware number); Plus = 2 ASIC palette-RAM bytes per ink
+// (R<<4|B, G).
+std::vector<std::uint8_t> cpc_pal_bytes(amiga::Mode mode, std::span<const Color3f> inks);
+
+// Amstrad CPC .scr: 128-byte AMSDOS header (binary, load &C000) followed
+// by the 16384-byte screen. `name` is the 8.3 file name for the header.
+std::vector<std::uint8_t> cpc_scr_bytes(std::span<const std::uint8_t> screen,
+                                        std::string_view name);
+
+// cpc-* only: convert and return the .scr bytes (AMSDOS header + screen).
+ConvertResult convert_scr(const std::uint8_t* input_data,
+                          std::size_t input_size,
+                          const Options& options);
+
 // c64 only: convert and return a runnable C64 .prg with embedded
 // 6502 displayer (Koala for c64-multicolor, Art-Studio for c64-hires,
 // FLI/AFLI/PETSCII as appropriate). Charset modes are not yet

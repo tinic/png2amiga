@@ -3492,6 +3492,65 @@ float pick_palette_index_with_ostro(Method method,
 // variable scaling was no-op'd in 6/9 sites, and main.cpp's loop wasn't
 // serpentining.
 // ===========================================================================
+float diffuse_cells_mirrored(const Image& image,
+                             const Settings& settings,
+                             std::size_t cell_w,
+                             std::size_t cell_h,
+                             std::size_t k_min,
+                             const CellPalette& palette_for_cell,
+                             std::vector<std::uint8_t>& indices) {
+    const std::size_t w = image.width();
+    const std::size_t h = image.height();
+    indices.assign(w * h, 0);
+    if (w == 0 || h == 0 || cell_w == 0 || cell_h == 0) return 0.0f;
+    const std::size_t bw = 3 * cell_w;
+    const std::size_t bh = 3 * cell_h;
+    const std::size_t cells_x = (w + cell_w - 1) / cell_w;
+    const std::size_t cells_y = (h + cell_h - 1) / cell_h;
+    Image block(bw, bh);
+    std::vector<std::uint8_t> block_idx(bw * bh, 0);
+    float total = 0.0f;
+    for (std::size_t cy = 0; cy < cells_y; ++cy) {
+        for (std::size_t cx = 0; cx < cells_x; ++cx) {
+            for (std::size_t by = 0; by < 3; ++by) {
+                for (std::size_t bx = 0; bx < 3; ++bx) {
+                    for (std::size_t ly = 0; ly < cell_h; ++ly) {
+                        std::size_t sy_local = (by == 1) ? ly : (cell_h - 1 - ly);
+                        for (std::size_t lx = 0; lx < cell_w; ++lx) {
+                            std::size_t sx_local = (bx == 1) ? lx : (cell_w - 1 - lx);
+                            std::size_t sx = std::min(cx * cell_w + sx_local, w - 1);
+                            std::size_t sy = std::min(cy * cell_h + sy_local, h - 1);
+                            block[bx * cell_w + lx, by * cell_h + ly] = image[sx, sy];
+                        }
+                    }
+                }
+            }
+            auto pal = palette_for_cell(cy * cells_x + cx);
+            std::fill(block_idx.begin(), block_idx.end(), std::uint8_t{0});
+            total += diffuse_raw_buffer(
+                block,
+                settings,
+                [&](const color_space::OKLab& target, std::size_t x, std::size_t y) -> PickResult {
+                    std::size_t k = k_min;
+                    color_space::OKLab chosen{};
+                    float thr = pick_palette_index_with_ostro(
+                        settings.method, target, pal, x, y, settings.strength, k_min, k, chosen);
+                    block_idx[y * bw + x] = static_cast<std::uint8_t>(k);
+                    return {chosen, thr};
+                });
+            for (std::size_t ly = 0; ly < cell_h; ++ly) {
+                for (std::size_t lx = 0; lx < cell_w; ++lx) {
+                    auto x = cx * cell_w + lx;
+                    auto y = cy * cell_h + ly;
+                    if (x >= w || y >= h) continue;
+                    indices[y * w + x] = block_idx[(cell_h + ly) * bw + (cell_w + lx)];
+                }
+            }
+        }
+    }
+    return total;
+}
+
 float diffuse_raw_buffer(const Image& image, const Settings& settings, const PixelPicker& pick) {
     auto w = image.width();
     auto h = image.height();

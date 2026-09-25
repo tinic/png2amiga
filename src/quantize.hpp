@@ -160,4 +160,9 @@ Result<Palette> refine_with_dither(const Image& image,
 // ---------------------------------------------------------------------------
 Palette ega_histogram(const Image& image, std::size_t K);
 
+// Same picker over an arbitrary small fixed gamut (e.g. the 27-color Amstrad
+// CPC palette). Pixels are bucketed to their nearest gamut entry in OKLab.
+Palette gamut_histogram(const Image& image, std::size_t K, std::span<const Color3f> gamut);
+
+
 }  // namespace png2amiga::quantize

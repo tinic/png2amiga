@@ -137,6 +137,7 @@ const DISPATCHERS: Record<string, Dispatcher> = {
   convertRaw:     (m, args) => m.convertRaw(args[0] as Uint8Array, args[1] as WasmOptions),
   convertPRG:     (m, args) => m.convertPRG(args[0] as Uint8Array, args[1] as WasmOptions),
   convertKoa:     (m, args) => m.convertKoa(args[0] as Uint8Array, args[1] as WasmOptions),
+  convertScr:     (m, args) => m.convertScr(args[0] as Uint8Array, args[1] as WasmOptions),
   convertHir:     (m, args) => m.convertHir(args[0] as Uint8Array, args[1] as WasmOptions),
   convertMask:    (m, args) => m.convertMask(args[0] as Uint8Array, args[1] as WasmOptions),
   convertMaskRaw: (m, args) => m.convertMaskRaw(args[0] as Uint8Array, args[1] as WasmOptions),

@@ -17,6 +17,8 @@
 //   --lock-color0 / --no-lock-color0
 //   --interlace
 //   --copper-changes <K>
+//   --raw-out <path>       also write EncodeState::raw_frame
+//   --pal-out <path>       also write the CPC companion .pal bytes
 //   <input.png> <output.png>
 //
 // Anything not in this list is left at api::Options defaults — that's the
@@ -69,7 +71,7 @@ bool parse_hex(std::string_view s, api::ReserveSpec& out) {
 int main(int argc, char** argv) {
     api::Options opts;
     opts.mode = "lores";
-    std::string in_path, out_path;
+    std::string in_path, out_path, raw_out, pal_out;
     bool apply_tuning = false;
     bool dither_strength_set = false;
     bool error_clamp_set = false;
@@ -87,6 +89,8 @@ int main(int argc, char** argv) {
             return argv[++i];
         };
         if (a == "--mode") opts.mode = std::string(next(a));
+        else if (a == "--raw-out") raw_out = std::string(next(a));
+        else if (a == "--pal-out") pal_out = std::string(next(a));
         else if (a == "--depth") {
             opts.depth = std::atoi(std::string(next(a)).c_str());
             depth_set = true;
@@ -271,6 +275,17 @@ int main(int argc, char** argv) {
     std::ofstream out(out_path, std::ios::binary);
     out.write(reinterpret_cast<const char*>(png->data()),
               static_cast<std::streamsize>(png->size()));
+    if (!raw_out.empty()) {
+        std::ofstream rf(raw_out, std::ios::binary);
+        rf.write(reinterpret_cast<const char*>(state.raw_frame.data()),
+                 static_cast<std::streamsize>(state.raw_frame.size()));
+    }
+    if (!pal_out.empty() && amiga::is_cpc(state.mode)) {
+        auto pal = api::cpc_pal_bytes(state.mode, state.palette);
+        std::ofstream pf(pal_out, std::ios::binary);
+        pf.write(reinterpret_cast<const char*>(pal.data()),
+                 static_cast<std::streamsize>(pal.size()));
+    }
     // Debug aid: dump raw indices alongside the PNG so callers can A/B
     // against the CLI's --output-indexed output without re-running.
 #ifdef _MSC_VER

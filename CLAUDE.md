@@ -233,6 +233,39 @@ generic C header (`.h`) + native-layout raw `.bin` (TO8 also writes a
 companion `.pal`). `--depth` / `--chipset` no-ops; reserve / lock / external-
 palette and `.iff` / viewer outputs rejected (fixed or auto-quantized palette).
 
+## Sega Master System / Game Gear Modes
+
+| `--mode` | Resolution | Colors | Notes |
+|----------|------------|--------|-------|
+| `sms-mode4` | 256×192 | 2 × 16 of 64 | RGB222 CRAM, ≤ 448 tiles |
+| `gg-mode4` | 160×144 | 2 × 16 of 4096 | RGB444 CRAM |
+
+VDP mode 4, `src/sms.{hpp,cpp}`. `genesis::cluster_tiles` (K=2) → per-cluster
+palette (`quantize::ega_histogram` — RGB222 IS the EGA gamut; OCS brute-force
+for RGB444) → `dither::diffuse_cells_mirrored` → `genesis::dedup_tiles` →
+`tile_merge::merge_to_budget` (shared with SNES Mode 7) + Lloyd refit, slots
+kept single-palette. Preview is decoded from the packed tiles/tilemap/CRAM.
+raw_frame = tiles ++ tilemap (u16 LE) ++ CRAM.
+
+## Amstrad CPC Modes
+
+| `--mode` | Resolution | Inks | Palette |
+|----------|------------|------|---------|
+| `cpc-mode0` / `cpc-plus-mode0` | 160×200 | 16 | 27 firmware / 4096 RGB444 |
+| `cpc-mode1` / `cpc-plus-mode1` | 320×200 | 4 | 27 firmware / 4096 RGB444 |
+| `cpc-mode2` / `cpc-plus-mode2` | 640×200 | 2 | 27 firmware / 4096 RGB444 |
+
+`src/cpc.{hpp,cpp}`. Pen bit order from MAME `amstrad_init_lookups`; hardware
+colour numbers from MAME `amstrad_palette[]`. Inks: 27-colour gamut via
+`quantize::gamut_histogram` (K=16) or exhaustive C(27,K) search scored on a
+dithered 80×50 proxy (K≤4); Plus via OCS brute-force. Dither via
+`dither::apply`. raw_frame = 16 KB `&C000` screen; `.scr` adds a 128-byte
+AMSDOS header; `.pal` = Gate Array bytes (classic) or ASIC `R<<4|B, G` (Plus).
+
+SMS / CPC: fixed-buffer; `--depth` / `--chipset` no-ops; reserve / lock /
+external-palette and `.iff` / viewer outputs rejected. Round-trip ctest:
+`tools/check_sms_cpc_roundtrip.py` decodes the raw output independently.
+
 ## Architecture Notes
 
 - **Sister project**: Architecture mirrors `png2c64` — same pipeline pattern, same coding conventions

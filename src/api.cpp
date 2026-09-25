@@ -17,6 +17,8 @@
 #include "cheader_genesis.hpp"
 #include "genesis.hpp"
 #include "c64.hpp"
+#include "cpc.hpp"
+#include "sms.hpp"
 #include "c64_prg.hpp"
 #include "thomson.hpp"
 #include "ted.hpp"
@@ -121,6 +123,14 @@ amiga::Mode parse_mode(const std::string& s) {
     if (s == "thomson-to8-640x2") return amiga::Mode::thomson_to8_640x2;
     if (s == "ted-hires") return amiga::Mode::ted_hires;
     if (s == "ted-multicolor") return amiga::Mode::ted_multicolor;
+    if (s == "sms-mode4") return amiga::Mode::sms_mode4;
+    if (s == "gg-mode4") return amiga::Mode::gg_mode4;
+    if (s == "cpc-mode0") return amiga::Mode::cpc_mode0;
+    if (s == "cpc-mode1") return amiga::Mode::cpc_mode1;
+    if (s == "cpc-mode2") return amiga::Mode::cpc_mode2;
+    if (s == "cpc-plus-mode0") return amiga::Mode::cpc_plus_mode0;
+    if (s == "cpc-plus-mode1") return amiga::Mode::cpc_plus_mode1;
+    if (s == "cpc-plus-mode2") return amiga::Mode::cpc_plus_mode2;
     return amiga::Mode::lores;
 }
 
@@ -535,7 +545,8 @@ TargetDims compute_target_dims(std::size_t src_w,
     bool is_fixed_buf = amiga::is_atari(mode) || amiga::is_vga(mode) || amiga::is_ega(mode) ||
                         amiga::is_cga(mode) || amiga::is_cga_text(mode) || amiga::is_snes(mode) ||
                         amiga::is_genesis(mode) || amiga::is_c64(mode) || amiga::is_gba(mode) ||
-                        amiga::is_thomson(mode) || amiga::is_ted(mode);
+                        amiga::is_thomson(mode) || amiga::is_ted(mode) ||
+                        amiga::is_sms(mode) || amiga::is_cpc(mode);
     // Tile-based platforms with freeform sizing — Genesis (8×8 cells)
     // and SNES Mode 7 (8×8 cells) use the same 1:1 source-pixel
     // convention as c64-charset-hires. No multicolor halving.
@@ -647,7 +658,8 @@ TargetDims compute_target_dims(std::size_t src_w,
                                amiga::is_cga_text(mode) || amiga::is_snes(mode) ||
                                amiga::is_genesis(mode) || amiga::is_c64(mode) ||
                                amiga::is_gba(mode) || amiga::is_thomson(mode) ||
-                               amiga::is_ted(mode);
+                               amiga::is_ted(mode) || amiga::is_sms(mode) ||
+                               amiga::is_cpc(mode);
         if (is_fixed_buffer && !options.native_par) {
             h = mode_h;  // stretch to fill
         } else if (h > mode_h) {
@@ -1165,6 +1177,9 @@ Result<PipelineResult> run_pipeline(const std::uint8_t* input_data,
             return reject("not supported in C64 modes (VIC-II palette is "
                           "fixed in hardware; --lock-color0 covers the "
                           "common 'pin background' use-case)");
+        if (amiga::is_sms(mode) || amiga::is_cpc(mode))
+            return reject("not supported in Master System / Game Gear / CPC modes "
+                          "(auto-quantized palette)");
         if (amiga::is_ted(mode))
             return reject("not supported in TED modes (the Plus/4/C16 palette "
                           "is fixed in hardware)");
@@ -1194,18 +1209,22 @@ Result<PipelineResult> run_pipeline(const std::uint8_t* input_data,
     // Thomson + TED modes use a fixed (TO7/70, TED) or auto-quantized (TO8)
     // palette — no slot to lock/pin and no external palette load. Reject
     // rather than silently ignore, matching the C64 convention.
-    if ((amiga::is_thomson(mode) || amiga::is_ted(mode)) &&
+    if ((amiga::is_thomson(mode) || amiga::is_ted(mode) || amiga::is_sms(mode) ||
+         amiga::is_cpc(mode)) &&
         (!options.locks.empty() || !options.pins.empty() || has_user_palette(options))) {
         return std::unexpected{Error{
             ErrorCode::unsupported_mode,
             "--lock-index / --pin-index-at / --palette: not supported in "
-            "Thomson / TED modes (palette is fixed or auto-quantized)",
+            "Thomson / TED / Master System / CPC modes (palette is fixed or "
+            "auto-quantized)",
         }};
     }
     // No transparency-slot-0 semantics on these targets either: a forced
     // black slot would just waste one of 16 entries. Hard-off regardless
     // of the flag so no generic path can ever apply it.
-    if (amiga::is_thomson(mode) || amiga::is_ted(mode)) options.lock_color0 = false;
+    if (amiga::is_thomson(mode) || amiga::is_ted(mode) || amiga::is_sms(mode) ||
+        amiga::is_cpc(mode))
+        options.lock_color0 = false;
 
     // Sliced palette (--sliced/--copper), strip palette (--strips), and dual
     // playfield (--dpf) are Amiga copper / bitplane features (OCS/ECS/AGA
@@ -1216,7 +1235,8 @@ Result<PipelineResult> run_pipeline(const std::uint8_t* input_data,
         bool non_amiga = amiga::is_atari(mode) || amiga::is_vga(mode) || amiga::is_ega(mode) ||
                          amiga::is_cga(mode) || amiga::is_c64(mode) || amiga::is_snes(mode) ||
                          amiga::is_genesis(mode) || amiga::is_gba(mode) ||
-                         amiga::is_thomson(mode) || amiga::is_ted(mode);
+                         amiga::is_thomson(mode) || amiga::is_ted(mode) ||
+                         amiga::is_sms(mode) || amiga::is_cpc(mode);
         if (non_amiga) {
             std::string which;
             if (options.copper) which += "--sliced/--copper ";
@@ -1269,7 +1289,7 @@ Result<PipelineResult> run_pipeline(const std::uint8_t* input_data,
     // buffer (GBA mode4 = 8bpp; the direct modes don't use depth at all).
     if (amiga::is_vga(mode) || amiga::is_ega(mode) || amiga::is_cga(mode) || amiga::is_snes(mode) ||
         amiga::is_genesis(mode) || amiga::is_gba(mode) || amiga::is_thomson(mode) ||
-        amiga::is_ted(mode))
+        amiga::is_ted(mode) || amiga::is_sms(mode) || amiga::is_cpc(mode))
         depth = amiga::get_mode_params(mode).bitplane_depth;
 
     // Dual-playfield: encode the image into PF2 only with a constrained
@@ -1345,7 +1365,8 @@ Result<PipelineResult> run_pipeline(const std::uint8_t* input_data,
     bool is_fixed_buffer = amiga::is_atari(mode) || amiga::is_vga(mode) || amiga::is_ega(mode) ||
                            amiga::is_cga(mode) || amiga::is_cga_text(mode) ||
                            amiga::is_snes(mode) || amiga::is_genesis(mode) || amiga::is_gba(mode) ||
-                           amiga::is_thomson(mode) || amiga::is_ted(mode);
+                           amiga::is_thomson(mode) || amiga::is_ted(mode) ||
+                           amiga::is_sms(mode) || amiga::is_cpc(mode);
     // cga-text accepts arbitrary multiples of 8×2 in freeform (--width
     // / --height set). Don't center-pad freeform input up to the
     // canonical 640×200 buffer — that would silently turn a 200×400
@@ -2193,6 +2214,74 @@ Result<PipelineResult> run_pipeline(const std::uint8_t* input_data,
         return result;
     }
 
+    // --- Sega Master System / Game Gear (VDP mode 4) ---
+    // 2 × 16-color palettes, 8×8 planar tiles + tilemap, ≤ 448 unique
+    // tiles. raw_frame = tiles ++ tilemap (u16 LE) ++ CRAM.
+    if (amiga::is_sms(mode)) {
+        if (has_transparency) {
+            for (std::size_t i = 0; i < tmask.size(); ++i)
+                if (tmask[i]) image->pixels()[i] = Color3f{0, 0, 0};
+        }
+        dither::Settings dith;
+        dith.method = parse_dither(options.dither);
+        dith.strength = options.dither_strength;
+        dith.error_clamp = options.error_clamp;
+        dith.serpentine = true;
+        auto enc = sms::encode(*image, mode, dith, options.on_progress);
+        if (!enc) return std::unexpected{enc.error()};
+
+        PipelineResult result;
+        result.rendered = enc->rendered;
+        result.palette = enc->palette_rgb;
+        result.indices.clear();  // per-tile palettes: no single index grid
+        result.planes.depth = 4;
+        result.mode = mode;
+        result.hires = false;
+        result.interlace = false;
+        result.has_transparency = has_transparency;
+        result.transparency_mask = tmask;
+        result.finalize_psnr(*image, enc->total_error);
+        result.raw_frame = sms::raw_bytes(*enc);
+        result.genesis_unique_tiles = enc->unique_tiles;
+        result.genesis_total_cells = enc->cols * enc->rows;
+        result.tile_data_bytes = enc->tiles.size();
+        result.genesis_tile_bytes = enc->tiles;
+        result.genesis_tilemap_cells = enc->tilemap;
+        return result;
+    }
+
+    // --- Amstrad CPC / CPC Plus ---
+    // Quantize to 16 / 4 / 2 inks (27-color firmware gamut or RGB444 on
+    // Plus) → dither::apply → pack to the 16 KB &C000 screen. raw_frame =
+    // the screen; inks travel in result.palette.
+    if (amiga::is_cpc(mode)) {
+        if (has_transparency) {
+            for (std::size_t i = 0; i < tmask.size(); ++i)
+                if (tmask[i]) image->pixels()[i] = Color3f{0, 0, 0};
+        }
+        dither::Settings dith;
+        dith.method = parse_dither(options.dither);
+        dith.strength = options.dither_strength;
+        dith.error_clamp = options.error_clamp;
+        dith.serpentine = true;
+        auto enc = cpc::encode(*image, mode, dith);
+        if (!enc) return std::unexpected{enc.error()};
+
+        PipelineResult result;
+        result.rendered = std::move(enc->rendered);
+        result.palette = enc->inks;
+        result.indices = cpc::unpack_screen(amiga::cpc_screen_mode(mode), enc->screen);
+        result.planes.depth = amiga::get_mode_params(mode).bitplane_depth;
+        result.mode = mode;
+        result.hires = false;
+        result.interlace = false;
+        result.has_transparency = has_transparency;
+        result.transparency_mask = tmask;
+        result.finalize_psnr(*image, enc->total_error);
+        result.raw_frame = std::move(enc->screen);
+        return result;
+    }
+
     // --- SNES Mode 7 (256-palette and Direct Color) ---
     // The full quantise → dither → pack pipeline lives inside
     // snes_io::encode_snes_mode7. The chunky intermediate (palette
@@ -2286,83 +2375,35 @@ Result<PipelineResult> run_pipeline(const std::uint8_t* input_data,
             }
         }
 
-        // 4. Per-pixel re-quantise via per-tile mirrored 3×3 ED.
-        //
-        // Build a 3W×3H buffer per 8×8 tile where the center block is
-        // the source tile and the 8 surrounding blocks are mirror
-        // reflections (h-flip on left/right, v-flip on top/bottom,
-        // both on corners). Run ED on the full 24×24, take the center
-        // 8×8. Identical source tiles produce identical mirrored
-        // buffers → identical post-ED patterns → cleaner dedup. Same
-        // approach as c64 charset (commit 7236237).
+        // 4. Per-pixel re-quantise via per-tile mirrored 3×3 ED
+        //    (dither::diffuse_cells_mirrored). Identical source tiles
+        //    produce identical post-ED patterns → cleaner dedup. Same
+        //    approach as c64 charset (commit 7236237).
         Image rendered(w, h);
         std::vector<std::uint8_t>& pixel_index = gres.pixel_index;
         const std::vector<std::uint8_t>& tile_pal = gres.tile_palette;
         const std::vector<std::uint8_t>& tile_shadow = gres.tile_shadow;
         constexpr std::size_t kTS = genesis::kTileSide;  // 8
-        constexpr std::size_t k3T = 3 * kTS;             // 24
-        Image block(k3T, k3T);
-        std::vector<std::uint8_t> block_idx(k3T * k3T, 0);
-        std::vector<color_space::OKLab> block_chosen(k3T * k3T);
         auto tiles_y = (h + kTS - 1) / kTS;
-        float te = 0.0f;
-        for (std::size_t ty = 0; ty < tiles_y; ++ty) {
-            for (std::size_t tx = 0; tx < tiles_x; ++tx) {
-                // Mirror-fill the 3W×3H block.
-                for (std::size_t by = 0; by < 3; ++by) {
-                    for (std::size_t bx = 0; bx < 3; ++bx) {
-                        for (std::size_t ly = 0; ly < kTS; ++ly) {
-                            std::size_t sy_local = (by == 1) ? ly : (kTS - 1 - ly);
-                            for (std::size_t lx = 0; lx < kTS; ++lx) {
-                                std::size_t sx_local = (bx == 1) ? lx : (kTS - 1 - lx);
-                                std::size_t sx = std::min(tx * kTS + sx_local, w - 1);
-                                std::size_t sy = std::min(ty * kTS + sy_local, h - 1);
-                                block[bx * kTS + lx, by * kTS + ly] = (*image)[sx, sy];
-                            }
-                        }
-                    }
-                }
-                std::size_t cell = ty * tiles_x + tx;
+        float te = dither::diffuse_cells_mirrored(
+            *image,
+            dith,
+            kTS,
+            kTS,
+            /*k_min=*/1,
+            [&](std::size_t cell) -> std::span<const color_space::OKLab> {
                 std::uint8_t pal = tile_pal[cell];
                 bool shadowed = sh_mode && tile_shadow[cell] != 0;
-                auto& pal_lab_ref = shadowed ? shadow_lab[pal] : palette_lab[pal];
-                std::span<const color_space::OKLab> pl_span(pal_lab_ref.data(), pal_lab_ref.size());
-                std::fill(block_idx.begin(), block_idx.end(), std::uint8_t{0});
-                te += dither::diffuse_raw_buffer(
-                    block,
-                    dith,
-                    [&](const color_space::OKLab& target,
-                        std::size_t bx,
-                        std::size_t by) -> dither::PickResult {
-                        std::size_t k = 1;
-                        color_space::OKLab chosen{};
-                        float thr = dither::pick_palette_index_with_ostro(dith.method,
-                                                                          target,
-                                                                          pl_span,
-                                                                          bx,
-                                                                          by,
-                                                                          dith.strength,
-                                                                          /*k_min=*/1,
-                                                                          k,
-                                                                          chosen);
-                        std::size_t bi = by * k3T + bx;
-                        block_idx[bi] = static_cast<std::uint8_t>(k);
-                        block_chosen[bi] = chosen;
-                        return {chosen, thr};
-                    });
-                // Copy center 8×8 back to the global buffers.
-                for (std::size_t ly = 0; ly < kTS; ++ly) {
-                    for (std::size_t lx = 0; lx < kTS; ++lx) {
-                        auto bi = (kTS + ly) * k3T + (kTS + lx);
-                        auto x = tx * kTS + lx;
-                        auto y = ty * kTS + ly;
-                        if (x >= w || y >= h) continue;
-                        std::uint8_t k = block_idx[bi];
-                        pixel_index[y * w + x] = k;
-                        rendered[x, y] = shadowed ? shadow_lines[pal][k]
-                                                  : gres.palette_lines[pal][k];
-                    }
-                }
+                return shadowed ? shadow_lab[pal] : palette_lab[pal];
+            },
+            pixel_index);
+        for (std::size_t y = 0; y < h; ++y) {
+            for (std::size_t x = 0; x < w; ++x) {
+                std::size_t cell = (y / kTS) * tiles_x + (x / kTS);
+                std::uint8_t pal = tile_pal[cell];
+                bool shadowed = sh_mode && tile_shadow[cell] != 0;
+                std::uint8_t k = pixel_index[y * w + x];
+                rendered[x, y] = shadowed ? shadow_lines[pal][k] : gres.palette_lines[pal][k];
             }
         }
 
@@ -5579,6 +5620,80 @@ static std::string ted_header(const PipelineResult& p, std::string_view sym) {
     return out;
 }
 
+// Master System / Game Gear .h in the devkitSMS convention: tiles and
+// palette as unsigned char, tilemap as unsigned short, *_size in bytes.
+static std::string sms_header(const PipelineResult& p, std::string_view sym) {
+    const bool gg = amiga::is_game_gear(p.mode);
+    const std::size_t cols = p.rendered.width() / 8;
+    const std::size_t rows = p.rendered.height() / 8;
+    const std::size_t cram_bytes = gg ? 64 : 32;
+    std::span<const std::uint8_t> cram(p.raw_frame.data() + p.raw_frame.size() - cram_bytes,
+                                       cram_bytes);
+    const std::string s(sym);
+    std::string out;
+    out += "// Generated by png2amiga. Do not edit.\n";
+    out += std::format("//   {} mode 4: {} tile(s), {}x{} tilemap, 2 x 16 colors.\n",
+                       gg ? "Game Gear" : "Master System",
+                       p.genesis_unique_tiles,
+                       cols,
+                       rows);
+    out += std::format("//   SMS_loadTiles({0}_tiles, 0, {0}_tiles_size);\n", s);
+    if (gg) {
+        out += std::format("//   SMS_loadTileMapArea(6, 3, {}_tilemap, {}, {});\n", s, cols, rows);
+        out += std::format("//   GG_loadBGPalette({0}_palette); GG_loadSpritePalette({0}_palette + 32);\n",
+                           s);
+    } else {
+        out += std::format("//   SMS_loadTileMap(0, 0, {0}_tilemap, {0}_tilemap_size);\n", s);
+        out += std::format(
+            "//   SMS_loadBGPalette({0}_palette); SMS_loadSpritePalette({0}_palette + 16);\n", s);
+    }
+    out += "// Tilemap bit 11 selects the second palette (sprite CRAM 16-31).\n\n#pragma once\n\n";
+    out += std::format("#define {}_tiles_size {}\n", s, p.genesis_tile_bytes.size());
+    out += std::format("#define {}_tilemap_size {}\n", s, p.genesis_tilemap_cells.size() * 2);
+    out += std::format("#define {}_palette_size {}\n", s, cram_bytes);
+    out += std::format("#define {}_tile_count {}\n", s, p.genesis_unique_tiles);
+    out += std::format("#define {}_width {}\n", s, cols);
+    out += std::format("#define {}_height {}\n\n", s, rows);
+    out += emit_gba_u8_array(s + "_tiles", p.genesis_tile_bytes);
+    out += emit_gba_u16_array(s + "_tilemap", p.genesis_tilemap_cells);
+    out += emit_gba_u8_array(s + "_palette", cram);
+    return out;
+}
+
+// Amstrad CPC .h: the 16 KB &C000 screen plus the inks — firmware color
+// numbers (INK n,c / SCR SET INK) and Gate Array bytes (0x40|hw) for the
+// classic CPC; 0x0GRB words and ASIC palette-RAM bytes for the Plus.
+static std::string cpc_header(const PipelineResult& p, std::string_view sym) {
+    const std::string s(sym);
+    std::string out;
+    out += "// Generated by png2amiga. Do not edit.\n";
+    out += std::format("//   Amstrad CPC{} mode {}: {}x{}, {} inks. Screen at &C000,\n",
+                       amiga::is_cpc_plus(p.mode) ? " Plus" : "",
+                       amiga::cpc_screen_mode(p.mode),
+                       p.rendered.width(),
+                       p.rendered.height(),
+                       p.palette.size());
+    out += "//   line y at (y/8)*80 + (y%8)*2048.\n\n#pragma once\n\n";
+    out += std::format("#define {}_width {}\n", s, p.rendered.width());
+    out += std::format("#define {}_height {}\n", s, p.rendered.height());
+    out += std::format("#define {}_mode {}\n", s, amiga::cpc_screen_mode(p.mode));
+    out += std::format("#define {}_inks {}\n", s, p.palette.size());
+    out += std::format("#define {}_screen_address 0xC000\n\n", s);
+    out += emit_gba_u8_array(s + "_screen", p.raw_frame);
+    if (amiga::is_cpc_plus(p.mode)) {
+        out += "// 12-bit ink words 0x0GRB.\n";
+        out += emit_gba_u16_array(s + "_inks_grb", cpc::plus_words(p.palette));
+        out += "// ASIC palette RAM bytes (&6400 + 2*pen): R<<4|B, then G.\n";
+        out += emit_gba_u8_array(s + "_inks_asic", cpc::pal_bytes(p.mode, p.palette));
+    } else {
+        out += "// Firmware color numbers 0-26.\n";
+        out += emit_gba_u8_array(s + "_inks_firmware", cpc::firmware_numbers(p.palette));
+        out += "// Gate Array color bytes (0x40 | hardware number), for OUT &7F00.\n";
+        out += emit_gba_u8_array(s + "_inks_hardware", cpc::pal_bytes(p.mode, p.palette));
+    }
+    return out;
+}
+
 ConvertResult convert_cheader(const std::uint8_t* input_data,
                               std::size_t input_size,
                               const Options& options) {
@@ -5654,6 +5769,16 @@ ConvertResult convert_cheader(const std::uint8_t* input_data,
     }
     if (amiga::is_ted(result->mode)) {
         auto txt = ted_header(*result, sym);
+        std::vector<std::uint8_t> bytes(txt.begin(), txt.end());
+        return make_result(std::move(bytes), *result);
+    }
+    if (amiga::is_sms(result->mode)) {
+        auto txt = sms_header(*result, sym);
+        std::vector<std::uint8_t> bytes(txt.begin(), txt.end());
+        return make_result(std::move(bytes), *result);
+    }
+    if (amiga::is_cpc(result->mode)) {
+        auto txt = cpc_header(*result, sym);
         std::vector<std::uint8_t> bytes(txt.begin(), txt.end());
         return make_result(std::move(bytes), *result);
     }
@@ -5852,7 +5977,8 @@ ConvertResult convert_raw(const std::uint8_t* input_data,
     // genesis: tile_bytes + u16-BE tilemap + u16-BE palette). Hand
     // them straight back.
     if (amiga::is_c64(result->mode) || amiga::is_genesis(result->mode) ||
-        amiga::is_thomson(result->mode) || amiga::is_ted(result->mode)) {
+        amiga::is_thomson(result->mode) || amiga::is_ted(result->mode) ||
+        amiga::is_sms(result->mode) || amiga::is_cpc(result->mode)) {
         std::vector<std::uint8_t> raw = std::move(result->raw_frame);
         return make_result(std::move(raw), *result);
     }
@@ -5974,6 +6100,30 @@ ConvertResult convert_raw(const std::uint8_t* input_data,
     }
 
     return make_result(std::move(raw), *result);
+}
+
+std::vector<std::uint8_t> cpc_scr_bytes(std::span<const std::uint8_t> screen,
+                                        std::string_view name) {
+    auto hdr = cpc::amsdos_header(name, cpc::kScreenAddress,
+                                  static_cast<std::uint16_t>(screen.size()));
+    std::vector<std::uint8_t> out(hdr.begin(), hdr.end());
+    out.insert(out.end(), screen.begin(), screen.end());
+    return out;
+}
+
+std::vector<std::uint8_t> cpc_pal_bytes(amiga::Mode mode, std::span<const Color3f> inks) {
+    return cpc::pal_bytes(mode, inks);
+}
+
+ConvertResult convert_scr(const std::uint8_t* input_data,
+                          std::size_t input_size,
+                          const Options& options) {
+    auto result = run_pipeline(input_data, input_size, options);
+    if (!result) return make_error(result.error().message);
+    if (!amiga::is_cpc(result->mode)) return make_error(".scr export requires a cpc-* mode");
+    std::string name = options.symbol_name.empty() ? std::string{"image"} : options.symbol_name;
+    auto bytes = cpc_scr_bytes(result->raw_frame, name + ".scr");
+    return make_result(std::move(bytes), *result);
 }
 
 // ---------------------------------------------------------------------------

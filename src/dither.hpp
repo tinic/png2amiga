@@ -421,6 +421,25 @@ using PixelPicker =
 
 float diffuse_raw_buffer(const Image& image, const Settings& settings, const PixelPicker& pick);
 
+// Per-cell mirrored 3×3 error diffusion for tile / character modes. Each
+// cell_w×cell_h cell is diffused on its own inside a 3W×3H buffer whose
+// centre is the cell and whose 8 neighbours are its mirror reflections
+// (h-flip left/right, v-flip top/bottom, both on corners). Identical
+// source cells therefore produce identical index patterns, so tile
+// dedup survives dithering. `palette_for_cell(cell)` gives the cell's
+// candidate colors (row-major cell index); entries below `k_min` are
+// never picked. Writes the centre indices into `indices` (W×H, row-major)
+// and returns the summed diffusion error over every 3W×3H buffer.
+using CellPalette =
+    std::function<std::span<const png2amiga::color_space::OKLab>(std::size_t cell)>;
+float diffuse_cells_mirrored(const Image& image,
+                             const Settings& settings,
+                             std::size_t cell_w,
+                             std::size_t cell_h,
+                             std::size_t k_min,
+                             const CellPalette& palette_for_cell,
+                             std::vector<std::uint8_t>& indices);
+
 // True if `method` actually performs error diffusion (has an FS-style
 // kernel and isn't an ordered or palette-aware family). Centralised
 // because the same 4-clause expression

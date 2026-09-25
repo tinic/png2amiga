@@ -81,6 +81,9 @@ set(PNG2AMIGA_CORE_SOURCES
     src/c64_prg.cpp
     src/thomson.cpp
     src/ted.cpp
+    src/tile_merge.cpp
+    src/sms.cpp
+    src/cpc.cpp
     src/pipeline.cpp
     src/ssimulacra2.cpp
     src/api.cpp
@@ -1688,6 +1691,110 @@ sys.exit(0 if got==expect else (print(f'expected {expect}, got {got}') or 1))"
                 ${PNG2AMIGA_TEST_INPUT} ${CMAKE_BINARY_DIR}/test_ted_rsv.h
     )
     set_tests_properties("ted-reserve-rejected" PROPERTIES WILL_FAIL TRUE)
+
+    # Sega Master System / Game Gear and Amstrad CPC / CPC Plus — PNG
+    # preview + .h + raw .bin for every mode, .scr for CPC.
+    set(sms_cpc_outputs
+        "sms.png|--mode sms-mode4"
+        "sms.h|--mode sms-mode4 --symbol sms_test"
+        "sms.bin|--mode sms-mode4"
+        "gg.png|--mode gg-mode4"
+        "gg.h|--mode gg-mode4 --symbol gg_test"
+        "gg.bin|--mode gg-mode4"
+        "cpc0.png|--mode cpc-mode0"
+        "cpc0.h|--mode cpc-mode0 --symbol cpc0_test"
+        "cpc0.bin|--mode cpc-mode0"
+        "cpc1.scr|--mode cpc-mode1"
+        "cpc1.h|--mode cpc-mode1 --symbol cpc1_test"
+        "cpc2.png|--mode cpc-mode2"
+        "cpc2.bin|--mode cpc-mode2"
+        "cpcp0.h|--mode cpc-plus-mode0 --symbol cpcp0_test"
+        "cpcp0.bin|--mode cpc-plus-mode0"
+        "cpcp1.png|--mode cpc-plus-mode1"
+        "cpcp2.h|--mode cpc-plus-mode2 --symbol cpcp2_test"
+    )
+    foreach(spec ${sms_cpc_outputs})
+        string(REPLACE "|" ";" spec_parts ${spec})
+        list(GET spec_parts 0 ext)
+        list(GET spec_parts 1 mode_args)
+        separate_arguments(mode_args UNIX_COMMAND "${mode_args}")
+        add_test(
+            NAME "smoke-smscpc-${ext}"
+            COMMAND png2amiga ${mode_args}
+                    ${PNG2AMIGA_TEST_INPUT}
+                    ${CMAKE_BINARY_DIR}/smoke-smscpc.${ext}
+        )
+        add_test(
+            NAME "smoke-smscpc-${ext}-exists"
+            COMMAND ${CMAKE_COMMAND} -E sha256sum
+                    ${CMAKE_BINARY_DIR}/smoke-smscpc.${ext}
+        )
+        set_tests_properties("smoke-smscpc-${ext}-exists"
+                             PROPERTIES DEPENDS "smoke-smscpc-${ext}")
+    endforeach()
+
+    # Output sizes: CPC screen 16384, .scr = 128-byte AMSDOS header +
+    # screen (checksum over bytes 0..66), .pal = 1 Gate Array byte per ink
+    # (classic) or 2 ASIC bytes per ink (Plus); SMS .bin = 32 B/tile
+    # (≤ 448) + 768 × 2 tilemap + 32 CRAM; GG = 360 × 32 + 360 × 2 + 64.
+    add_test(
+        NAME "smoke-smscpc-sizes"
+        COMMAND ${PNG2AMIGA_PYTHON} -c "
+import os, sys
+b = '${CMAKE_BINARY_DIR}/smoke-smscpc.'
+sz = lambda e: os.path.getsize(b + e)
+scr = open(b + 'cpc1.scr', 'rb').read()
+ok = (sz('cpc0.bin') == 16384 and sz('cpc2.bin') == 16384 and sz('cpcp0.bin') == 16384
+      and len(scr) == 16512 and scr[0x12] == 2 and scr[0x15:0x17] == bytes([0, 0xC0])
+      and scr[0x43] | (scr[0x44] << 8) == sum(scr[:67]) & 0xFFFF
+      and sz('cpc0.pal') == 16 and sz('cpc1.pal') == 4 and sz('cpc2.pal') == 2
+      and sz('cpcp0.pal') == 32
+      and (sz('sms.bin') - 768 * 2 - 32) % 32 == 0 and sz('sms.bin') <= 448 * 32 + 768 * 2 + 32
+      and sz('gg.bin') <= 360 * 32 + 360 * 2 + 64 and (sz('gg.bin') - 360 * 2 - 64) % 32 == 0)
+sys.exit(0 if ok else 1)")
+    set_tests_properties("smoke-smscpc-sizes" PROPERTIES DEPENDS
+        "smoke-smscpc-cpc0.bin;smoke-smscpc-cpc2.bin;smoke-smscpc-cpcp0.bin;smoke-smscpc-cpc1.scr;smoke-smscpc-sms.bin;smoke-smscpc-gg.bin")
+
+    # Decode .bin / screen + inks with an independent decoder and require a
+    # bit-exact match with the preview (tools/check_sms_cpc_roundtrip.py).
+    foreach(m sms-mode4 gg-mode4 cpc-mode0 cpc-mode1 cpc-mode2
+              cpc-plus-mode0 cpc-plus-mode1 cpc-plus-mode2)
+        add_test(
+            NAME "roundtrip-${m}"
+            COMMAND ${PNG2AMIGA_PYTHON}
+                    ${CMAKE_SOURCE_DIR}/tools/check_sms_cpc_roundtrip.py
+                    --smoke $<TARGET_FILE:api_pipeline_smoke>
+                    --mode ${m}
+                    --input ${PNG2AMIGA_TEST_INPUT}
+                    --work ${CMAKE_BINARY_DIR}/roundtrip-smscpc
+        )
+    endforeach()
+
+    # Rejected: Amiga / viewer outputs, .scr outside CPC, palette flags.
+    add_test(
+        NAME "sms-iff-rejected"
+        COMMAND png2amiga --mode sms-mode4
+                ${PNG2AMIGA_TEST_INPUT} ${CMAKE_BINARY_DIR}/test_sms.iff
+    )
+    set_tests_properties("sms-iff-rejected" PROPERTIES WILL_FAIL TRUE)
+    add_test(
+        NAME "gg-scr-rejected"
+        COMMAND png2amiga --mode gg-mode4
+                ${PNG2AMIGA_TEST_INPUT} ${CMAKE_BINARY_DIR}/test_gg.scr
+    )
+    set_tests_properties("gg-scr-rejected" PROPERTIES WILL_FAIL TRUE)
+    add_test(
+        NAME "cpc-lock-rejected"
+        COMMAND png2amiga --mode cpc-mode1 --lock-index 1 ff0000
+                ${PNG2AMIGA_TEST_INPUT} ${CMAKE_BINARY_DIR}/test_cpc_lock.h
+    )
+    set_tests_properties("cpc-lock-rejected" PROPERTIES WILL_FAIL TRUE)
+    add_test(
+        NAME "cpc-depth-rejected"
+        COMMAND png2amiga --mode cpc-plus-mode0 --depth 2
+                ${PNG2AMIGA_TEST_INPUT} ${CMAKE_BINARY_DIR}/test_cpc_depth.png
+    )
+    set_tests_properties("cpc-depth-rejected" PROPERTIES WILL_FAIL TRUE)
 
     # C64 — every (mode, output-format) combo we promise. Bitmap modes:
     # PNG preview, .raw bytes, .prg displayer; .koa for multicolor only;

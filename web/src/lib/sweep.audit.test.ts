@@ -30,9 +30,11 @@ describe('non-Amiga mode sweep', () => {
 
   it('offers Custom Palette only where the encoder honours it', () => {
     // Verified against the CLI per family: C64 / CGA-text / SNES / Genesis
-    // ignore an uploaded palette; Thomson / TED / GBA-direct reject it.
+    // ignore an uploaded palette; Thomson / TED / SMS / CPC / GBA-direct
+    // reject it.
     const shouldNotOffer = nonAmiga.filter(m =>
-      /^c64-|^snes-|^genesis-|^thomson-|^ted-|^cga-text/.test(m) || m === 'gba-mode3' || m === 'gba-mode5')
+      /^c64-|^snes-|^genesis-|^thomson-|^ted-|^cga-text|^sms-|^gg-|^cpc-/.test(m) ||
+      m === 'gba-mode3' || m === 'gba-mode5')
     expect(shouldNotOffer.filter(m => supportsCustomPalette(m))).toEqual([])
     // ...and still offers it where it works (DOS bitmap, GBA mode4, Atari).
     for (const m of ['vga-13h', 'vga-12h', 'ega-320', 'cga-320', 'gba-mode4', 'stf-low']) {
