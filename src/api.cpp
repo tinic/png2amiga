@@ -4064,7 +4064,7 @@ Result<PipelineResult> run_pipeline(const std::uint8_t* input_data,
             auto shift_palette = [&](std::vector<Color3f>& p) {
                 std::vector<Color3f> shifted(pf2_base, Color3f{0, 0, 0});
                 shifted.insert(shifted.end(), p.begin(), p.end());
-                shifted[0] = p[0];
+                shifted.at(0) = p.at(0);
                 shifted[pf2_base] = Color3f{0, 0, 0};
                 p = std::move(shifted);
             };
