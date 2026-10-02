@@ -1,4 +1,5 @@
 #include "ted.hpp"
+#include "cell_graph_refine.hpp"
 
 #include "palette.hpp"
 #include "pipeline.hpp"
@@ -362,6 +363,63 @@ Result<EncodeResult> encode(const Image& image,
     if (mode == amiga::Mode::ted_hires) return encode_hires(image, settings);
     if (mode == amiga::Mode::ted_multicolor) return encode_multicolor(image, settings);
     return std::unexpected{Error{ErrorCode::unsupported_mode, "ted::encode: not a TED mode"}};
+}
+
+void refine_cells(const Image& image,
+                  EncodeResult& enc,
+                  amiga::Mode mode,
+                  const dither::Settings& settings) {
+    const bool mc = mode == amiga::Mode::ted_multicolor;
+    const std::size_t cw = mc ? 4 : 8, W = image.width(), H = image.height(), cols = W / cw,
+                      n = cols * (H / 8);
+    cell_graph_refine::Model m;
+    m.choices = mc ? 4 : 2;
+    for (auto rgb : palette::kTedPalette)
+        m.palette.push_back(color_space::srgb_hex_to_linear(rgb));
+    auto bg0 = m.add(enc.bg0, mc ? 128 : 1), bg1 = m.add(enc.bg1, mc ? 128 : 1);
+    std::vector<std::size_t> low(n), high(n);
+    for (std::size_t c = 0; c < n; ++c) {
+        low[c] = m.add(static_cast<std::uint8_t>(((enc.luma[c] & 7) << 4) | (enc.chroma[c] >> 4)),
+                       128);
+        high[c] = m.add(static_cast<std::uint8_t>((enc.luma[c] & 0x70) | (enc.chroma[c] & 15)),
+                        128);
+    }
+    m.slots.resize(W * H);
+    m.labels.resize(W * H);
+    for (std::size_t c = 0; c < n; ++c)
+        for (std::size_t y = 0; y < 8; ++y)
+            for (std::size_t x = 0; x < cw; ++x) {
+                auto p = ((c / cols) * 8 + y) * W + (c % cols) * cw + x;
+                m.slots[p] = mc ? std::array<std::size_t, 4>{bg0, low[c], high[c], bg1}
+                                : std::array<std::size_t, 4>{high[c], low[c], bg0, bg0};
+                m.labels[p] = static_cast<std::uint8_t>(
+                    (enc.bitmap[c * 8 + y] >> ((cw - 1 - x) * (mc ? 2 : 1))) & (mc ? 3 : 1));
+                m.groups.push_back({p});
+            }
+    if (!cell_graph_refine::refine(image,
+                                   m,
+                                   enc.rendered,
+                                   dither::uses_error_diffusion(settings.method) ? nullptr
+                                                                                 : &settings))
+        return;
+    if (mc) {
+        enc.bg0 = m.values[bg0];
+        enc.bg1 = m.values[bg1];
+    }
+    for (std::size_t c = 0; c < n; ++c) {
+        auto a = m.values[low[c]], b = m.values[high[c]];
+        enc.luma[c] = static_cast<std::uint8_t>((b & 0x70) | (a >> 4));
+        enc.chroma[c] = static_cast<std::uint8_t>(((a & 15) << 4) | (b & 15));
+        for (std::size_t y = 0; y < 8; ++y) {
+            std::uint8_t row = 0;
+            for (std::size_t x = 0; x < cw; ++x) {
+                auto p = ((c / cols) * 8 + y) * W + (c % cols) * cw + x;
+                row = static_cast<std::uint8_t>((row << (mc ? 2 : 1)) | m.labels[p]);
+            }
+            enc.bitmap[c * 8 + y] = row;
+        }
+    }
+    enc.total_error = oklab_error(image, enc.rendered);
 }
 
 }  // namespace png2amiga::ted

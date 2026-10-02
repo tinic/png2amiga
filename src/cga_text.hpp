@@ -121,7 +121,8 @@ Result<CgaTextResult> encode(const Image& image,
                                                      //       slot like EGA/VGA).
                              Metric metric = Metric::blur,           // see Metric enum above.
                              Kernel kernel = Kernel::auto_per_mode,  // see Kernel enum above.
-                             ProgressCb on_progress = nullptr);
+                             ProgressCb on_progress = nullptr,
+                             bool refine_cells = false);
 
 // Render a CgaTextResult back to an RGB image for preview.
 Image render(const CgaTextResult& r);

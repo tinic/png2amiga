@@ -73,7 +73,8 @@ Result<EncodeResult> encode(const Image& image,
                             amiga::Mode mode,
                             const dither::Settings& settings = {},
                             const FormeCouleurParams& fc = {},
-                            const std::vector<PaletteEntry>* to8_palette = nullptr);
+                            const std::vector<PaletteEntry>* to8_palette = nullptr,
+                            bool refine_cells = false);
 
 // Evolutionary population palette search for TO8 forme-couleur
 // (mirrors palette_search.cpp's GA shape: elitist quarter, crossover +

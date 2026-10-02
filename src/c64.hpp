@@ -217,4 +217,11 @@ Result<std::string> charset_header(const EncodeResult& enc,
                                    bool multicolor,
                                    Palette pal = Palette::colodore);
 
+void refine_cells(const Image& image,
+                  EncodeResult& enc,
+                  amiga::Mode mode,
+                  Palette pal = Palette::colodore,
+                  bool graphics_only = false,
+                  const dither::Settings& settings = {});
+
 }  // namespace png2amiga::c64

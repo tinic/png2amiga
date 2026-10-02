@@ -2471,6 +2471,77 @@ sys.exit(0 if ok else 1)")
         COMMAND ${_equiv_chk} --in ${_pal_makena_in} -- --mode ted-hires)
     add_test(NAME "api-equiv-ted-multicolor"
         COMMAND ${_equiv_chk} --in ${_pal_makena_in} -- --mode ted-multicolor)
+    foreach(_mode IN ITEMS thomson-to7-320x16 cga-text80x200 cga-text80x100
+                           cga-text80x50 cga-text80x25 cga-text40x200 cga-text40x100
+                           thomson-to8-320x16 c64-afli c64-hires ted-hires c64-petscii
+                           c64-multicolor c64-fli ted-multicolor
+                           c64-charset-hires c64-charset-multicolor)
+        add_test(NAME "api-equiv-cell-refine-${_mode}"
+            COMMAND ${_equiv_chk} --in ${_pal_makena_in} -- --mode ${_mode} --cell-refine)
+        add_test(NAME "cell-refine-replay-${_mode}"
+            COMMAND ${PNG2AMIGA_PYTHON} ${CMAKE_SOURCE_DIR}/tools/check_cell_refine_replay.py
+                --api $<TARGET_FILE:api_pipeline_smoke> --mode ${_mode}
+                --input ${CMAKE_SOURCE_DIR}/examples/maui.jpg)
+    endforeach()
+    foreach(_mode IN ITEMS c64-charset-hires c64-charset-multicolor)
+        add_test(NAME "cell-refine-budget-${_mode}"
+            COMMAND ${PNG2AMIGA_PYTHON} ${CMAKE_SOURCE_DIR}/tools/check_cell_refine_replay.py
+                --api $<TARGET_FILE:api_pipeline_smoke> --mode ${_mode}
+                --tile-budget 8 --tile-reserve 2 --input ${CMAKE_SOURCE_DIR}/examples/maui.jpg)
+    endforeach()
+    add_test(NAME "cell-refine-petscii-graphics-replay"
+        COMMAND ${PNG2AMIGA_PYTHON} ${CMAKE_SOURCE_DIR}/tools/check_cell_refine_replay.py
+            --api $<TARGET_FILE:api_pipeline_smoke> --mode c64-petscii --graphics-only
+            --input ${CMAKE_SOURCE_DIR}/examples/maui.jpg)
+    foreach(_mode IN ITEMS c64-fli c64-afli)
+        add_test(NAME "cell-refine-default-edge-${_mode}"
+            COMMAND ${PNG2AMIGA_PYTHON} ${CMAKE_SOURCE_DIR}/tools/check_cell_refine_replay.py
+                --api $<TARGET_FILE:api_pipeline_smoke> --mode ${_mode} --baseline
+                --input ${CMAKE_SOURCE_DIR}/examples/maui.jpg)
+    endforeach()
+    add_test(NAME "c64-multicolor-shared-bg-replay"
+        COMMAND ${PNG2AMIGA_PYTHON} ${CMAKE_SOURCE_DIR}/tools/check_cell_refine_replay.py
+            --api $<TARGET_FILE:api_pipeline_smoke> --mode c64-multicolor --baseline
+            --input ${CMAKE_SOURCE_DIR}/examples/maui.jpg)
+    add_test(NAME "c64-multicolor-shared-bg-replay-none"
+        COMMAND ${PNG2AMIGA_PYTHON} ${CMAKE_SOURCE_DIR}/tools/check_cell_refine_replay.py
+            --api $<TARGET_FILE:api_pipeline_smoke> --mode c64-multicolor --baseline --dither none
+            --input ${CMAKE_SOURCE_DIR}/examples/maui.jpg)
+    foreach(_mode IN ITEMS c64-hires c64-multicolor c64-fli c64-afli
+                           c64-charset-hires c64-charset-multicolor
+                           ted-hires ted-multicolor thomson-to7-320x16 thomson-to8-320x16)
+        add_test(NAME "cell-refine-ordered-replay-${_mode}"
+            COMMAND ${PNG2AMIGA_PYTHON} ${CMAKE_SOURCE_DIR}/tools/check_cell_refine_replay.py
+                --api $<TARGET_FILE:api_pipeline_smoke> --mode ${_mode} --dither opt-checker
+                --input ${CMAKE_SOURCE_DIR}/examples/maui.jpg)
+    endforeach()
+    add_test(NAME "cell-refine-ordered-pattern-contract"
+        COMMAND $<TARGET_FILE:api_pipeline_smoke> --check-ordered-refine)
+    add_test(NAME "cell-refine-best-preserves-ordinary"
+        COMMAND ${PNG2AMIGA_PYTHON} ${CMAKE_SOURCE_DIR}/tools/check_cell_refine.py
+            --cli $<TARGET_FILE:png2amiga> --mode thomson-to7-320x16
+            --input ${CMAKE_SOURCE_DIR}/examples/maui.jpg --best)
+    add_test(NAME "cell-refine-rejects-amiga"
+        COMMAND png2amiga --mode lores --cell-refine ${PNG2AMIGA_TEST_INPUT}
+                ${CMAKE_BINARY_DIR}/cell-refine-rejected.png)
+    add_test(NAME "cell-refine-rejects-mse"
+        COMMAND png2amiga --mode cga-text80x100 --cga-text-metric mse --cell-refine
+                ${PNG2AMIGA_TEST_INPUT} ${CMAKE_BINARY_DIR}/cell-refine-mse-rejected.png)
+    set_tests_properties(cell-refine-rejects-amiga cell-refine-rejects-mse
+        PROPERTIES WILL_FAIL TRUE)
+    foreach(_case IN ITEMS "thomson-to7-320x16|maui.jpg|25"
+                           "cga-text80x100|maui.jpg|5"
+                           "thomson-to7-320x16|brick.png|0")
+        string(REPLACE "|" ";" _parts "${_case}")
+        list(GET _parts 0 _mode)
+        list(GET _parts 1 _image)
+        list(GET _parts 2 _gain)
+        add_test(NAME "cell-refine-quality-${_mode}-${_image}"
+            COMMAND ${PNG2AMIGA_PYTHON} ${CMAKE_SOURCE_DIR}/tools/check_cell_refine.py
+                --cli $<TARGET_FILE:png2amiga> --mode ${_mode}
+                --input ${CMAKE_SOURCE_DIR}/examples/${_image} --min-gain ${_gain})
+    endforeach()
+
     add_test(NAME "api-equiv-cga-text80x100"
         COMMAND ${_equiv_chk} --in ${_pal_makena_in} -- --mode cga-text80x100)
     # gpu_restart_quantize made deterministic in v1.66.0 (GPU argmin

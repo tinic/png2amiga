@@ -1,4 +1,6 @@
 #include "thomson.hpp"
+#include "cell_refine.hpp"
+#include "cell_graph_refine.hpp"
 
 #include "palette.hpp"
 #include "pipeline.hpp"
@@ -144,7 +146,8 @@ float oklab_error(const Image& a, const Image& b) {
 Result<EncodeResult> encode_formecouleur(const Image& image,
                                          const std::vector<PaletteEntry>& palette_entries,
                                          const dither::Settings& settings,
-                                         const FormeCouleurParams& fc) {
+                                         const FormeCouleurParams& fc,
+                                         bool refine_cells = false) {
     constexpr std::size_t W = 320;
     constexpr std::size_t H = 200;
     constexpr std::size_t kCellW = 8;
@@ -312,6 +315,45 @@ Result<EncodeResult> encode_formecouleur(const Image& image,
     };
     (void)dither::diffuse_raw_buffer(image, settings, pick);
 
+    if (refine_cells && !dither::uses_error_diffusion(settings.method)) {
+        cell_graph_refine::Model m;
+        m.palette.assign(view.lin.begin(), view.lin.end());
+        m.slots.resize(W * H);
+        m.labels = indices;
+        Image rendered(W, H);
+        for (std::size_t c = 0; c < cell_pair.size(); ++c) {
+            auto bg = m.add(cell_pair[c][0], m.palette.size());
+            auto fg = m.add(cell_pair[c][1], m.palette.size());
+            for (std::size_t x = 0; x < 8; ++x) {
+                auto p = c * 8 + x;
+                m.slots[p] = {bg, fg, bg, bg};
+                rendered.pixels()[p] = m.palette[cell_pair[c][indices[p]]];
+            }
+        }
+        if (cell_graph_refine::refine(image, m, rendered, &settings)) {
+            indices = m.labels;
+            for (std::size_t c = 0; c < cell_pair.size(); ++c)
+                cell_pair[c] = {m.values[c * 2], m.values[c * 2 + 1]};
+        }
+    } else if (refine_cells) {
+        std::vector<cell_refine::Pattern> pats;
+        for (std::uint64_t mask = 0; mask < 128; ++mask)
+            pats.push_back({mask, 0});
+        std::vector<cell_refine::Cell> cells;
+        for (std::size_t c = 0; c < cell_pair.size(); ++c) {
+            std::uint64_t mask = 0;
+            for (std::size_t x = 0; x < 8; ++x)
+                if (indices[c * 8 + x]) mask |= std::uint64_t{1} << x;
+            cells.push_back({mask, cell_pair[c][1], cell_pair[c][0], 0});
+        }
+        cell_refine::refine(image, view.lin, 1, pats, cells);
+        for (std::size_t c = 0; c < cells.size(); ++c) {
+            cell_pair[c] = {cells[c].bg, cells[c].fg};
+            for (std::size_t x = 0; x < 8; ++x)
+                indices[c * 8 + x] = static_cast<std::uint8_t>((cells[c].mask >> x) & 1);
+        }
+    }
+
     // Pack pages. pageB = shape (bit7 leftmost, set => fg/c1). pageA = color
     // byte in TO-series Decode320x16 format: bits0-2 = bg low3, bits3-5 = fg
     // low3, bit6 = NOT(fg bit3), bit7 = NOT(bg bit3).
@@ -440,14 +482,15 @@ Result<EncodeResult> encode(const Image& image,
                             amiga::Mode mode,
                             const dither::Settings& settings,
                             const FormeCouleurParams& fc,
-                            const std::vector<PaletteEntry>* to8_palette) {
+                            const std::vector<PaletteEntry>* to8_palette,
+                            bool refine_cells) {
     if (amiga::is_thomson_formecouleur(mode)) {
         std::vector<PaletteEntry> pal =
             (mode == amiga::Mode::thomson_to7_320x16)
                 ? to770_palette()
                 : ((to8_palette && to8_palette->size() == 16) ? *to8_palette
                                                               : quantize_to8(image, 16));
-        auto r = encode_formecouleur(image, pal, settings, fc);
+        auto r = encode_formecouleur(image, pal, settings, fc, refine_cells);
         if (!r) return r;
         // TO7/70 has a fixed palette → no .pal emitted; TO8 carries it.
         if (mode == amiga::Mode::thomson_to8_320x16) r->palette = pal;

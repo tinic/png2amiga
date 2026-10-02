@@ -1,0 +1,2417 @@
+[
+  {
+    "mode": "thomson-to7-320x16",
+    "image": "3macao.jpg",
+    "before": {
+      "s2": -47.08,
+      "seconds": 0.491,
+      "png": "thomson-to7-320x16-3macao-before.png"
+    },
+    "after": {
+      "s2": -14.2,
+      "seconds": 0.32,
+      "png": "thomson-to7-320x16-3macao-after.png"
+    },
+    "delta": 32.88
+  },
+  {
+    "mode": "thomson-to7-320x16",
+    "image": "asterix.png",
+    "before": {
+      "s2": -38.84,
+      "seconds": 0.081,
+      "png": "thomson-to7-320x16-asterix-before.png"
+    },
+    "after": {
+      "s2": 12.58,
+      "seconds": 0.409,
+      "png": "thomson-to7-320x16-asterix-after.png"
+    },
+    "delta": 51.42
+  },
+  {
+    "mode": "thomson-to7-320x16",
+    "image": "brick.png",
+    "before": {
+      "s2": -49.28,
+      "seconds": 0.065,
+      "png": "thomson-to7-320x16-brick-before.png"
+    },
+    "after": {
+      "s2": -49.28,
+      "seconds": 0.327,
+      "png": "thomson-to7-320x16-brick-after.png"
+    },
+    "delta": 0.0
+  },
+  {
+    "mode": "thomson-to7-320x16",
+    "image": "chuck29.png",
+    "before": {
+      "s2": -64.24,
+      "seconds": 0.095,
+      "png": "thomson-to7-320x16-chuck29-before.png"
+    },
+    "after": {
+      "s2": -59.27,
+      "seconds": 0.514,
+      "png": "thomson-to7-320x16-chuck29-after.png"
+    },
+    "delta": 4.97
+  },
+  {
+    "mode": "thomson-to7-320x16",
+    "image": "chuck30.png",
+    "before": {
+      "s2": -59.17,
+      "seconds": 0.079,
+      "png": "thomson-to7-320x16-chuck30-before.png"
+    },
+    "after": {
+      "s2": -44.18,
+      "seconds": 0.401,
+      "png": "thomson-to7-320x16-chuck30-after.png"
+    },
+    "delta": 14.99
+  },
+  {
+    "mode": "thomson-to7-320x16",
+    "image": "chuck31.png",
+    "before": {
+      "s2": -64.01,
+      "seconds": 0.083,
+      "png": "thomson-to7-320x16-chuck31-before.png"
+    },
+    "after": {
+      "s2": -63.84,
+      "seconds": 0.456,
+      "png": "thomson-to7-320x16-chuck31-after.png"
+    },
+    "delta": 0.17
+  },
+  {
+    "mode": "thomson-to7-320x16",
+    "image": "electrichues02.jpg",
+    "before": {
+      "s2": -64.28,
+      "seconds": 0.084,
+      "png": "thomson-to7-320x16-electrichues02-before.png"
+    },
+    "after": {
+      "s2": -64.21,
+      "seconds": 0.404,
+      "png": "thomson-to7-320x16-electrichues02-after.png"
+    },
+    "delta": 0.07
+  },
+  {
+    "mode": "thomson-to7-320x16",
+    "image": "fantasy.png",
+    "before": {
+      "s2": -56.23,
+      "seconds": 0.094,
+      "png": "thomson-to7-320x16-fantasy-before.png"
+    },
+    "after": {
+      "s2": -31.98,
+      "seconds": 0.439,
+      "png": "thomson-to7-320x16-fantasy-after.png"
+    },
+    "delta": 24.25
+  },
+  {
+    "mode": "thomson-to7-320x16",
+    "image": "fantasy1.png",
+    "before": {
+      "s2": -55.05,
+      "seconds": 0.097,
+      "png": "thomson-to7-320x16-fantasy1-before.png"
+    },
+    "after": {
+      "s2": -38.12,
+      "seconds": 0.409,
+      "png": "thomson-to7-320x16-fantasy1-after.png"
+    },
+    "delta": 16.93
+  },
+  {
+    "mode": "thomson-to7-320x16",
+    "image": "fantasy2.png",
+    "before": {
+      "s2": -56.11,
+      "seconds": 0.083,
+      "png": "thomson-to7-320x16-fantasy2-before.png"
+    },
+    "after": {
+      "s2": -32.49,
+      "seconds": 0.354,
+      "png": "thomson-to7-320x16-fantasy2-after.png"
+    },
+    "delta": 23.62
+  },
+  {
+    "mode": "thomson-to7-320x16",
+    "image": "fromthe.png",
+    "before": {
+      "s2": -59.81,
+      "seconds": 0.078,
+      "png": "thomson-to7-320x16-fromthe-before.png"
+    },
+    "after": {
+      "s2": -47.91,
+      "seconds": 0.341,
+      "png": "thomson-to7-320x16-fromthe-after.png"
+    },
+    "delta": 11.9
+  },
+  {
+    "mode": "thomson-to7-320x16",
+    "image": "grungy.png",
+    "before": {
+      "s2": -64.23,
+      "seconds": 0.059,
+      "png": "thomson-to7-320x16-grungy-before.png"
+    },
+    "after": {
+      "s2": -64.23,
+      "seconds": 0.322,
+      "png": "thomson-to7-320x16-grungy-after.png"
+    },
+    "delta": 0.0
+  },
+  {
+    "mode": "thomson-to7-320x16",
+    "image": "jungle.webp",
+    "before": {
+      "s2": -61.61,
+      "seconds": 0.052,
+      "png": "thomson-to7-320x16-jungle-before.png"
+    },
+    "after": {
+      "s2": -61.61,
+      "seconds": 0.317,
+      "png": "thomson-to7-320x16-jungle-after.png"
+    },
+    "delta": 0.0
+  },
+  {
+    "mode": "thomson-to7-320x16",
+    "image": "logo.png",
+    "before": {
+      "s2": -33.82,
+      "seconds": 0.05,
+      "png": "thomson-to7-320x16-logo-before.png"
+    },
+    "after": {
+      "s2": -2.8,
+      "seconds": 0.313,
+      "png": "thomson-to7-320x16-logo-after.png"
+    },
+    "delta": 31.02
+  },
+  {
+    "mode": "thomson-to7-320x16",
+    "image": "lovers.jpg",
+    "before": {
+      "s2": -61.1,
+      "seconds": 0.055,
+      "png": "thomson-to7-320x16-lovers-before.png"
+    },
+    "after": {
+      "s2": -60.43,
+      "seconds": 0.319,
+      "png": "thomson-to7-320x16-lovers-after.png"
+    },
+    "delta": 0.67
+  },
+  {
+    "mode": "thomson-to7-320x16",
+    "image": "macaw.jpg",
+    "before": {
+      "s2": -56.89,
+      "seconds": 0.048,
+      "png": "thomson-to7-320x16-macaw-before.png"
+    },
+    "after": {
+      "s2": -32.85,
+      "seconds": 0.313,
+      "png": "thomson-to7-320x16-macaw-after.png"
+    },
+    "delta": 24.04
+  },
+  {
+    "mode": "thomson-to7-320x16",
+    "image": "makena.jpg",
+    "before": {
+      "s2": -61.85,
+      "seconds": 0.067,
+      "png": "thomson-to7-320x16-makena-before.png"
+    },
+    "after": {
+      "s2": -31.5,
+      "seconds": 0.34,
+      "png": "thomson-to7-320x16-makena-after.png"
+    },
+    "delta": 30.35
+  },
+  {
+    "mode": "thomson-to7-320x16",
+    "image": "maui.jpg",
+    "before": {
+      "s2": -55.2,
+      "seconds": 0.062,
+      "png": "thomson-to7-320x16-maui-before.png"
+    },
+    "after": {
+      "s2": -18.78,
+      "seconds": 0.328,
+      "png": "thomson-to7-320x16-maui-after.png"
+    },
+    "delta": 36.42
+  },
+  {
+    "mode": "thomson-to7-320x16",
+    "image": "ocs_4096.png",
+    "before": {
+      "s2": -45.52,
+      "seconds": 0.031,
+      "png": "thomson-to7-320x16-ocs_4096-before.png"
+    },
+    "after": {
+      "s2": -7.81,
+      "seconds": 0.297,
+      "png": "thomson-to7-320x16-ocs_4096-after.png"
+    },
+    "delta": 37.71
+  },
+  {
+    "mode": "thomson-to7-320x16",
+    "image": "photo.jpg",
+    "before": {
+      "s2": -43.27,
+      "seconds": 0.041,
+      "png": "thomson-to7-320x16-photo-before.png"
+    },
+    "after": {
+      "s2": -28.6,
+      "seconds": 0.307,
+      "png": "thomson-to7-320x16-photo-after.png"
+    },
+    "delta": 14.67
+  },
+  {
+    "mode": "thomson-to7-320x16",
+    "image": "ramps.png",
+    "before": {
+      "s2": -59.49,
+      "seconds": 0.029,
+      "png": "thomson-to7-320x16-ramps-before.png"
+    },
+    "after": {
+      "s2": -59.49,
+      "seconds": 0.296,
+      "png": "thomson-to7-320x16-ramps-after.png"
+    },
+    "delta": 0.0
+  },
+  {
+    "mode": "thomson-to7-320x16",
+    "image": "shooter.png",
+    "before": {
+      "s2": -64.03,
+      "seconds": 0.072,
+      "png": "thomson-to7-320x16-shooter-before.png"
+    },
+    "after": {
+      "s2": -64.03,
+      "seconds": 0.335,
+      "png": "thomson-to7-320x16-shooter-after.png"
+    },
+    "delta": 0.0
+  },
+  {
+    "mode": "thomson-to7-320x16",
+    "image": "space3.png",
+    "before": {
+      "s2": -64.22,
+      "seconds": 0.04,
+      "png": "thomson-to7-320x16-space3-before.png"
+    },
+    "after": {
+      "s2": -61.74,
+      "seconds": 0.304,
+      "png": "thomson-to7-320x16-space3-after.png"
+    },
+    "delta": 2.48
+  },
+  {
+    "mode": "cga-text80x200",
+    "image": "3macao.jpg",
+    "before": {
+      "s2": -11.05,
+      "seconds": 0.051,
+      "png": "cga-text80x200-3macao-before.png"
+    },
+    "after": {
+      "s2": 8.35,
+      "seconds": 1.102,
+      "png": "cga-text80x200-3macao-after.png"
+    },
+    "delta": 19.4
+  },
+  {
+    "mode": "cga-text80x200",
+    "image": "asterix.png",
+    "before": {
+      "s2": 5.72,
+      "seconds": 0.081,
+      "png": "cga-text80x200-asterix-before.png"
+    },
+    "after": {
+      "s2": 24.52,
+      "seconds": 1.145,
+      "png": "cga-text80x200-asterix-after.png"
+    },
+    "delta": 18.8
+  },
+  {
+    "mode": "cga-text80x200",
+    "image": "brick.png",
+    "before": {
+      "s2": -22.88,
+      "seconds": 0.044,
+      "png": "cga-text80x200-brick-before.png"
+    },
+    "after": {
+      "s2": 3.55,
+      "seconds": 1.101,
+      "png": "cga-text80x200-brick-after.png"
+    },
+    "delta": 26.43
+  },
+  {
+    "mode": "cga-text80x200",
+    "image": "chuck29.png",
+    "before": {
+      "s2": -31.71,
+      "seconds": 0.077,
+      "png": "cga-text80x200-chuck29-before.png"
+    },
+    "after": {
+      "s2": -22.02,
+      "seconds": 1.402,
+      "png": "cga-text80x200-chuck29-after.png"
+    },
+    "delta": 9.69
+  },
+  {
+    "mode": "cga-text80x200",
+    "image": "chuck30.png",
+    "before": {
+      "s2": -4.17,
+      "seconds": 0.073,
+      "png": "cga-text80x200-chuck30-before.png"
+    },
+    "after": {
+      "s2": 6.78,
+      "seconds": 1.125,
+      "png": "cga-text80x200-chuck30-after.png"
+    },
+    "delta": 10.95
+  },
+  {
+    "mode": "cga-text80x200",
+    "image": "chuck31.png",
+    "before": {
+      "s2": -28.24,
+      "seconds": 0.072,
+      "png": "cga-text80x200-chuck31-before.png"
+    },
+    "after": {
+      "s2": -7.67,
+      "seconds": 1.118,
+      "png": "cga-text80x200-chuck31-after.png"
+    },
+    "delta": 20.57
+  },
+  {
+    "mode": "cga-text80x200",
+    "image": "electrichues02.jpg",
+    "before": {
+      "s2": -63.25,
+      "seconds": 0.063,
+      "png": "cga-text80x200-electrichues02-before.png"
+    },
+    "after": {
+      "s2": -44.19,
+      "seconds": 1.112,
+      "png": "cga-text80x200-electrichues02-after.png"
+    },
+    "delta": 19.06
+  },
+  {
+    "mode": "cga-text80x200",
+    "image": "fantasy.png",
+    "before": {
+      "s2": -13.27,
+      "seconds": 0.077,
+      "png": "cga-text80x200-fantasy-before.png"
+    },
+    "after": {
+      "s2": 11.06,
+      "seconds": 1.164,
+      "png": "cga-text80x200-fantasy-after.png"
+    },
+    "delta": 24.33
+  },
+  {
+    "mode": "cga-text80x200",
+    "image": "fantasy1.png",
+    "before": {
+      "s2": -20.64,
+      "seconds": 0.079,
+      "png": "cga-text80x200-fantasy1-before.png"
+    },
+    "after": {
+      "s2": 5.51,
+      "seconds": 1.139,
+      "png": "cga-text80x200-fantasy1-after.png"
+    },
+    "delta": 26.15
+  },
+  {
+    "mode": "cga-text80x200",
+    "image": "fantasy2.png",
+    "before": {
+      "s2": -13.47,
+      "seconds": 0.08,
+      "png": "cga-text80x200-fantasy2-before.png"
+    },
+    "after": {
+      "s2": 9.19,
+      "seconds": 1.138,
+      "png": "cga-text80x200-fantasy2-after.png"
+    },
+    "delta": 22.66
+  },
+  {
+    "mode": "cga-text80x200",
+    "image": "fromthe.png",
+    "before": {
+      "s2": -23.7,
+      "seconds": 0.08,
+      "png": "cga-text80x200-fromthe-before.png"
+    },
+    "after": {
+      "s2": 2.42,
+      "seconds": 1.148,
+      "png": "cga-text80x200-fromthe-after.png"
+    },
+    "delta": 26.12
+  },
+  {
+    "mode": "cga-text80x200",
+    "image": "grungy.png",
+    "before": {
+      "s2": -57.56,
+      "seconds": 0.06,
+      "png": "cga-text80x200-grungy-before.png"
+    },
+    "after": {
+      "s2": -26.18,
+      "seconds": 1.117,
+      "png": "cga-text80x200-grungy-after.png"
+    },
+    "delta": 31.38
+  },
+  {
+    "mode": "cga-text80x200",
+    "image": "jungle.webp",
+    "before": {
+      "s2": -31.58,
+      "seconds": 0.052,
+      "png": "cga-text80x200-jungle-before.png"
+    },
+    "after": {
+      "s2": -15.74,
+      "seconds": 1.111,
+      "png": "cga-text80x200-jungle-after.png"
+    },
+    "delta": 15.84
+  },
+  {
+    "mode": "cga-text80x200",
+    "image": "logo.png",
+    "before": {
+      "s2": -1.02,
+      "seconds": 0.049,
+      "png": "cga-text80x200-logo-before.png"
+    },
+    "after": {
+      "s2": 20.33,
+      "seconds": 1.108,
+      "png": "cga-text80x200-logo-after.png"
+    },
+    "delta": 21.35
+  },
+  {
+    "mode": "cga-text80x200",
+    "image": "lovers.jpg",
+    "before": {
+      "s2": -44.1,
+      "seconds": 0.054,
+      "png": "cga-text80x200-lovers-before.png"
+    },
+    "after": {
+      "s2": -19.92,
+      "seconds": 1.112,
+      "png": "cga-text80x200-lovers-after.png"
+    },
+    "delta": 24.18
+  },
+  {
+    "mode": "cga-text80x200",
+    "image": "macaw.jpg",
+    "before": {
+      "s2": -24.36,
+      "seconds": 0.05,
+      "png": "cga-text80x200-macaw-before.png"
+    },
+    "after": {
+      "s2": -1.9,
+      "seconds": 1.116,
+      "png": "cga-text80x200-macaw-after.png"
+    },
+    "delta": 22.46
+  },
+  {
+    "mode": "cga-text80x200",
+    "image": "makena.jpg",
+    "before": {
+      "s2": -13.6,
+      "seconds": 0.074,
+      "png": "cga-text80x200-makena-before.png"
+    },
+    "after": {
+      "s2": 6.54,
+      "seconds": 1.146,
+      "png": "cga-text80x200-makena-after.png"
+    },
+    "delta": 20.14
+  },
+  {
+    "mode": "cga-text80x200",
+    "image": "maui.jpg",
+    "before": {
+      "s2": -13.32,
+      "seconds": 0.064,
+      "png": "cga-text80x200-maui-before.png"
+    },
+    "after": {
+      "s2": 6.07,
+      "seconds": 1.215,
+      "png": "cga-text80x200-maui-after.png"
+    },
+    "delta": 19.39
+  },
+  {
+    "mode": "cga-text80x200",
+    "image": "ocs_4096.png",
+    "before": {
+      "s2": 2.53,
+      "seconds": 0.038,
+      "png": "cga-text80x200-ocs_4096-before.png"
+    },
+    "after": {
+      "s2": 16.05,
+      "seconds": 1.099,
+      "png": "cga-text80x200-ocs_4096-after.png"
+    },
+    "delta": 13.52
+  },
+  {
+    "mode": "cga-text80x200",
+    "image": "photo.jpg",
+    "before": {
+      "s2": -55.15,
+      "seconds": 0.044,
+      "png": "cga-text80x200-photo-before.png"
+    },
+    "after": {
+      "s2": -26.38,
+      "seconds": 1.108,
+      "png": "cga-text80x200-photo-after.png"
+    },
+    "delta": 28.77
+  },
+  {
+    "mode": "cga-text80x200",
+    "image": "ramps.png",
+    "before": {
+      "s2": -63.49,
+      "seconds": 0.037,
+      "png": "cga-text80x200-ramps-before.png"
+    },
+    "after": {
+      "s2": -44.48,
+      "seconds": 1.092,
+      "png": "cga-text80x200-ramps-after.png"
+    },
+    "delta": 19.01
+  },
+  {
+    "mode": "cga-text80x200",
+    "image": "shooter.png",
+    "before": {
+      "s2": -54.86,
+      "seconds": 0.071,
+      "png": "cga-text80x200-shooter-before.png"
+    },
+    "after": {
+      "s2": -26.61,
+      "seconds": 1.142,
+      "png": "cga-text80x200-shooter-after.png"
+    },
+    "delta": 28.25
+  },
+  {
+    "mode": "cga-text80x200",
+    "image": "space3.png",
+    "before": {
+      "s2": -60.53,
+      "seconds": 0.041,
+      "png": "cga-text80x200-space3-before.png"
+    },
+    "after": {
+      "s2": -43.86,
+      "seconds": 1.114,
+      "png": "cga-text80x200-space3-after.png"
+    },
+    "delta": 16.67
+  },
+  {
+    "mode": "cga-text80x100",
+    "image": "3macao.jpg",
+    "before": {
+      "s2": -13.19,
+      "seconds": 0.059,
+      "png": "cga-text80x100-3macao-before.png"
+    },
+    "after": {
+      "s2": -8.56,
+      "seconds": 0.643,
+      "png": "cga-text80x100-3macao-after.png"
+    },
+    "delta": 4.63
+  },
+  {
+    "mode": "cga-text80x100",
+    "image": "asterix.png",
+    "before": {
+      "s2": 0.17,
+      "seconds": 0.091,
+      "png": "cga-text80x100-asterix-before.png"
+    },
+    "after": {
+      "s2": 6.99,
+      "seconds": 0.672,
+      "png": "cga-text80x100-asterix-after.png"
+    },
+    "delta": 6.82
+  },
+  {
+    "mode": "cga-text80x100",
+    "image": "brick.png",
+    "before": {
+      "s2": -23.22,
+      "seconds": 0.05,
+      "png": "cga-text80x100-brick-before.png"
+    },
+    "after": {
+      "s2": -12.73,
+      "seconds": 0.632,
+      "png": "cga-text80x100-brick-after.png"
+    },
+    "delta": 10.49
+  },
+  {
+    "mode": "cga-text80x100",
+    "image": "chuck29.png",
+    "before": {
+      "s2": -37.95,
+      "seconds": 0.077,
+      "png": "cga-text80x100-chuck29-before.png"
+    },
+    "after": {
+      "s2": -37.28,
+      "seconds": 0.653,
+      "png": "cga-text80x100-chuck29-after.png"
+    },
+    "delta": 0.67
+  },
+  {
+    "mode": "cga-text80x100",
+    "image": "chuck30.png",
+    "before": {
+      "s2": -14.48,
+      "seconds": 0.082,
+      "png": "cga-text80x100-chuck30-before.png"
+    },
+    "after": {
+      "s2": -11.62,
+      "seconds": 0.661,
+      "png": "cga-text80x100-chuck30-after.png"
+    },
+    "delta": 2.86
+  },
+  {
+    "mode": "cga-text80x100",
+    "image": "chuck31.png",
+    "before": {
+      "s2": -21.28,
+      "seconds": 0.079,
+      "png": "cga-text80x100-chuck31-before.png"
+    },
+    "after": {
+      "s2": -15.67,
+      "seconds": 0.707,
+      "png": "cga-text80x100-chuck31-after.png"
+    },
+    "delta": 5.61
+  },
+  {
+    "mode": "cga-text80x100",
+    "image": "electrichues02.jpg",
+    "before": {
+      "s2": -58.34,
+      "seconds": 0.074,
+      "png": "cga-text80x100-electrichues02-before.png"
+    },
+    "after": {
+      "s2": -52.05,
+      "seconds": 0.658,
+      "png": "cga-text80x100-electrichues02-after.png"
+    },
+    "delta": 6.29
+  },
+  {
+    "mode": "cga-text80x100",
+    "image": "fantasy.png",
+    "before": {
+      "s2": -13.63,
+      "seconds": 0.088,
+      "png": "cga-text80x100-fantasy-before.png"
+    },
+    "after": {
+      "s2": -5.13,
+      "seconds": 0.664,
+      "png": "cga-text80x100-fantasy-after.png"
+    },
+    "delta": 8.5
+  },
+  {
+    "mode": "cga-text80x100",
+    "image": "fantasy1.png",
+    "before": {
+      "s2": -20.07,
+      "seconds": 0.087,
+      "png": "cga-text80x100-fantasy1-before.png"
+    },
+    "after": {
+      "s2": -11.82,
+      "seconds": 0.875,
+      "png": "cga-text80x100-fantasy1-after.png"
+    },
+    "delta": 8.25
+  },
+  {
+    "mode": "cga-text80x100",
+    "image": "fantasy2.png",
+    "before": {
+      "s2": -15.46,
+      "seconds": 0.102,
+      "png": "cga-text80x100-fantasy2-before.png"
+    },
+    "after": {
+      "s2": -7.25,
+      "seconds": 0.66,
+      "png": "cga-text80x100-fantasy2-after.png"
+    },
+    "delta": 8.21
+  },
+  {
+    "mode": "cga-text80x100",
+    "image": "fromthe.png",
+    "before": {
+      "s2": -19.93,
+      "seconds": 0.083,
+      "png": "cga-text80x100-fromthe-before.png"
+    },
+    "after": {
+      "s2": -10.88,
+      "seconds": 0.658,
+      "png": "cga-text80x100-fromthe-after.png"
+    },
+    "delta": 9.05
+  },
+  {
+    "mode": "cga-text80x100",
+    "image": "grungy.png",
+    "before": {
+      "s2": -43.03,
+      "seconds": 0.066,
+      "png": "cga-text80x100-grungy-before.png"
+    },
+    "after": {
+      "s2": -28.39,
+      "seconds": 0.636,
+      "png": "cga-text80x100-grungy-after.png"
+    },
+    "delta": 14.64
+  },
+  {
+    "mode": "cga-text80x100",
+    "image": "jungle.webp",
+    "before": {
+      "s2": -33.12,
+      "seconds": 0.06,
+      "png": "cga-text80x100-jungle-before.png"
+    },
+    "after": {
+      "s2": -28.17,
+      "seconds": 0.628,
+      "png": "cga-text80x100-jungle-after.png"
+    },
+    "delta": 4.95
+  },
+  {
+    "mode": "cga-text80x100",
+    "image": "logo.png",
+    "before": {
+      "s2": 1.05,
+      "seconds": 0.055,
+      "png": "cga-text80x100-logo-before.png"
+    },
+    "after": {
+      "s2": 7.22,
+      "seconds": 0.626,
+      "png": "cga-text80x100-logo-after.png"
+    },
+    "delta": 6.17
+  },
+  {
+    "mode": "cga-text80x100",
+    "image": "lovers.jpg",
+    "before": {
+      "s2": -40.11,
+      "seconds": 0.061,
+      "png": "cga-text80x100-lovers-before.png"
+    },
+    "after": {
+      "s2": -36.79,
+      "seconds": 0.635,
+      "png": "cga-text80x100-lovers-after.png"
+    },
+    "delta": 3.32
+  },
+  {
+    "mode": "cga-text80x100",
+    "image": "macaw.jpg",
+    "before": {
+      "s2": -18.15,
+      "seconds": 0.056,
+      "png": "cga-text80x100-macaw-before.png"
+    },
+    "after": {
+      "s2": -9.84,
+      "seconds": 0.63,
+      "png": "cga-text80x100-macaw-after.png"
+    },
+    "delta": 8.31
+  },
+  {
+    "mode": "cga-text80x100",
+    "image": "makena.jpg",
+    "before": {
+      "s2": -16.67,
+      "seconds": 0.076,
+      "png": "cga-text80x100-makena-before.png"
+    },
+    "after": {
+      "s2": -6.3,
+      "seconds": 0.661,
+      "png": "cga-text80x100-makena-after.png"
+    },
+    "delta": 10.37
+  },
+  {
+    "mode": "cga-text80x100",
+    "image": "maui.jpg",
+    "before": {
+      "s2": -15.98,
+      "seconds": 0.07,
+      "png": "cga-text80x100-maui-before.png"
+    },
+    "after": {
+      "s2": -8.04,
+      "seconds": 0.669,
+      "png": "cga-text80x100-maui-after.png"
+    },
+    "delta": 7.94
+  },
+  {
+    "mode": "cga-text80x100",
+    "image": "ocs_4096.png",
+    "before": {
+      "s2": 7.03,
+      "seconds": 0.045,
+      "png": "cga-text80x100-ocs_4096-before.png"
+    },
+    "after": {
+      "s2": 10.31,
+      "seconds": 0.618,
+      "png": "cga-text80x100-ocs_4096-after.png"
+    },
+    "delta": 3.28
+  },
+  {
+    "mode": "cga-text80x100",
+    "image": "photo.jpg",
+    "before": {
+      "s2": -48.23,
+      "seconds": 0.047,
+      "png": "cga-text80x100-photo-before.png"
+    },
+    "after": {
+      "s2": -37.89,
+      "seconds": 0.622,
+      "png": "cga-text80x100-photo-after.png"
+    },
+    "delta": 10.34
+  },
+  {
+    "mode": "cga-text80x100",
+    "image": "ramps.png",
+    "before": {
+      "s2": -61.09,
+      "seconds": 0.044,
+      "png": "cga-text80x100-ramps-before.png"
+    },
+    "after": {
+      "s2": -50.37,
+      "seconds": 0.64,
+      "png": "cga-text80x100-ramps-after.png"
+    },
+    "delta": 10.72
+  },
+  {
+    "mode": "cga-text80x100",
+    "image": "shooter.png",
+    "before": {
+      "s2": -28.84,
+      "seconds": 0.083,
+      "png": "cga-text80x100-shooter-before.png"
+    },
+    "after": {
+      "s2": -23.02,
+      "seconds": 0.76,
+      "png": "cga-text80x100-shooter-after.png"
+    },
+    "delta": 5.82
+  },
+  {
+    "mode": "cga-text80x100",
+    "image": "space3.png",
+    "before": {
+      "s2": -57.22,
+      "seconds": 0.094,
+      "png": "cga-text80x100-space3-before.png"
+    },
+    "after": {
+      "s2": -55.48,
+      "seconds": 0.834,
+      "png": "cga-text80x100-space3-after.png"
+    },
+    "delta": 1.74
+  },
+  {
+    "mode": "cga-text80x50",
+    "image": "3macao.jpg",
+    "before": {
+      "s2": -34.49,
+      "seconds": 0.114,
+      "png": "cga-text80x50-3macao-before.png"
+    },
+    "after": {
+      "s2": -34.49,
+      "seconds": 0.314,
+      "png": "cga-text80x50-3macao-after.png"
+    },
+    "delta": 0.0
+  },
+  {
+    "mode": "cga-text80x50",
+    "image": "asterix.png",
+    "before": {
+      "s2": -20.83,
+      "seconds": 0.097,
+      "png": "cga-text80x50-asterix-before.png"
+    },
+    "after": {
+      "s2": -20.83,
+      "seconds": 0.338,
+      "png": "cga-text80x50-asterix-after.png"
+    },
+    "delta": 0.0
+  },
+  {
+    "mode": "cga-text80x50",
+    "image": "brick.png",
+    "before": {
+      "s2": -37.41,
+      "seconds": 0.058,
+      "png": "cga-text80x50-brick-before.png"
+    },
+    "after": {
+      "s2": -36.68,
+      "seconds": 0.299,
+      "png": "cga-text80x50-brick-after.png"
+    },
+    "delta": 0.73
+  },
+  {
+    "mode": "cga-text80x50",
+    "image": "chuck29.png",
+    "before": {
+      "s2": -55.96,
+      "seconds": 0.101,
+      "png": "cga-text80x50-chuck29-before.png"
+    },
+    "after": {
+      "s2": -55.96,
+      "seconds": 0.373,
+      "png": "cga-text80x50-chuck29-after.png"
+    },
+    "delta": 0.0
+  },
+  {
+    "mode": "cga-text80x50",
+    "image": "chuck30.png",
+    "before": {
+      "s2": -38.66,
+      "seconds": 0.108,
+      "png": "cga-text80x50-chuck30-before.png"
+    },
+    "after": {
+      "s2": -38.66,
+      "seconds": 0.425,
+      "png": "cga-text80x50-chuck30-after.png"
+    },
+    "delta": 0.0
+  },
+  {
+    "mode": "cga-text80x50",
+    "image": "chuck31.png",
+    "before": {
+      "s2": -38.16,
+      "seconds": 0.091,
+      "png": "cga-text80x50-chuck31-before.png"
+    },
+    "after": {
+      "s2": -37.34,
+      "seconds": 0.332,
+      "png": "cga-text80x50-chuck31-after.png"
+    },
+    "delta": 0.82
+  },
+  {
+    "mode": "cga-text80x50",
+    "image": "electrichues02.jpg",
+    "before": {
+      "s2": -64.01,
+      "seconds": 0.076,
+      "png": "cga-text80x50-electrichues02-before.png"
+    },
+    "after": {
+      "s2": -63.89,
+      "seconds": 0.316,
+      "png": "cga-text80x50-electrichues02-after.png"
+    },
+    "delta": 0.12
+  },
+  {
+    "mode": "cga-text80x50",
+    "image": "fantasy.png",
+    "before": {
+      "s2": -32.37,
+      "seconds": 0.089,
+      "png": "cga-text80x50-fantasy-before.png"
+    },
+    "after": {
+      "s2": -30.17,
+      "seconds": 0.336,
+      "png": "cga-text80x50-fantasy-after.png"
+    },
+    "delta": 2.2
+  },
+  {
+    "mode": "cga-text80x50",
+    "image": "fantasy1.png",
+    "before": {
+      "s2": -38.38,
+      "seconds": 0.088,
+      "png": "cga-text80x50-fantasy1-before.png"
+    },
+    "after": {
+      "s2": -38.38,
+      "seconds": 0.332,
+      "png": "cga-text80x50-fantasy1-after.png"
+    },
+    "delta": 0.0
+  },
+  {
+    "mode": "cga-text80x50",
+    "image": "fantasy2.png",
+    "before": {
+      "s2": -34.84,
+      "seconds": 0.085,
+      "png": "cga-text80x50-fantasy2-before.png"
+    },
+    "after": {
+      "s2": -33.95,
+      "seconds": 0.329,
+      "png": "cga-text80x50-fantasy2-after.png"
+    },
+    "delta": 0.89
+  },
+  {
+    "mode": "cga-text80x50",
+    "image": "fromthe.png",
+    "before": {
+      "s2": -38.4,
+      "seconds": 0.085,
+      "png": "cga-text80x50-fromthe-before.png"
+    },
+    "after": {
+      "s2": -37.44,
+      "seconds": 0.33,
+      "png": "cga-text80x50-fromthe-after.png"
+    },
+    "delta": 0.96
+  },
+  {
+    "mode": "cga-text80x50",
+    "image": "grungy.png",
+    "before": {
+      "s2": -55.63,
+      "seconds": 0.097,
+      "png": "cga-text80x50-grungy-before.png"
+    },
+    "after": {
+      "s2": -51.69,
+      "seconds": 0.446,
+      "png": "cga-text80x50-grungy-after.png"
+    },
+    "delta": 3.94
+  },
+  {
+    "mode": "cga-text80x50",
+    "image": "jungle.webp",
+    "before": {
+      "s2": -48.16,
+      "seconds": 0.197,
+      "png": "cga-text80x50-jungle-before.png"
+    },
+    "after": {
+      "s2": -48.16,
+      "seconds": 0.392,
+      "png": "cga-text80x50-jungle-after.png"
+    },
+    "delta": 0.0
+  },
+  {
+    "mode": "cga-text80x50",
+    "image": "logo.png",
+    "before": {
+      "s2": -13.07,
+      "seconds": 0.068,
+      "png": "cga-text80x50-logo-before.png"
+    },
+    "after": {
+      "s2": -12.02,
+      "seconds": 0.312,
+      "png": "cga-text80x50-logo-after.png"
+    },
+    "delta": 1.05
+  },
+  {
+    "mode": "cga-text80x50",
+    "image": "lovers.jpg",
+    "before": {
+      "s2": -51.24,
+      "seconds": 0.071,
+      "png": "cga-text80x50-lovers-before.png"
+    },
+    "after": {
+      "s2": -51.24,
+      "seconds": 0.311,
+      "png": "cga-text80x50-lovers-after.png"
+    },
+    "delta": 0.0
+  },
+  {
+    "mode": "cga-text80x50",
+    "image": "macaw.jpg",
+    "before": {
+      "s2": -32.92,
+      "seconds": 0.056,
+      "png": "cga-text80x50-macaw-before.png"
+    },
+    "after": {
+      "s2": -28.09,
+      "seconds": 0.303,
+      "png": "cga-text80x50-macaw-after.png"
+    },
+    "delta": 4.83
+  },
+  {
+    "mode": "cga-text80x50",
+    "image": "makena.jpg",
+    "before": {
+      "s2": -31.29,
+      "seconds": 0.1,
+      "png": "cga-text80x50-makena-before.png"
+    },
+    "after": {
+      "s2": -30.63,
+      "seconds": 0.401,
+      "png": "cga-text80x50-makena-after.png"
+    },
+    "delta": 0.66
+  },
+  {
+    "mode": "cga-text80x50",
+    "image": "maui.jpg",
+    "before": {
+      "s2": -31.46,
+      "seconds": 0.073,
+      "png": "cga-text80x50-maui-before.png"
+    },
+    "after": {
+      "s2": -30.15,
+      "seconds": 0.319,
+      "png": "cga-text80x50-maui-after.png"
+    },
+    "delta": 1.31
+  },
+  {
+    "mode": "cga-text80x50",
+    "image": "ocs_4096.png",
+    "before": {
+      "s2": -0.59,
+      "seconds": 0.044,
+      "png": "cga-text80x50-ocs_4096-before.png"
+    },
+    "after": {
+      "s2": 3.17,
+      "seconds": 0.289,
+      "png": "cga-text80x50-ocs_4096-after.png"
+    },
+    "delta": 3.76
+  },
+  {
+    "mode": "cga-text80x50",
+    "image": "photo.jpg",
+    "before": {
+      "s2": -50.63,
+      "seconds": 0.047,
+      "png": "cga-text80x50-photo-before.png"
+    },
+    "after": {
+      "s2": -50.63,
+      "seconds": 0.293,
+      "png": "cga-text80x50-photo-after.png"
+    },
+    "delta": 0.0
+  },
+  {
+    "mode": "cga-text80x50",
+    "image": "ramps.png",
+    "before": {
+      "s2": -60.18,
+      "seconds": 0.044,
+      "png": "cga-text80x50-ramps-before.png"
+    },
+    "after": {
+      "s2": -60.18,
+      "seconds": 0.291,
+      "png": "cga-text80x50-ramps-after.png"
+    },
+    "delta": 0.0
+  },
+  {
+    "mode": "cga-text80x50",
+    "image": "shooter.png",
+    "before": {
+      "s2": -43.74,
+      "seconds": 0.081,
+      "png": "cga-text80x50-shooter-before.png"
+    },
+    "after": {
+      "s2": -40.68,
+      "seconds": 0.397,
+      "png": "cga-text80x50-shooter-after.png"
+    },
+    "delta": 3.06
+  },
+  {
+    "mode": "cga-text80x50",
+    "image": "space3.png",
+    "before": {
+      "s2": -63.81,
+      "seconds": 0.088,
+      "png": "cga-text80x50-space3-before.png"
+    },
+    "after": {
+      "s2": -63.81,
+      "seconds": 0.383,
+      "png": "cga-text80x50-space3-after.png"
+    },
+    "delta": 0.0
+  },
+  {
+    "mode": "cga-text80x25",
+    "image": "3macao.jpg",
+    "before": {
+      "s2": -54.69,
+      "seconds": 0.098,
+      "png": "cga-text80x25-3macao-before.png"
+    },
+    "after": {
+      "s2": -54.69,
+      "seconds": 0.377,
+      "png": "cga-text80x25-3macao-after.png"
+    },
+    "delta": 0.0
+  },
+  {
+    "mode": "cga-text80x25",
+    "image": "asterix.png",
+    "before": {
+      "s2": -51.95,
+      "seconds": 0.122,
+      "png": "cga-text80x25-asterix-before.png"
+    },
+    "after": {
+      "s2": -51.95,
+      "seconds": 0.383,
+      "png": "cga-text80x25-asterix-after.png"
+    },
+    "delta": 0.0
+  },
+  {
+    "mode": "cga-text80x25",
+    "image": "brick.png",
+    "before": {
+      "s2": -56.52,
+      "seconds": 0.058,
+      "png": "cga-text80x25-brick-before.png"
+    },
+    "after": {
+      "s2": -55.32,
+      "seconds": 0.292,
+      "png": "cga-text80x25-brick-after.png"
+    },
+    "delta": 1.2
+  },
+  {
+    "mode": "cga-text80x25",
+    "image": "chuck29.png",
+    "before": {
+      "s2": -62.33,
+      "seconds": 0.077,
+      "png": "cga-text80x25-chuck29-before.png"
+    },
+    "after": {
+      "s2": -62.33,
+      "seconds": 0.292,
+      "png": "cga-text80x25-chuck29-after.png"
+    },
+    "delta": 0.0
+  },
+  {
+    "mode": "cga-text80x25",
+    "image": "chuck30.png",
+    "before": {
+      "s2": -55.84,
+      "seconds": 0.081,
+      "png": "cga-text80x25-chuck30-before.png"
+    },
+    "after": {
+      "s2": -55.84,
+      "seconds": 0.3,
+      "png": "cga-text80x25-chuck30-after.png"
+    },
+    "delta": 0.0
+  },
+  {
+    "mode": "cga-text80x25",
+    "image": "chuck31.png",
+    "before": {
+      "s2": -51.39,
+      "seconds": 0.077,
+      "png": "cga-text80x25-chuck31-before.png"
+    },
+    "after": {
+      "s2": -51.39,
+      "seconds": 0.291,
+      "png": "cga-text80x25-chuck31-after.png"
+    },
+    "delta": 0.0
+  },
+  {
+    "mode": "cga-text80x25",
+    "image": "electrichues02.jpg",
+    "before": {
+      "s2": -64.26,
+      "seconds": 0.071,
+      "png": "cga-text80x25-electrichues02-before.png"
+    },
+    "after": {
+      "s2": -64.26,
+      "seconds": 0.285,
+      "png": "cga-text80x25-electrichues02-after.png"
+    },
+    "delta": 0.0
+  },
+  {
+    "mode": "cga-text80x25",
+    "image": "fantasy.png",
+    "before": {
+      "s2": -55.25,
+      "seconds": 0.084,
+      "png": "cga-text80x25-fantasy-before.png"
+    },
+    "after": {
+      "s2": -55.25,
+      "seconds": 0.297,
+      "png": "cga-text80x25-fantasy-after.png"
+    },
+    "delta": 0.0
+  },
+  {
+    "mode": "cga-text80x25",
+    "image": "fantasy1.png",
+    "before": {
+      "s2": -58.2,
+      "seconds": 0.083,
+      "png": "cga-text80x25-fantasy1-before.png"
+    },
+    "after": {
+      "s2": -58.2,
+      "seconds": 0.298,
+      "png": "cga-text80x25-fantasy1-after.png"
+    },
+    "delta": 0.0
+  },
+  {
+    "mode": "cga-text80x25",
+    "image": "fantasy2.png",
+    "before": {
+      "s2": -58.07,
+      "seconds": 0.084,
+      "png": "cga-text80x25-fantasy2-before.png"
+    },
+    "after": {
+      "s2": -58.07,
+      "seconds": 0.301,
+      "png": "cga-text80x25-fantasy2-after.png"
+    },
+    "delta": 0.0
+  },
+  {
+    "mode": "cga-text80x25",
+    "image": "fromthe.png",
+    "before": {
+      "s2": -58.11,
+      "seconds": 0.083,
+      "png": "cga-text80x25-fromthe-before.png"
+    },
+    "after": {
+      "s2": -58.11,
+      "seconds": 0.3,
+      "png": "cga-text80x25-fromthe-after.png"
+    },
+    "delta": 0.0
+  },
+  {
+    "mode": "cga-text80x25",
+    "image": "grungy.png",
+    "before": {
+      "s2": -60.45,
+      "seconds": 0.065,
+      "png": "cga-text80x25-grungy-before.png"
+    },
+    "after": {
+      "s2": -60.45,
+      "seconds": 0.285,
+      "png": "cga-text80x25-grungy-after.png"
+    },
+    "delta": 0.0
+  },
+  {
+    "mode": "cga-text80x25",
+    "image": "jungle.webp",
+    "before": {
+      "s2": -63.37,
+      "seconds": 0.057,
+      "png": "cga-text80x25-jungle-before.png"
+    },
+    "after": {
+      "s2": -63.37,
+      "seconds": 0.275,
+      "png": "cga-text80x25-jungle-after.png"
+    },
+    "delta": 0.0
+  },
+  {
+    "mode": "cga-text80x25",
+    "image": "logo.png",
+    "before": {
+      "s2": -31.71,
+      "seconds": 0.057,
+      "png": "cga-text80x25-logo-before.png"
+    },
+    "after": {
+      "s2": -31.71,
+      "seconds": 0.277,
+      "png": "cga-text80x25-logo-after.png"
+    },
+    "delta": 0.0
+  },
+  {
+    "mode": "cga-text80x25",
+    "image": "lovers.jpg",
+    "before": {
+      "s2": -62.52,
+      "seconds": 0.062,
+      "png": "cga-text80x25-lovers-before.png"
+    },
+    "after": {
+      "s2": -62.52,
+      "seconds": 0.278,
+      "png": "cga-text80x25-lovers-after.png"
+    },
+    "delta": 0.0
+  },
+  {
+    "mode": "cga-text80x25",
+    "image": "macaw.jpg",
+    "before": {
+      "s2": -52.51,
+      "seconds": 0.056,
+      "png": "cga-text80x25-macaw-before.png"
+    },
+    "after": {
+      "s2": -52.51,
+      "seconds": 0.283,
+      "png": "cga-text80x25-macaw-after.png"
+    },
+    "delta": 0.0
+  },
+  {
+    "mode": "cga-text80x25",
+    "image": "makena.jpg",
+    "before": {
+      "s2": -53.46,
+      "seconds": 0.091,
+      "png": "cga-text80x25-makena-before.png"
+    },
+    "after": {
+      "s2": -53.46,
+      "seconds": 0.291,
+      "png": "cga-text80x25-makena-after.png"
+    },
+    "delta": 0.0
+  },
+  {
+    "mode": "cga-text80x25",
+    "image": "maui.jpg",
+    "before": {
+      "s2": -54.8,
+      "seconds": 0.069,
+      "png": "cga-text80x25-maui-before.png"
+    },
+    "after": {
+      "s2": -54.8,
+      "seconds": 0.285,
+      "png": "cga-text80x25-maui-after.png"
+    },
+    "delta": 0.0
+  },
+  {
+    "mode": "cga-text80x25",
+    "image": "ocs_4096.png",
+    "before": {
+      "s2": -19.07,
+      "seconds": 0.044,
+      "png": "cga-text80x25-ocs_4096-before.png"
+    },
+    "after": {
+      "s2": -19.07,
+      "seconds": 0.26,
+      "png": "cga-text80x25-ocs_4096-after.png"
+    },
+    "delta": 0.0
+  },
+  {
+    "mode": "cga-text80x25",
+    "image": "photo.jpg",
+    "before": {
+      "s2": -54.59,
+      "seconds": 0.049,
+      "png": "cga-text80x25-photo-before.png"
+    },
+    "after": {
+      "s2": -54.59,
+      "seconds": 0.265,
+      "png": "cga-text80x25-photo-after.png"
+    },
+    "delta": 0.0
+  },
+  {
+    "mode": "cga-text80x25",
+    "image": "ramps.png",
+    "before": {
+      "s2": -63.35,
+      "seconds": 0.045,
+      "png": "cga-text80x25-ramps-before.png"
+    },
+    "after": {
+      "s2": -61.96,
+      "seconds": 0.263,
+      "png": "cga-text80x25-ramps-after.png"
+    },
+    "delta": 1.39
+  },
+  {
+    "mode": "cga-text80x25",
+    "image": "shooter.png",
+    "before": {
+      "s2": -54.18,
+      "seconds": 0.078,
+      "png": "cga-text80x25-shooter-before.png"
+    },
+    "after": {
+      "s2": -54.18,
+      "seconds": 0.295,
+      "png": "cga-text80x25-shooter-after.png"
+    },
+    "delta": 0.0
+  },
+  {
+    "mode": "cga-text80x25",
+    "image": "space3.png",
+    "before": {
+      "s2": -64.23,
+      "seconds": 0.048,
+      "png": "cga-text80x25-space3-before.png"
+    },
+    "after": {
+      "s2": -64.23,
+      "seconds": 0.262,
+      "png": "cga-text80x25-space3-after.png"
+    },
+    "delta": 0.0
+  },
+  {
+    "mode": "cga-text40x200",
+    "image": "3macao.jpg",
+    "before": {
+      "s2": -7.33,
+      "seconds": 0.035,
+      "png": "cga-text40x200-3macao-before.png"
+    },
+    "after": {
+      "s2": 9.5,
+      "seconds": 0.561,
+      "png": "cga-text40x200-3macao-after.png"
+    },
+    "delta": 16.83
+  },
+  {
+    "mode": "cga-text40x200",
+    "image": "asterix.png",
+    "before": {
+      "s2": 2.38,
+      "seconds": 0.065,
+      "png": "cga-text40x200-asterix-before.png"
+    },
+    "after": {
+      "s2": 22.63,
+      "seconds": 0.648,
+      "png": "cga-text40x200-asterix-after.png"
+    },
+    "delta": 20.25
+  },
+  {
+    "mode": "cga-text40x200",
+    "image": "brick.png",
+    "before": {
+      "s2": -25.03,
+      "seconds": 0.029,
+      "png": "cga-text40x200-brick-before.png"
+    },
+    "after": {
+      "s2": 4.11,
+      "seconds": 0.555,
+      "png": "cga-text40x200-brick-after.png"
+    },
+    "delta": 29.14
+  },
+  {
+    "mode": "cga-text40x200",
+    "image": "chuck29.png",
+    "before": {
+      "s2": -33.52,
+      "seconds": 0.055,
+      "png": "cga-text40x200-chuck29-before.png"
+    },
+    "after": {
+      "s2": -22.92,
+      "seconds": 0.576,
+      "png": "cga-text40x200-chuck29-after.png"
+    },
+    "delta": 10.6
+  },
+  {
+    "mode": "cga-text40x200",
+    "image": "chuck30.png",
+    "before": {
+      "s2": -4.66,
+      "seconds": 0.058,
+      "png": "cga-text40x200-chuck30-before.png"
+    },
+    "after": {
+      "s2": 7.19,
+      "seconds": 0.583,
+      "png": "cga-text40x200-chuck30-after.png"
+    },
+    "delta": 11.85
+  },
+  {
+    "mode": "cga-text40x200",
+    "image": "chuck31.png",
+    "before": {
+      "s2": -22.83,
+      "seconds": 0.055,
+      "png": "cga-text40x200-chuck31-before.png"
+    },
+    "after": {
+      "s2": -1.58,
+      "seconds": 0.579,
+      "png": "cga-text40x200-chuck31-after.png"
+    },
+    "delta": 21.25
+  },
+  {
+    "mode": "cga-text40x200",
+    "image": "electrichues02.jpg",
+    "before": {
+      "s2": -63.02,
+      "seconds": 0.051,
+      "png": "cga-text40x200-electrichues02-before.png"
+    },
+    "after": {
+      "s2": -40.67,
+      "seconds": 0.57,
+      "png": "cga-text40x200-electrichues02-after.png"
+    },
+    "delta": 22.35
+  },
+  {
+    "mode": "cga-text40x200",
+    "image": "fantasy.png",
+    "before": {
+      "s2": -19.31,
+      "seconds": 0.06,
+      "png": "cga-text40x200-fantasy-before.png"
+    },
+    "after": {
+      "s2": 10.79,
+      "seconds": 0.583,
+      "png": "cga-text40x200-fantasy-after.png"
+    },
+    "delta": 30.1
+  },
+  {
+    "mode": "cga-text40x200",
+    "image": "fantasy1.png",
+    "before": {
+      "s2": -22.0,
+      "seconds": 0.062,
+      "png": "cga-text40x200-fantasy1-before.png"
+    },
+    "after": {
+      "s2": 6.62,
+      "seconds": 0.588,
+      "png": "cga-text40x200-fantasy1-after.png"
+    },
+    "delta": 28.62
+  },
+  {
+    "mode": "cga-text40x200",
+    "image": "fantasy2.png",
+    "before": {
+      "s2": -17.62,
+      "seconds": 0.062,
+      "png": "cga-text40x200-fantasy2-before.png"
+    },
+    "after": {
+      "s2": 8.78,
+      "seconds": 0.604,
+      "png": "cga-text40x200-fantasy2-after.png"
+    },
+    "delta": 26.4
+  },
+  {
+    "mode": "cga-text40x200",
+    "image": "fromthe.png",
+    "before": {
+      "s2": -19.44,
+      "seconds": 0.068,
+      "png": "cga-text40x200-fromthe-before.png"
+    },
+    "after": {
+      "s2": 6.73,
+      "seconds": 0.666,
+      "png": "cga-text40x200-fromthe-after.png"
+    },
+    "delta": 26.17
+  },
+  {
+    "mode": "cga-text40x200",
+    "image": "grungy.png",
+    "before": {
+      "s2": -55.42,
+      "seconds": 0.046,
+      "png": "cga-text40x200-grungy-before.png"
+    },
+    "after": {
+      "s2": -17.54,
+      "seconds": 0.579,
+      "png": "cga-text40x200-grungy-after.png"
+    },
+    "delta": 37.88
+  },
+  {
+    "mode": "cga-text40x200",
+    "image": "jungle.webp",
+    "before": {
+      "s2": -33.19,
+      "seconds": 0.039,
+      "png": "cga-text40x200-jungle-before.png"
+    },
+    "after": {
+      "s2": -14.04,
+      "seconds": 0.563,
+      "png": "cga-text40x200-jungle-after.png"
+    },
+    "delta": 19.15
+  },
+  {
+    "mode": "cga-text40x200",
+    "image": "logo.png",
+    "before": {
+      "s2": -1.61,
+      "seconds": 0.038,
+      "png": "cga-text40x200-logo-before.png"
+    },
+    "after": {
+      "s2": 21.0,
+      "seconds": 0.564,
+      "png": "cga-text40x200-logo-after.png"
+    },
+    "delta": 22.61
+  },
+  {
+    "mode": "cga-text40x200",
+    "image": "lovers.jpg",
+    "before": {
+      "s2": -43.65,
+      "seconds": 0.041,
+      "png": "cga-text40x200-lovers-before.png"
+    },
+    "after": {
+      "s2": -15.13,
+      "seconds": 0.567,
+      "png": "cga-text40x200-lovers-after.png"
+    },
+    "delta": 28.52
+  },
+  {
+    "mode": "cga-text40x200",
+    "image": "macaw.jpg",
+    "before": {
+      "s2": -21.21,
+      "seconds": 0.035,
+      "png": "cga-text40x200-macaw-before.png"
+    },
+    "after": {
+      "s2": -0.72,
+      "seconds": 0.571,
+      "png": "cga-text40x200-macaw-after.png"
+    },
+    "delta": 20.49
+  },
+  {
+    "mode": "cga-text40x200",
+    "image": "makena.jpg",
+    "before": {
+      "s2": -17.7,
+      "seconds": 0.054,
+      "png": "cga-text40x200-makena-before.png"
+    },
+    "after": {
+      "s2": 5.17,
+      "seconds": 0.592,
+      "png": "cga-text40x200-makena-after.png"
+    },
+    "delta": 22.87
+  },
+  {
+    "mode": "cga-text40x200",
+    "image": "maui.jpg",
+    "before": {
+      "s2": -16.08,
+      "seconds": 0.048,
+      "png": "cga-text40x200-maui-before.png"
+    },
+    "after": {
+      "s2": 5.63,
+      "seconds": 0.578,
+      "png": "cga-text40x200-maui-after.png"
+    },
+    "delta": 21.71
+  },
+  {
+    "mode": "cga-text40x200",
+    "image": "ocs_4096.png",
+    "before": {
+      "s2": 6.52,
+      "seconds": 0.024,
+      "png": "cga-text40x200-ocs_4096-before.png"
+    },
+    "after": {
+      "s2": 12.95,
+      "seconds": 0.55,
+      "png": "cga-text40x200-ocs_4096-after.png"
+    },
+    "delta": 6.43
+  },
+  {
+    "mode": "cga-text40x200",
+    "image": "photo.jpg",
+    "before": {
+      "s2": -53.24,
+      "seconds": 0.029,
+      "png": "cga-text40x200-photo-before.png"
+    },
+    "after": {
+      "s2": -22.69,
+      "seconds": 0.559,
+      "png": "cga-text40x200-photo-after.png"
+    },
+    "delta": 30.55
+  },
+  {
+    "mode": "cga-text40x200",
+    "image": "ramps.png",
+    "before": {
+      "s2": -51.45,
+      "seconds": 0.023,
+      "png": "cga-text40x200-ramps-before.png"
+    },
+    "after": {
+      "s2": -31.5,
+      "seconds": 0.549,
+      "png": "cga-text40x200-ramps-after.png"
+    },
+    "delta": 19.95
+  },
+  {
+    "mode": "cga-text40x200",
+    "image": "shooter.png",
+    "before": {
+      "s2": -53.67,
+      "seconds": 0.057,
+      "png": "cga-text40x200-shooter-before.png"
+    },
+    "after": {
+      "s2": -22.04,
+      "seconds": 0.586,
+      "png": "cga-text40x200-shooter-after.png"
+    },
+    "delta": 31.63
+  },
+  {
+    "mode": "cga-text40x200",
+    "image": "space3.png",
+    "before": {
+      "s2": -59.4,
+      "seconds": 0.025,
+      "png": "cga-text40x200-space3-before.png"
+    },
+    "after": {
+      "s2": -36.29,
+      "seconds": 0.552,
+      "png": "cga-text40x200-space3-after.png"
+    },
+    "delta": 23.11
+  },
+  {
+    "mode": "cga-text40x100",
+    "image": "3macao.jpg",
+    "before": {
+      "s2": -12.53,
+      "seconds": 0.038,
+      "png": "cga-text40x100-3macao-before.png"
+    },
+    "after": {
+      "s2": -7.98,
+      "seconds": 0.323,
+      "png": "cga-text40x100-3macao-after.png"
+    },
+    "delta": 4.55
+  },
+  {
+    "mode": "cga-text40x100",
+    "image": "asterix.png",
+    "before": {
+      "s2": -4.31,
+      "seconds": 0.068,
+      "png": "cga-text40x100-asterix-before.png"
+    },
+    "after": {
+      "s2": 1.29,
+      "seconds": 0.368,
+      "png": "cga-text40x100-asterix-after.png"
+    },
+    "delta": 5.6
+  },
+  {
+    "mode": "cga-text40x100",
+    "image": "brick.png",
+    "before": {
+      "s2": -21.09,
+      "seconds": 0.035,
+      "png": "cga-text40x100-brick-before.png"
+    },
+    "after": {
+      "s2": -9.42,
+      "seconds": 0.322,
+      "png": "cga-text40x100-brick-after.png"
+    },
+    "delta": 11.67
+  },
+  {
+    "mode": "cga-text40x100",
+    "image": "chuck29.png",
+    "before": {
+      "s2": -37.97,
+      "seconds": 0.061,
+      "png": "cga-text40x100-chuck29-before.png"
+    },
+    "after": {
+      "s2": -36.72,
+      "seconds": 0.351,
+      "png": "cga-text40x100-chuck29-after.png"
+    },
+    "delta": 1.25
+  },
+  {
+    "mode": "cga-text40x100",
+    "image": "chuck30.png",
+    "before": {
+      "s2": -13.82,
+      "seconds": 0.066,
+      "png": "cga-text40x100-chuck30-before.png"
+    },
+    "after": {
+      "s2": -11.54,
+      "seconds": 0.353,
+      "png": "cga-text40x100-chuck30-after.png"
+    },
+    "delta": 2.28
+  },
+  {
+    "mode": "cga-text40x100",
+    "image": "chuck31.png",
+    "before": {
+      "s2": -14.56,
+      "seconds": 0.062,
+      "png": "cga-text40x100-chuck31-before.png"
+    },
+    "after": {
+      "s2": -11.49,
+      "seconds": 0.348,
+      "png": "cga-text40x100-chuck31-after.png"
+    },
+    "delta": 3.07
+  },
+  {
+    "mode": "cga-text40x100",
+    "image": "electrichues02.jpg",
+    "before": {
+      "s2": -57.49,
+      "seconds": 0.055,
+      "png": "cga-text40x100-electrichues02-before.png"
+    },
+    "after": {
+      "s2": -51.18,
+      "seconds": 0.347,
+      "png": "cga-text40x100-electrichues02-after.png"
+    },
+    "delta": 6.31
+  },
+  {
+    "mode": "cga-text40x100",
+    "image": "fantasy.png",
+    "before": {
+      "s2": -18.67,
+      "seconds": 0.067,
+      "png": "cga-text40x100-fantasy-before.png"
+    },
+    "after": {
+      "s2": -9.29,
+      "seconds": 0.351,
+      "png": "cga-text40x100-fantasy-after.png"
+    },
+    "delta": 9.38
+  },
+  {
+    "mode": "cga-text40x100",
+    "image": "fantasy1.png",
+    "before": {
+      "s2": -23.58,
+      "seconds": 0.067,
+      "png": "cga-text40x100-fantasy1-before.png"
+    },
+    "after": {
+      "s2": -13.4,
+      "seconds": 0.35,
+      "png": "cga-text40x100-fantasy1-after.png"
+    },
+    "delta": 10.18
+  },
+  {
+    "mode": "cga-text40x100",
+    "image": "fantasy2.png",
+    "before": {
+      "s2": -21.04,
+      "seconds": 0.065,
+      "png": "cga-text40x100-fantasy2-before.png"
+    },
+    "after": {
+      "s2": -10.39,
+      "seconds": 0.361,
+      "png": "cga-text40x100-fantasy2-after.png"
+    },
+    "delta": 10.65
+  },
+  {
+    "mode": "cga-text40x100",
+    "image": "fromthe.png",
+    "before": {
+      "s2": -16.41,
+      "seconds": 0.067,
+      "png": "cga-text40x100-fromthe-before.png"
+    },
+    "after": {
+      "s2": -9.41,
+      "seconds": 0.35,
+      "png": "cga-text40x100-fromthe-after.png"
+    },
+    "delta": 7.0
+  },
+  {
+    "mode": "cga-text40x100",
+    "image": "grungy.png",
+    "before": {
+      "s2": -39.42,
+      "seconds": 0.048,
+      "png": "cga-text40x100-grungy-before.png"
+    },
+    "after": {
+      "s2": -22.01,
+      "seconds": 0.333,
+      "png": "cga-text40x100-grungy-after.png"
+    },
+    "delta": 17.41
+  },
+  {
+    "mode": "cga-text40x100",
+    "image": "jungle.webp",
+    "before": {
+      "s2": -35.45,
+      "seconds": 0.041,
+      "png": "cga-text40x100-jungle-before.png"
+    },
+    "after": {
+      "s2": -28.88,
+      "seconds": 0.33,
+      "png": "cga-text40x100-jungle-after.png"
+    },
+    "delta": 6.57
+  },
+  {
+    "mode": "cga-text40x100",
+    "image": "logo.png",
+    "before": {
+      "s2": -2.11,
+      "seconds": 0.04,
+      "png": "cga-text40x100-logo-before.png"
+    },
+    "after": {
+      "s2": 5.8,
+      "seconds": 0.325,
+      "png": "cga-text40x100-logo-after.png"
+    },
+    "delta": 7.91
+  },
+  {
+    "mode": "cga-text40x100",
+    "image": "lovers.jpg",
+    "before": {
+      "s2": -39.94,
+      "seconds": 0.046,
+      "png": "cga-text40x100-lovers-before.png"
+    },
+    "after": {
+      "s2": -32.73,
+      "seconds": 0.328,
+      "png": "cga-text40x100-lovers-after.png"
+    },
+    "delta": 7.21
+  },
+  {
+    "mode": "cga-text40x100",
+    "image": "macaw.jpg",
+    "before": {
+      "s2": -19.27,
+      "seconds": 0.036,
+      "png": "cga-text40x100-macaw-before.png"
+    },
+    "after": {
+      "s2": -10.87,
+      "seconds": 0.327,
+      "png": "cga-text40x100-macaw-after.png"
+    },
+    "delta": 8.4
+  },
+  {
+    "mode": "cga-text40x100",
+    "image": "makena.jpg",
+    "before": {
+      "s2": -18.39,
+      "seconds": 0.063,
+      "png": "cga-text40x100-makena-before.png"
+    },
+    "after": {
+      "s2": -7.48,
+      "seconds": 0.359,
+      "png": "cga-text40x100-makena-after.png"
+    },
+    "delta": 10.91
+  },
+  {
+    "mode": "cga-text40x100",
+    "image": "maui.jpg",
+    "before": {
+      "s2": -15.99,
+      "seconds": 0.054,
+      "png": "cga-text40x100-maui-before.png"
+    },
+    "after": {
+      "s2": -7.91,
+      "seconds": 0.341,
+      "png": "cga-text40x100-maui-after.png"
+    },
+    "delta": 8.08
+  },
+  {
+    "mode": "cga-text40x100",
+    "image": "ocs_4096.png",
+    "before": {
+      "s2": 11.27,
+      "seconds": 0.029,
+      "png": "cga-text40x100-ocs_4096-before.png"
+    },
+    "after": {
+      "s2": 11.27,
+      "seconds": 0.314,
+      "png": "cga-text40x100-ocs_4096-after.png"
+    },
+    "delta": 0.0
+  },
+  {
+    "mode": "cga-text40x100",
+    "image": "photo.jpg",
+    "before": {
+      "s2": -45.8,
+      "seconds": 0.031,
+      "png": "cga-text40x100-photo-before.png"
+    },
+    "after": {
+      "s2": -32.31,
+      "seconds": 0.316,
+      "png": "cga-text40x100-photo-after.png"
+    },
+    "delta": 13.49
+  },
+  {
+    "mode": "cga-text40x100",
+    "image": "ramps.png",
+    "before": {
+      "s2": -51.27,
+      "seconds": 0.025,
+      "png": "cga-text40x100-ramps-before.png"
+    },
+    "after": {
+      "s2": -43.64,
+      "seconds": 0.321,
+      "png": "cga-text40x100-ramps-after.png"
+    },
+    "delta": 7.63
+  },
+  {
+    "mode": "cga-text40x100",
+    "image": "shooter.png",
+    "before": {
+      "s2": -26.5,
+      "seconds": 0.063,
+      "png": "cga-text40x100-shooter-before.png"
+    },
+    "after": {
+      "s2": -20.61,
+      "seconds": 0.619,
+      "png": "cga-text40x100-shooter-after.png"
+    },
+    "delta": 5.89
+  },
+  {
+    "mode": "cga-text40x100",
+    "image": "space3.png",
+    "before": {
+      "s2": -55.62,
+      "seconds": 0.035,
+      "png": "cga-text40x100-space3-before.png"
+    },
+    "after": {
+      "s2": -52.65,
+      "seconds": 0.479,
+      "png": "cga-text40x100-space3-after.png"
+    },
+    "delta": 2.97
+  }
+]

@@ -1,4 +1,6 @@
 #include "c64.hpp"
+#include "cell_graph_refine.hpp"
+#include "cell_refine.hpp"
 
 #include "palette.hpp"
 #include "petscii_rom.hpp"
@@ -126,12 +128,12 @@ constexpr std::size_t kCellH = 8;
 constexpr std::size_t kCols = 40;  // 160 / 4
 constexpr std::size_t kRows = 25;  // 200 / 8
 
-// FLI / AFLI hardware bug: the leftmost 3 character columns always
-// display the global $D021 background color (on real VIC-II the
-// per-row screen-pointer reload happens too late to read valid data
-// for cells 0..2). The encoder emits whatever bytes it wants there;
-// we overpaint the preview so the PNG matches what hardware shows.
+// The bundled FLI/AFLI displayers leave the first three character columns
+// in the VIC-II late-badline region and set the idle byte ($7fff) to $ff.
+// They show color 15 here, not $d021; there are no covering sprites.
+// Verified against their PAL VIC-II output in VICE x64sc.
 constexpr std::size_t kFliBugCols = 3;
+constexpr std::uint8_t kFliBugColor = 15;
 
 // 3×3 binomial blur kernel — same as cga_text / petscii. sRGB
 // (gamma-encoded) space matches what the CRT emits.
@@ -445,20 +447,16 @@ Result<EncodeResult> encode_multicolor(const Image& image,
         return std::span<const CellTaps<kCellW, kCellH>::T, 9>(taps_mc.taps[p]);
     };
 
-    // Per-cell trial: enumerate all 16 backgrounds × C(15,3) = 6825
-    // quads. The brute force scores each quad under the chosen
-    // metric; per-cell bg.
+    // Per-cell trial: hold the shared background fixed and choose
+    // three local colors from the remaining 15 entries.
 
     EncodeResult res;
     res.rendered = Image(W, H);
     res.bitmap.assign(kRows * kCols * kCellH, 0);  // 8000 bytes
     res.screen_ram.assign(kRows * kCols, 0);       // upper-nibble = c1, lower = c2
     res.color_ram.assign(kRows * kCols, 0);        // c3 (low nibble)
-    res.bg_color = 0;  // black; per-cell bg is encoded in the cell colors
-                       // even though the C64 hardware uses one shared bg
-                       // register. We pick bg=0 globally and let cells use
-                       // the bg "slot" for their own dark-cluster color.
-                       // (Real per-image bg sweep is a TODO refinement.)
+    // Code 00 always reads the single shared VIC-II background register.
+    res.bg_color = 0;
 
     // Pass 1: per-cell quad pick. Two paths:
     //
@@ -487,8 +485,9 @@ Result<EncodeResult> encode_multicolor(const Image& image,
                 for (std::size_t py = 0; py < kCellH; ++py)
                     for (std::size_t px = 0; px < kCellW; ++px)
                         ++hist[fs[(cy * kCellH + py) * W + (cx * kCellW + px)]];
-                std::array<std::uint8_t, 4> top{0, 0, 0, 0};
-                for (std::size_t s = 0; s < 4; ++s) {
+                std::array<std::uint8_t, 4> top{res.bg_color, 0, 0, 0};
+                hist[res.bg_color] = 0;
+                for (std::size_t s = 1; s < 4; ++s) {
                     std::uint16_t best_cnt = 0;
                     std::uint8_t best_c = 0;
                     for (std::size_t c = 0; c < 16; ++c) {
@@ -532,7 +531,8 @@ Result<EncodeResult> encode_multicolor(const Image& image,
                 }
                 float best_err = std::numeric_limits<float>::infinity();
                 std::array<std::uint8_t, 4> best_quad{0, 0, 0, 0};
-                for (std::uint8_t bg = 0; bg < 16; ++bg) {
+                {
+                    const std::uint8_t bg = res.bg_color;
                     for (std::uint8_t i = 0; i < 16; ++i) {
                         if (i == bg) continue;
                         for (std::uint8_t j = static_cast<std::uint8_t>(i + 1); j < 16; ++j) {
@@ -1160,7 +1160,15 @@ Result<EncodeResult> encode_fli(const Image& image,
                     auto y = cy * kCellH + py;
                     auto q = static_cast<std::uint8_t>(indices[y * W + x] & 0x3);
                     row_byte = static_cast<std::uint8_t>((row_byte << 2) | q);
-                    res.rendered[x, y] = (cx < kFliBugCols) ? pal_lin[bg] : pal_lin[quad[q]];
+                    res.rendered[x, y] = (cx < kFliBugCols) ? pal_lin[kFliBugColor]
+                                                            : pal_lin[quad[q]];
+                }
+                if (cx < kFliBugCols) {
+                    // The first displayed row precedes the late-badline region.
+                    // Make it gray too, instead of leaking otherwise hidden data.
+                    row_byte = 0x55;
+                    res.screen_ram[py * kRows * kCols + cell_idx] = 0xff;
+                    res.color_ram[cell_idx] = kFliBugColor;
                 }
                 res.bitmap[cell_idx * kCellH + py] = row_byte;
             }
@@ -1371,8 +1379,12 @@ Result<EncodeResult> encode_afli(const Image& image,
                     auto y = cy * kHiCellH + py;
                     auto q = static_cast<std::uint8_t>(indices[y * W + x] & 0x1);
                     row_byte = static_cast<std::uint8_t>((row_byte << 1) | q);
-                    res.rendered[x, y] = (cx < kFliBugCols) ? pal_lin[res.bg_color & 0xF]
+                    res.rendered[x, y] = (cx < kFliBugCols) ? pal_lin[kFliBugColor]
                                                             : pal_lin[pair[q]];
+                }
+                if (cx < kFliBugCols) {
+                    row_byte = 0xff;
+                    res.screen_ram[py * kHiRows * kHiCols + cell_idx] = 0xff;
                 }
                 res.bitmap[cell_idx * kHiCellH + py] = row_byte;
             }
@@ -2747,6 +2759,163 @@ Result<std::string> charset_header(const EncodeResult& enc,
     }
     out += "\n};\n";
     return out;
+}
+
+void refine_cells(const Image& image,
+                  EncodeResult& enc,
+                  amiga::Mode mode,
+                  Palette pal,
+                  bool graphics_only,
+                  const dither::Settings& settings) {
+    const bool ordered = !dither::uses_error_diffusion(settings.method) &&
+                         mode != amiga::Mode::c64_petscii;
+    if (mode == amiga::Mode::c64_afli && !ordered) {
+        auto pal_colors = palette_colors(pal);
+        std::vector<cell_refine::Pattern> patterns;
+        for (std::uint64_t bits = 0; bits < 128; ++bits)
+            patterns.push_back({bits, 0});
+        std::vector<cell_refine::Cell> cells;
+        for (std::size_t y = 0; y < 200; ++y)
+            for (std::size_t x = 0; x < 40; ++x) {
+                auto c = (y / 8) * 40 + x;
+                auto attr = enc.screen_ram[(y % 8) * 1000 + c];
+                auto row = enc.bitmap[c * 8 + y % 8];
+                std::uint64_t mask = 0;
+                for (std::size_t bit = 0; bit < 8; ++bit)
+                    if (row & (0x80u >> bit)) mask |= std::uint64_t{1} << bit;
+                cells.push_back(x < kFliBugCols
+                                    ? cell_refine::Cell{0, kFliBugColor, kFliBugColor, 0}
+                                    : cell_refine::Cell{mask,
+                                                        static_cast<std::uint8_t>(attr >> 4),
+                                                        static_cast<std::uint8_t>(attr & 15),
+                                                        0});
+            }
+        cell_refine::refine(image, pal_colors, 1, patterns, cells, kFliBugCols);
+        for (std::size_t y = 0; y < 200; ++y)
+            for (std::size_t x = kFliBugCols; x < 40; ++x) {
+                auto c = (y / 8) * 40 + x;
+                const auto& v = cells[y * 40 + x];
+                enc.screen_ram[(y % 8) * 1000 + c] = static_cast<std::uint8_t>((v.fg << 4) | v.bg);
+                std::uint8_t bits = 0;
+                for (std::size_t bit = 0; bit < 8; ++bit) {
+                    bool fg = (v.mask & (std::uint64_t{1} << bit)) != 0;
+                    bits = static_cast<std::uint8_t>((bits << 1) | (fg ? 1 : 0));
+                    enc.rendered[x * 8 + bit, y] = pal_colors[fg ? v.fg : v.bg];
+                }
+                enc.bitmap[c * 8 + y % 8] = bits;
+            }
+        return;
+    }
+    using cell_graph_refine::Model;
+    const bool mc = amiga::is_c64_multicolor(mode);
+    const bool charset = amiga::is_c64_charset(mode);
+    const bool pets = mode == amiga::Mode::c64_petscii;
+    const bool text = charset || pets;
+    const bool sliced = mode == amiga::Mode::c64_afli || mode == amiga::Mode::c64_fli;
+    const std::size_t cw = mc ? 4 : 8, W = image.width(), H = image.height(), cols = W / cw,
+                      n = cols * (H / 8);
+    Model m;
+    auto colors = palette_colors(pal);
+    m.palette.assign(colors.begin(), colors.end());
+    m.choices = mc ? 4 : 2;
+    const auto edge = m.add(kFliBugColor, 1);
+    auto bg = m.add(enc.bg_color, mode == amiga::Mode::c64_afli ? 1 : 16);
+    auto mc1 = m.add(enc.mc1, charset && mc ? 16 : 1), mc2 = m.add(enc.mc2, charset && mc ? 16 : 1);
+    std::vector<std::size_t> hi(n * (sliced ? 8 : 1)), lo(hi.size()), fg(n);
+    for (std::size_t c = 0; c < n; ++c) {
+        if (text)
+            fg[c] = m.add(static_cast<std::uint8_t>(enc.color_ram[c] & (mc ? 7 : 15)), mc ? 8 : 16);
+        else {
+            if (mc) fg[c] = m.add(static_cast<std::uint8_t>(enc.color_ram[c] & 15), 16);
+            for (std::size_t y = 0; y < (sliced ? 8u : 1u); ++y) {
+                auto i = y * n + c;
+                auto a = enc.screen_ram[i];
+                hi[i] = m.add(a >> 4, 16);
+                lo[i] = m.add(a & 15, 16);
+            }
+        }
+    }
+    m.slots.resize(W * H);
+    m.labels.resize(W * H);
+    if (charset) m.groups.resize(enc.unique_glyphs * 8 * cw);
+    if (pets) {
+        m.patterns.resize(256);
+        m.pattern_allowed.resize(256, true);
+        for (std::size_t g = 0; g < 256; ++g) {
+            m.pattern_allowed[g] = !graphics_only ||
+                                   petscii::is_graphic_char(static_cast<std::uint8_t>(g));
+            for (std::size_t y = 0; y < 8; ++y)
+                for (std::size_t x = 0; x < 8; ++x)
+                    m.patterns[g].push_back(static_cast<std::uint8_t>(
+                        (petscii::character_rom[g * 8 + y] >> (7 - x)) & 1));
+        }
+        m.pattern_cells.resize(n);
+        m.pattern_ids.assign(enc.screen_ram.begin(), enc.screen_ram.end());
+    }
+    for (std::size_t c = 0; c < n; ++c)
+        for (std::size_t y = 0; y < 8; ++y) {
+            auto row =
+                pets ? petscii::character_rom[static_cast<std::size_t>(enc.screen_ram[c]) * 8 + y]
+                     : enc.bitmap[(charset ? static_cast<std::size_t>(enc.screen_ram[c]) : c) * 8 +
+                                  y];
+            auto i = (sliced ? y * n : 0) + c;
+            std::array<std::size_t, 4> slots{};
+            if (text)
+                slots = mc ? std::array<std::size_t, 4>{bg, mc1, mc2, fg[c]}
+                           : std::array<std::size_t, 4>{bg, fg[c], bg, bg};
+            else
+                slots = mc ? std::array<std::size_t, 4>{bg, hi[i], lo[i], fg[c]}
+                           : std::array<std::size_t, 4>{lo[i], hi[i], bg, bg};
+            for (std::size_t x = 0; x < cw; ++x) {
+                auto p = ((c / cols) * 8 + y) * W + (c % cols) * cw + x;
+                auto q = static_cast<std::uint8_t>((row >> ((cw - 1 - x) * (mc ? 2 : 1))) &
+                                                   (mc ? 3 : 1));
+                if (sliced && c % cols < kFliBugCols) {
+                    m.slots[p] = {edge, edge, edge, edge};
+                    m.labels[p] = 1;
+                } else {
+                    m.slots[p] = slots;
+                    m.labels[p] = q;
+                }
+                if (charset)
+                    m.groups[static_cast<std::size_t>(enc.screen_ram[c]) * 8 * cw + y * cw + x]
+                        .push_back(p);
+                else if (pets)
+                    m.pattern_cells[c].push_back(p);
+                else if (!(sliced && c % cols < kFliBugCols))
+                    m.groups.push_back({p});
+            }
+        }
+    if (!cell_graph_refine::refine(image, m, enc.rendered, ordered ? &settings : nullptr, charset))
+        return;
+    enc.bg_color = m.values[bg];
+    if (charset && mc) {
+        enc.mc1 = m.values[mc1];
+        enc.mc2 = m.values[mc2];
+    }
+    for (std::size_t c = 0; c < n; ++c) {
+        if (text)
+            enc.color_ram[c] = static_cast<std::uint8_t>(m.values[fg[c]] | (mc ? 8 : 0));
+        else if (mc)
+            enc.color_ram[c] = m.values[fg[c]];
+        if (pets) {
+            enc.screen_ram[c] = static_cast<std::uint8_t>(m.pattern_ids[c]);
+            continue;
+        }
+        for (std::size_t y = 0; y < 8; ++y) {
+            if (!text) {
+                auto i = (sliced ? y * n : 0) + c;
+                enc.screen_ram[i] = static_cast<std::uint8_t>((m.values[hi[i]] << 4) |
+                                                              m.values[lo[i]]);
+            }
+            std::uint8_t row = 0;
+            for (std::size_t x = 0; x < cw; ++x) {
+                auto p = ((c / cols) * 8 + y) * W + (c % cols) * cw + x;
+                row = static_cast<std::uint8_t>((row << (mc ? 2 : 1)) | m.labels[p]);
+            }
+            enc.bitmap[(charset ? static_cast<std::size_t>(enc.screen_ram[c]) : c) * 8 + y] = row;
+        }
+    }
 }
 
 }  // namespace png2amiga::c64

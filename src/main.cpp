@@ -957,6 +957,7 @@ struct Config {
     float error_clamp = 0.35f;
     std::string cga_text_metric = "blur";
     std::string cga_text_kernel = "auto";
+    bool cell_refine = false;
     // cga-composite: pick chroma-burst phase. False = 1981 IBM 5150, true = 1983+.
     bool cga_composite_new_cga = false;
 
@@ -1283,6 +1284,7 @@ void print_usage() {
         "  --tile-reserve <N>              Reserve N tile slots from the budget\n"
         "  --cga-palette <p>               p0-low | p0-high | p1-low | p1-high\n"
         "  --cga-bg <0..15>                CGA background color\n"
+        "  --cell-refine                  Refine supported cell modes across boundaries (slower)\n"
         "  --cga-text-metric <m>           blur (default) | mse\n"
         "  --cga-text-kernel <k>           Blur kernel: auto | binomial | aniso53 |\n"
         "                                  aniso73 | aniso35 | aniso37 | wide55 | wide77\n"
@@ -1802,6 +1804,10 @@ Result<Config> parse_args(int argc, char* argv[]) {
                 return std::unexpected{
                     Error{ErrorCode::unsupported_mode, std::format("Unknown CGA palette: {}", v)}};
             config.cga_auto_palette = false;
+            continue;
+        }
+        if (arg == "--cell-refine") {
+            config.cell_refine = true;
             continue;
         }
         if (arg == "--cga-bg" && i + 1 < argc) {
@@ -2413,6 +2419,15 @@ Result<Config> parse_args(int argc, char* argv[]) {
     // No auto-promotion — the user must opt into one of the supported
     // strips regimes explicitly. The CLI block below errors out otherwise.
 
+    if (config.cell_refine &&
+        (!amiga::is_thomson_formecouleur(config.mode) && !amiga::is_c64(config.mode) &&
+         !amiga::is_ted(config.mode) &&
+         !(amiga::is_cga_text(config.mode) && config.cga_text_metric == "blur"))) {
+        return std::unexpected{Error{ErrorCode::unsupported_mode,
+                                     "--cell-refine requires Thomson attribute, C64, TED, or CGA "
+                                     "text with the blur metric"}};
+    }
+
     return config;
 }
 
@@ -3000,6 +3015,7 @@ api::Options make_api_options(const Config& cfg) {
     opts.native_par = cfg.native_par;
     opts.cga_text_metric = cfg.cga_text_metric;
     opts.cga_text_kernel = cfg.cga_text_kernel;
+    opts.cell_refine = cfg.cell_refine;
     opts.cga_composite_new_cga = cfg.cga_composite_new_cga;
     opts.c64_palette = cfg.c64_palette;
     opts.c64_metric = cfg.c64_metric;
@@ -8280,6 +8296,10 @@ int run_main(int argc, char* argv[]) {
         // shifts cell content by sub-pixel amounts that the cell-mean
         // metric absorbs; measured 0.16% error reduction at 30s cost.
         // Skip the sweep for this mode and use the single-pass encode.
+        if (config->cell_refine && cga_metric != cga_text::Metric::blur) {
+            std::println(stderr, "--cell-refine requires the CGA text blur metric");
+            return 1;
+        }
         auto cga_kernel = cga_text::parse_kernel(config->cga_text_kernel);
         auto res = cga_text::encode(dithered,
                                     config->mode,
@@ -8288,7 +8308,8 @@ int run_main(int argc, char* argv[]) {
                                     fixed_offset,
                                     cga_metric,
                                     cga_kernel,
-                                    make_cli_progress_reporter());
+                                    make_cli_progress_reporter(),
+                                    config->cell_refine);
         if (!res) {
             std::println(stderr, "CGA text encode error: {}", res.error().message);
             return 1;

@@ -286,6 +286,52 @@ gamma LUT (`intens[16]`, a non-uniform ramp — NOT nibble replication).
 | `thomson-to8-320x4` | 320×200 | 4 prog. | 2-bitplane bitmap |
 | `thomson-to8-640x2` | 640×200 | 2 prog. | 1bpp bitmap |
 
+`--cell-refine` optionally refines colors and pixel patterns across cell
+boundaries in TO7/70, TO8 forme-couleur, CGA text, all C64 modes, and TED
+hires/multicolor. Short two-color cells and CGA glyphs use a global 3×3
+binomial blur in linear RGB. The larger C64/TED cells also try OKLab,
+alternating color and bitmap/glyph updates for up to four passes and
+retaining the best S2 checkpoint. Shared background registers remain
+shared; writable charset bits change together at every use of the glyph,
+without increasing the glyph count. PETSCII stays within the ROM and
+respects `--c64-petscii-graphics`. FLI/AFLI keep the first 24 physical pixels
+light gray (color 15), matching
+the bundled displayers’ late-badline region in PAL VICE; they do not hide it
+with background-colored sprites.
+
+For ordered and palette-aware dithers (including `opt-checker`, `opt-line`,
+Bayer, and `--dither none`), bitmap refinement changes legal color registers
+and regenerates affected pixels through the selected quantizer at the
+original phase and strength. It does not freely rearrange pixels. C64
+charset refinement preserves the glyph bytes and screen references for
+these methods, optimizing only colors. PETSCII and CGA select ROM glyphs
+directly and do not use the bitmap dither setting.
+
+The pass keeps the original whole encoding if its S2 score does not improve.
+It is slower and changes the halftone texture; CGA requires
+`--cga-text-metric blur`. Diffusion methods seed the unrestricted pattern search. Both paths
+use a global blur objective and retain only full-image S2 improvements. TO8 keeps the palette
+selected by the existing quantizer (or the `--best` palette search).
+
+C64 multicolor's initial quantizer now reserves code 00 for the one shared
+background register, choosing three local colors per cell. Older versions
+allowed a different background in each cell's preview even though the
+export could not represent it. Comparisons should use this corrected
+baseline before measuring the additional `--cell-refine` gain.
+
+`python3 tools/check_c64_vice.py` verifies default and refined C64 previews
+against every pixel of the 320×200 PAL VICE display (requires `x64sc` and
+its ROMs). It executes the exported PRGs for bitmap modes and PETSCII.
+Charset modes use a minimal test loader for the native glyph/screen/color
+bytes, because charset PRG export is not implemented. Use `--model c64c`
+to check the newer PAL VIC-II as well. This checks emulator behavior;
+physical hardware has not been tested.
+
+```sh
+./build/png2amiga --mode thomson-to7-320x16 --cell-refine examples/maui.jpg maui-to7.png
+./build/png2amiga --mode cga-text80x100 --cell-refine examples/maui.jpg maui-cga.png
+```
+
 The forme-couleur color byte uses the TO-series inverted-high-bits format
 (round-trip-verified against the theodore emulator's `Decode320x16`).
 

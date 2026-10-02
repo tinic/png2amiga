@@ -37,4 +37,9 @@ Result<EncodeResult> encode(const Image& image,
                             amiga::Mode mode,
                             const dither::Settings& settings = {});
 
+void refine_cells(const Image& image,
+                  EncodeResult& enc,
+                  amiga::Mode mode,
+                  const dither::Settings& settings = {});
+
 }  // namespace png2amiga::ted

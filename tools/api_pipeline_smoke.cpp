@@ -24,8 +24,11 @@
 // Anything not in this list is left at api::Options defaults — that's the
 // point: this is the bare api::run_pipeline path, no CLI tuning.
 #include "api.hpp"
+#include "check_ordered_refine.hpp"
 #include "ham.hpp"
 #include "png_io.hpp"
+#include <nlohmann/json.hpp>
+#include <cmath>
 
 #include <array>
 
@@ -116,9 +119,12 @@ int main(int argc, char** argv) {
     if (argc == 2 && std::strcmp(argv[1], "--check-ham-beam") == 0)
         return check_ham_beam();
 
+    if (argc == 2 && std::strcmp(argv[1], "--check-ordered-refine") == 0)
+        return check_ordered_refine();
+
     api::Options opts;
     opts.mode = "lores";
-    std::string in_path, out_path, raw_out, pal_out;
+    std::string in_path, out_path, raw_out, pal_out, meta_out;
     bool apply_tuning = false;
     bool dither_strength_set = false;
     bool error_clamp_set = false;
@@ -137,6 +143,8 @@ int main(int argc, char** argv) {
         };
         if (a == "--mode") opts.mode = std::string(next(a));
         else if (a == "--raw-out") raw_out = std::string(next(a));
+        else if (a == "--meta-out")
+            meta_out = std::string(next(a));
         else if (a == "--pal-out") pal_out = std::string(next(a));
         else if (a == "--depth") {
             opts.depth = std::atoi(std::string(next(a)).c_str());
@@ -146,6 +154,16 @@ int main(int argc, char** argv) {
         else if (a == "--strips") opts.scap = true;
         else if (a == "--dpf" || a == "--dual-playfield") opts.dual_playfield = true;
         else if (a == "--best") opts.best = true;
+        else if (a == "--cell-refine")
+            opts.cell_refine = true;
+        else if (a == "--tile-budget")
+            opts.tile_budget = std::stoul(std::string(next(a)));
+        else if (a == "--tile-reserve")
+            opts.tile_reserve = std::stoul(std::string(next(a)));
+        else if (a == "--c64-petscii-graphics")
+            opts.c64_petscii_graphics_only = true;
+        else if (a == "--cga-text-metric")
+            opts.cga_text_metric = std::string(next(a));
         else if (a == "--interlace") opts.interlace = true;
         else if (a == "--chipset") opts.chipset = std::string(next(a));
         else if (a == "--lock-color0") opts.lock_color0 = true;
@@ -332,6 +350,24 @@ int main(int argc, char** argv) {
         std::ofstream pf(pal_out, std::ios::binary);
         pf.write(reinterpret_cast<const char*>(pal.data()),
                  static_cast<std::streamsize>(pal.size()));
+    }
+    if (!meta_out.empty()) {
+        std::vector<std::array<int, 3>> colors;
+        for (auto c : state.palette) {
+            auto rgb = color_space::linear_to_srgb(c).clamped();
+            colors.push_back({static_cast<int>(std::lround(rgb.r * 255)),
+                              static_cast<int>(std::lround(rgb.g * 255)),
+                              static_cast<int>(std::lround(rgb.b * 255))});
+        }
+        nlohmann::json meta = {{"palette", colors},
+                               {"bg", state.c64_bg_color},
+                               {"mc1", state.c64_mc1},
+                               {"mc2", state.c64_mc2},
+                               {"cols", state.c64_cols},
+                               {"rows", state.c64_rows},
+                               {"glyphs", state.c64_unique_glyphs}};
+        std::ofstream mf(meta_out);
+        mf << meta.dump();
     }
     // Debug aid: dump raw indices alongside the PNG so callers can A/B
     // against the CLI's --output-indexed output without re-running.

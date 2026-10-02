@@ -1118,6 +1118,14 @@ Result<PipelineResult> run_pipeline(const std::uint8_t* input_data,
         options.palette_diversity = 5;
     }
 
+    if (options.cell_refine &&
+        (!amiga::is_thomson_formecouleur(mode) && !amiga::is_c64(mode) && !amiga::is_ted(mode) &&
+         !(amiga::is_cga_text(mode) && options.cga_text_metric == "blur"))) {
+        return std::unexpected{Error{ErrorCode::unsupported_mode,
+                                     "--cell-refine requires Thomson attribute, C64, TED, or CGA "
+                                     "text with the blur metric"}};
+    }
+
     // Reject dither methods that don't apply to the chosen mode rather
     // than silently fall through to a degraded encode. SNES Mode 7
     // Direct has no palette table at all so palette-aware methods are
@@ -1494,8 +1502,15 @@ Result<PipelineResult> run_pipeline(const std::uint8_t* input_data,
         // offset. Letting the encoder pick from rows 2..3 / 4..5 /
         // etc. would give a prettier preview but pixels the actual
         // hardware can't produce. See main.cpp for the same fix.
-        auto res = cga_text::encode(
-            dithered, mode, {}, text_pal, /*fixed_offset=*/0, cga_metric, cga_kernel, options.on_progress);
+        auto res = cga_text::encode(dithered,
+                                    mode,
+                                    {},
+                                    text_pal,
+                                    /*fixed_offset=*/0,
+                                    cga_metric,
+                                    cga_kernel,
+                                    options.on_progress,
+                                    options.cell_refine);
         if (!res) return std::unexpected{res.error()};
         auto preview = cga_text::render(*res);
         // No post-double here: result.rendered stays at hardware-pixel
@@ -1965,6 +1980,10 @@ Result<PipelineResult> run_pipeline(const std::uint8_t* input_data,
         }();
         if (!enc) return std::unexpected{enc.error()};
 
+        if (options.cell_refine)
+            c64::refine_cells(
+                *image, *enc, mode, pal_choice, options.c64_petscii_graphics_only, dith);
+
         PipelineResult result;
         result.rendered = std::move(enc->rendered);
         auto pal_span = c64::palette_colors(pal_choice);
@@ -2096,6 +2115,7 @@ Result<PipelineResult> run_pipeline(const std::uint8_t* input_data,
             src_pre.prepare(image->pixels(), image->width(), image->height());
 
             std::optional<thomson::EncodeResult> best;
+            std::size_t best_trial = 0;
             float best_s2 = -std::numeric_limits<float>::infinity();
             std::mutex best_mu;
             std::atomic<std::size_t> done{0};
@@ -2113,6 +2133,7 @@ Result<PipelineResult> run_pipeline(const std::uint8_t* input_data,
                     if (!best.has_value() || score > best_s2) {
                         best = std::move(*r);
                         best_s2 = score;
+                        best_trial = i;
                     }
                     label_best = best_s2;
                     have_best = true;
@@ -2144,8 +2165,26 @@ Result<PipelineResult> run_pipeline(const std::uint8_t* input_data,
                                              "thomson --best sweep produced no result"}};
             }
             enc = std::move(*best);
+            if (options.cell_refine) {
+                // Refine the winning seed once, not every candidate in the
+                // parameter sweep. The S2 guard keeps at least the best seed.
+                auto d = dith;
+                d.strength = trials[best_trial].strength;
+                enc = thomson::encode(
+                    *image, mode, d, trials[best_trial].fc, pop_pal ? &*pop_pal : nullptr, true);
+                if (best_trial != 0) {
+                    // Refinement can change the ranking of seeds. Include the
+                    // ordinary refined result so --best cannot lose to it.
+                    auto ordinary = thomson::encode(*image, mode, dith, {}, nullptr, true);
+                    if (ordinary &&
+                        (!enc || ssimulacra2::compute(src_pre, ordinary->rendered.pixels()) >
+                                     ssimulacra2::compute(src_pre, enc->rendered.pixels()))) {
+                        enc = std::move(*ordinary);
+                    }
+                }
+            }
         } else {
-            enc = thomson::encode(*image, mode, dith);
+            enc = thomson::encode(*image, mode, dith, {}, nullptr, options.cell_refine);
         }
         if (!enc) return std::unexpected{enc.error()};
 
@@ -2189,6 +2228,8 @@ Result<PipelineResult> run_pipeline(const std::uint8_t* input_data,
 
         auto enc = ted::encode(*image, mode, dith);
         if (!enc) return std::unexpected{enc.error()};
+
+        if (options.cell_refine) ted::refine_cells(*image, *enc, mode, dith);
 
         PipelineResult result;
         result.rendered = std::move(enc->rendered);

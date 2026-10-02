@@ -353,6 +353,10 @@ struct Options {
     // "wide77". Only consumed by the blur metric.
     std::string cga_text_kernel = "auto";
 
+    // Optional cell refinement: Thomson attribute, C64, TED, CGA text (blur).
+    // Trades encoding time for quality; keeps the original if S2 decreases.
+    bool cell_refine = false;
+
     // cga-composite: choose between pre-1983 IBM 5150 chroma-burst
     // phase ("old", default) and the 1983+ revised card ("new"). All
     // other analog-stage knobs (hue/sat/contrast/luma) stay at

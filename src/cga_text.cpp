@@ -1,4 +1,5 @@
 #include "cga_text.hpp"
+#include "cell_refine.hpp"
 
 #include "cga_font.hpp"
 #include "color_space.hpp"
@@ -229,7 +230,8 @@ Result<CgaTextResult> encode(const Image& image,
                              int fixed_offset,
                              Metric metric,
                              Kernel kernel,
-                             ProgressCb on_progress) {
+                             ProgressCb on_progress,
+                             bool refine_cells) {
 
     if (!amiga::is_cga_text(mode)) {
         return std::unexpected{Error{
@@ -1041,6 +1043,27 @@ Result<CgaTextResult> encode(const Image& image,
         }
     }
 
+    if (refine_cells) {
+        std::vector<cell_refine::Pattern> pats;
+        for (auto ch : chars)
+            pats.push_back(
+                {palette::glyph_fg_mask(font, ch, cell_h, best_result.scanline_offset), ch});
+        std::vector<cell_refine::Cell> cells;
+        for (std::size_t i = 0; i < best_result.data.size(); i += 2) {
+            auto ch = best_result.data[i], attr = best_result.data[i + 1];
+            cells.push_back({palette::glyph_fg_mask(font, ch, cell_h, best_result.scanline_offset),
+                             static_cast<std::uint8_t>(attr & 15),
+                             static_cast<std::uint8_t>(attr >> 4),
+                             ch});
+        }
+        best_result.total_error = cell_refine::refine(
+            image, best_result.palette, cell_h, pats, cells);
+        for (std::size_t i = 0; i < cells.size(); ++i) {
+            best_result.data[2 * i] = cells[i].ch;
+            best_result.data[2 * i + 1] = static_cast<std::uint8_t>((cells[i].bg << 4) |
+                                                                    cells[i].fg);
+        }
+    }
     if (on_progress) on_progress(1.0f, "done");
     return best_result;
 }

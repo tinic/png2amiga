@@ -1,0 +1,11 @@
+{
+  "command": "python3 tools/bench_cell_refine.py --out build/cell-refine-opt-checker-preserved --dither opt-checker --modes c64-hires c64-multicolor c64-fli c64-afli c64-petscii c64-charset-hires c64-charset-multicolor",
+  "baseline_unchanged": true,
+  "policy": "Non-diffusion bitmap refinement regenerates through the chosen quantizer. Charset glyph patterns and screen references remain fixed; only colors change. Diffusion and ROM glyph refinement remain unrestricted.",
+  "source_sha256": {
+    "src/cell_graph_refine.hpp": "d06c43f61fe1ae2b72966f3052665d2f0df6b0e6d3ad2518b8939c52b4789aff",
+    "src/c64.cpp": "e761ba89b496455f3bd675ac539bd00ba84adbb4e121feda47e55372f4b33760",
+    "src/ted.cpp": "8dfc0098bc06506350c69ded18801d09844260708d0a5a75c84e98ec74988b84",
+    "src/thomson.cpp": "ff38d481efafd56700f8a681a5f59b25f0054f69450d9853182b4defe08ec86c"
+  }
+}
