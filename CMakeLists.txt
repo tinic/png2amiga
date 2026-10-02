@@ -2872,7 +2872,9 @@ sys.exit(0 if ok else 1)")
     # DPF strips: dark shades expose candidate-key collisions; the ramp
     # requires future-color preloading and guard-aware planning/refinement.
     # Leave margin below the measured S2 for compiler/platform variation.
-    foreach(_case IN ITEMS "chuck31|62" "grungy|57" "ramps|38")
+    # Guard-aware ramps score 41.57 on Clang and 37.84–37.87 on GCC 15
+    # across the Linux x86 and macOS ARM release runners.
+    foreach(_case IN ITEMS "chuck31|62" "grungy|57" "ramps|37")
         string(REPLACE "|" ";" _parts "${_case}")
         list(GET _parts 0 _image)
         list(GET _parts 1 _min_s2)
@@ -2938,7 +2940,10 @@ sys.exit(0 if ok else 1)")
         COMMAND ${Python3_EXECUTABLE} ${CMAKE_SOURCE_DIR}/tools/check_strips_replay.py
             --mode ehb --expect-black-border --cli $<TARGET_FILE:png2amiga>
             --in ${CMAKE_SOURCE_DIR}/examples/maui.jpg --height 160 --slot-shift -3)
-    foreach(_case IN ITEMS "ramps.png|68" "electrichues02.jpg|70" "ocs_4096.png|71")
+    # Guard-aware ramps score 72.04 on Clang and 67.66–67.72 on GCC 15
+    # across the Linux x86 and macOS ARM release runners.
+    # Keep a margin for the palette planner's floating-point variation.
+    foreach(_case IN ITEMS "ramps.png|67" "electrichues02.jpg|70" "ocs_4096.png|71")
         string(REPLACE "|" ";" _parts "${_case}")
         list(GET _parts 0 _image)
         list(GET _parts 1 _min_s2)
