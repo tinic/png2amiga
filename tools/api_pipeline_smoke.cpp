@@ -24,7 +24,10 @@
 // Anything not in this list is left at api::Options defaults — that's the
 // point: this is the bare api::run_pipeline path, no CLI tuning.
 #include "api.hpp"
+#include "ham.hpp"
 #include "png_io.hpp"
+
+#include <array>
 
 #include <cstring>
 #include <fstream>
@@ -66,9 +69,53 @@ bool parse_hex(std::string_view s, api::ReserveSpec& out) {
     return true;
 }
 
+// Two adversarial rows: duplicate SET paths must not crowd out a useful
+// held color, and distinct AGA low nibbles must never be merged.
+int check_ham_beam() {
+    auto linear = [](ham::SRGBColor c) {
+        return color_space::srgb_u8_to_linear(c.r, c.g, c.b);
+    };
+    for (bool low_nibbles : {false, true}) {
+        std::vector<ham::SRGBColor> colors(16, {0, 0, 0});
+        if (low_nibbles) {
+            for (auto& c : colors) c.g = 1;
+            colors[1].g = 2;
+        }
+        std::vector<Color3f> palette;
+        for (auto c : colors) palette.push_back(linear(c));
+        std::vector<Color3f> row;
+        if (low_nibbles) {
+            row = {linear({0, 1, 0}),
+                   linear({0, 2, 255}),
+                   linear({0, 2, 255})};
+        } else {
+            row = {linear({0, 8, 0}),
+                   linear({0, 17, 255})};
+        }
+        std::array<ham::HamPrecomp, 1> pre{ham::HamPrecomp(palette, 4)};
+        std::array<std::span<const ham::SRGBColor>, 1> palettes{colors};
+        std::vector<std::uint16_t> strips(row.size(), 0);
+        auto result = ham::encode_scanline_dp_per_strip(
+            row, colors[0], pre, palettes, strips, 16, ham::HamMetric::srgb_mse);
+        // Preparing G=17 at pixel zero costs 9^2, then B=255 is exact.
+        // With 24-bit anchors, preparing G=2 costs 1^2, then stays exact.
+        const float upper_bound = (low_nibbles ? 1.0f : 81.0f) / 65536.0f;
+        if (result.values.size() != row.size() || result.error > upper_bound + 1e-7f) {
+            std::println(stderr, "HAM beam lost a useful held color (low_nibbles={}, error={})",
+                         low_nibbles, result.error);
+            return 1;
+        }
+    }
+    std::println("PASS: HAM6 beam preserves distinct held colors, including AGA low nibbles");
+    return 0;
+}
+
 }  // namespace
 
 int main(int argc, char** argv) {
+    if (argc == 2 && std::strcmp(argv[1], "--check-ham-beam") == 0)
+        return check_ham_beam();
+
     api::Options opts;
     opts.mode = "lores";
     std::string in_path, out_path, raw_out, pal_out;

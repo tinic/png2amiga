@@ -109,7 +109,10 @@ refinement in OKLab (CPU fallback when Metal isn't available).
   R2-triangle, Value Noise, White Noise.
 
 **HAM encoding**: DP beam search with a triple-pixel refinement pass
-(default on) that catches the fringe-lag artifacts 1-pixel DP misses.
+(default on) that catches fringe-lag artifacts missed by the finite beam.
+HAM6 keeps only the cheapest path to each distinct held RGB color before
+pruning the beam, leaving room for colors that help encode later pixels.
+This also applies to sliced and striped HAM6; AGA colors retain all 24 bits.
 `--ham-fast` switches to the greedy encoder (~15× faster, ~0.04 dB
 quality cost) for live preview or batch video processing.
 

@@ -526,6 +526,8 @@ struct HamScratch {
     std::vector<BeamState> prev_beam;  // x=0 seed only
     std::vector<std::vector<BeamState>> beam_history;
     std::vector<ErrIdx> err_idx;
+    std::vector<std::uint32_t> held_color_keys;
+    std::vector<std::size_t> held_color_indices;
     // refine_triple per-row buffers
     std::vector<SRGBColor> states;
     std::vector<BeamState> window_candidates;
@@ -887,6 +889,53 @@ void prune_beam(std::vector<BeamState>& candidates,
     }
 }
 
+// A HAM scanline's future depends only on the held RGB color, position,
+// and upcoming palettes. Paths reaching the same color are equivalent:
+// retain the cheapest one before limiting the beam, so repeated SETs do
+// not crowd out distinct colors that can encode later pixels better.
+// Use all 24 bits: AGA HAM6 and externally supplied palettes may contain
+// colors between the OCS RGB444 grid points.
+void prune_unique_ham6(HamScratch& sc, std::vector<BeamState>& beam,
+                      std::size_t beam_width) {
+    auto& candidates = sc.candidates;
+    std::size_t table_size = 1;
+    while (table_size < candidates.size() * 2) table_size *= 2;
+    sc.held_color_keys.assign(table_size, 0xFFFFFFFFu);
+    sc.held_color_indices.resize(table_size);
+    const auto mask = table_size - 1;
+    std::size_t count = 0;
+    for (std::size_t i = 0; i < candidates.size(); ++i) {
+        const auto candidate = candidates[i];
+        const auto color = candidate.color;
+        const auto key = (static_cast<std::uint32_t>(color.r) << 16) |
+                         (static_cast<std::uint32_t>(color.g) << 8) | color.b;
+        auto hash = key * 2654435761u;
+        hash ^= hash >> 16;  // mix red into low table-index bits too
+        auto slot = static_cast<std::size_t>(hash) & mask;
+        while (sc.held_color_keys[slot] != 0xFFFFFFFFu && sc.held_color_keys[slot] != key)
+            slot = (slot + 1) & mask;
+        if (sc.held_color_keys[slot] == 0xFFFFFFFFu) {
+            sc.held_color_keys[slot] = key;
+            sc.held_color_indices[slot] = count;
+            candidates[count++] = candidate;
+        } else {
+            auto index = sc.held_color_indices[slot];
+            if (candidate.cumulative_error < candidates[index].cumulative_error)
+                candidates[index] = candidate;
+        }
+    }
+    candidates.resize(count);
+    auto& scores = sc.err_idx;
+    scores.clear();
+    for (std::size_t i = 0; i < count; ++i)
+        scores.push_back({candidates[i].cumulative_error, static_cast<std::uint32_t>(i)});
+    const auto n = std::min(beam_width, count);
+    std::partial_sort(scores.begin(), scores.begin() + static_cast<std::ptrdiff_t>(n),
+                      scores.end(), ErrIdxLess{});
+    beam.resize(n);
+    for (std::size_t i = 0; i < n; ++i) beam[i] = candidates[scores[i].idx];
+}
+
 // DP beam search for a single scanline. ScanlineResult is declared
 // in ham.hpp now so strips and other consumers can use it.
 // Per-strip variant: takes parallel arrays of HamPrecomp and base_srgb
@@ -940,7 +989,10 @@ ScanlineResult encode_scanline_dp_per_strip_t(
                             base_srgbs[si],
                             sc.candidates);
         }
-        prune_beam(sc.candidates, sc.beam_history[x], beam_width, sc.err_idx);
+        if (pres[si].data_bits == 4)
+            prune_unique_ham6(sc, sc.beam_history[x], beam_width);
+        else
+            prune_beam(sc.candidates, sc.beam_history[x], beam_width, sc.err_idx);
     }
 
     auto& final_beam = sc.beam_history[width - 1];
@@ -1006,7 +1058,10 @@ ScanlineResult encode_scanline_dp_t(std::span<const Color3f> target_row,
                             sc.candidates);
         }
 
-        prune_beam(sc.candidates, sc.beam_history[x], beam_width, sc.err_idx);
+        if (pre.data_bits == 4)
+            prune_unique_ham6(sc, sc.beam_history[x], beam_width);
+        else
+            prune_beam(sc.candidates, sc.beam_history[x], beam_width, sc.err_idx);
     }
 
     // Find the best final state
@@ -1066,8 +1121,8 @@ ScanlineResult encode_scanline_dp_per_strip_impl(
 // ---------------------------------------------------------------------------
 // Triple-pixel refinement post-pass.
 //
-// The main DP uses a 1-pixel lookahead with `beam_width` survivors. This can
-// miss a better sequence where the locally-best op at pixel i leads to a
+// The main DP prunes by accumulated error with `beam_width` survivors.
+// This can miss a better sequence where the locally-best op at pixel i leads to a
 // constrained state that gives a bad choice at pixel i+1 or i+2 — classic
 // HAM fringe lag on color transitions.
 //

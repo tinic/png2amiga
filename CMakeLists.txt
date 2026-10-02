@@ -2273,6 +2273,9 @@ sys.exit(0 if ok else 1)")
     set(_equiv_chk
         "${PNG2AMIGA_PYTHON};${CMAKE_SOURCE_DIR}/tools/check_api_equiv.py;--cli;$<TARGET_FILE:png2amiga>;--api;$<TARGET_FILE:api_pipeline_smoke>")
 
+    add_test(NAME "ham6-beam-held-colors"
+        COMMAND $<TARGET_FILE:api_pipeline_smoke> --check-ham-beam)
+
     add_test(NAME "iff-camg-web-export"
         COMMAND $<TARGET_FILE:iff_camg_check> ${CMAKE_SOURCE_DIR}/examples/brick.png)
 
