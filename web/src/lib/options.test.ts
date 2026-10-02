@@ -28,7 +28,48 @@ import {
   numBitplanes,
   numColors,
   previewScale,
+  supportsCellRefine,
+  requiresCellRefineDiffusion,
 } from './options.js'
+
+describe('cell refinement support', () => {
+  const supported = new Set([
+    'c64-hires', 'c64-multicolor', 'c64-fli', 'c64-afli', 'c64-petscii',
+    'c64-charset-hires', 'c64-charset-multicolor',
+    'ted-hires', 'ted-multicolor',
+    'thomson-to7-320x16', 'thomson-to8-320x16',
+    'cga-text80x200', 'cga-text80x100', 'cga-text80x50', 'cga-text80x25',
+    'cga-text40x200', 'cga-text40x100',
+  ])
+  const modes = [...new Set(CHIPSETS.flatMap(c => modesForChipset(c.value).map(m => m.value)))]
+
+  it.each(modes)('matches API mode restrictions for %s', (mode) => {
+    expect(supportsCellRefine({ mode, cgaTextMetric: 'blur' })).toBe(supported.has(mode))
+    expect(supportsCellRefine({ mode, cgaTextMetric: 'mse' })).toBe(
+      supported.has(mode) && !mode.startsWith('cga-text'))
+  })
+
+  it('starts disabled and rejects unknown modes and CGA metrics', () => {
+    expect(defaultOptions().cellRefine).toBe(false)
+    expect(supportsCellRefine({ mode: 'c64-unknown', cgaTextMetric: 'blur' })).toBe(false)
+    expect(supportsCellRefine({ mode: 'cga-text80x100', cgaTextMetric: 'unknown' })).toBe(false)
+  })
+})
+
+describe('cell refinement dithering', () => {
+  it.each([
+    ['c64-multicolor', true], ['c64-hires', true], ['c64-fli', true],
+    ['c64-afli', true], ['c64-charset-hires', true], ['c64-charset-multicolor', true],
+    ['ted-hires', true], ['ted-multicolor', true],
+    ['thomson-to7-320x16', true], ['thomson-to8-320x16', true],
+    ['c64-petscii', false], ['cga-text80x100', false],
+    ['thomson-to8-320x4', false], ['lores', false],
+  ])('requires diffusion for %s: %s', (mode, expected) => {
+    const opts = { mode, cellRefine: true, cgaTextMetric: 'blur' }
+    expect(requiresCellRefineDiffusion(opts)).toBe(expected)
+    expect(requiresCellRefineDiffusion({ ...opts, cellRefine: false })).toBe(false)
+  })
+})
 
 describe('hamType', () => {
   it.each([
@@ -233,6 +274,12 @@ describe('isErrorDiffusion', () => {
     ['sierra-lite',      true],
     ['stucki',           true],
     ['jarvis',           true],
+    ['riemersma',        true],
+    ['structure-fs',     true],
+    ['contrast-fs',      true],
+    ['zhoufang',         true],
+    ['gilbert',          false],
+    ['dbs',              false],
     ['none',             false],
     ['bayer8x8',         false],
     ['checker',          false],

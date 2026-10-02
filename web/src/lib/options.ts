@@ -75,6 +75,7 @@ export interface Options {
   width: number
   height: number
   best: boolean
+  cellRefine: boolean
   alphaThreshold: number
   alphaDither: string
   alphaDitherStrength: number
@@ -665,6 +666,7 @@ export function defaultOptions(): Options {
     // indexed copper modes ignore this flag (their planner is already
     // mature). +0.5..2 dB PSNR for ~4-5× the encode cost. Off by default.
     best: false,
+    cellRefine: false,
     // Alpha
     alphaThreshold: 0,
     alphaDither: 'none',
@@ -827,6 +829,19 @@ const CGA_TEXT_MODES = new Set([
 export function isCgaText(mode: string): boolean {
   return CGA_TEXT_MODES.has(mode)
 }
+
+// Match api.cpp's cell_refine validation, including CGA's metric restriction.
+export function supportsCellRefine({ mode, cgaTextMetric }: Pick<Options, 'mode' | 'cgaTextMetric'>): boolean {
+  return ALL_MODES.some(m => m.value === mode) && (
+    isC64Mode(mode) || isTedMode(mode) || isThomsonFormeCouleur(mode) ||
+    (isCgaText(mode) && cgaTextMetric === 'blur')
+  )
+}
+
+export function requiresCellRefineDiffusion(options: Pick<Options, 'mode' | 'cgaTextMetric' | 'cellRefine'>): boolean {
+  return options.cellRefine && supportsCellRefine(options) &&
+    options.mode !== 'c64-petscii' && !isCgaText(options.mode)
+}
 // per-platform tile size (8×8 for c64-charset / Genesis / SNES Mode 7).
 // At freeform mode the Native PAR / fixed-buffer behavior is replaced
 // by the user-typed dims; at default size they stay fixed-buffer.
@@ -932,7 +947,12 @@ const MODE_PAR: Record<string, number> = {
 
 export function modePar(mode: string): number { return MODE_PAR[mode] ?? 1 }
 
-const ERROR_DIFFUSION = new Set(['floyd-steinberg', 'sierra-lite', 'atkinson', 'jarvis', 'stucki', 'gilbert', 'riemersma', 'dbs'])
+// Match dither::uses_error_diffusion, which drives the cell refinement path.
+// Gilbert and DBS have no diffusion kernel; the structure-aware FS variants do.
+const ERROR_DIFFUSION = new Set([
+  'floyd-steinberg', 'sierra-lite', 'atkinson', 'jarvis', 'stucki',
+  'riemersma', 'structure-fs', 'contrast-fs', 'zhoufang',
+])
 
 export function isErrorDiffusion(dither: string): boolean {
   return ERROR_DIFFUSION.has(dither)

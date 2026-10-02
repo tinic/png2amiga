@@ -130,6 +130,7 @@ Options parse_js_options(val js_opts) {
         opts.alpha_dither_strength = js_opts["alphaDitherStrength"].as<float>();
     if (js_opts.hasOwnProperty("maskInvert")) opts.mask_invert = js_opts["maskInvert"].as<bool>();
     if (js_opts.hasOwnProperty("nativePar")) opts.native_par = js_opts["nativePar"].as<bool>();
+    if (js_opts.hasOwnProperty("cellRefine")) opts.cell_refine = js_opts["cellRefine"].as<bool>();
     if (js_opts.hasOwnProperty("cgaTextMetric"))
         opts.cga_text_metric = js_opts["cgaTextMetric"].as<std::string>();
     if (js_opts.hasOwnProperty("cgaTextKernel"))

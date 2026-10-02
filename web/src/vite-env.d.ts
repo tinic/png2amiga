@@ -179,6 +179,7 @@ declare module '@wasm/png2amiga.js' {
     // CGA text
     cgaTextMetric?: string
     cgaTextKernel?: string
+    cellRefine?: boolean
 
     // CGA composite (NTSC chroma multiplexer): card revision
     cgaCompositeNewCga?: boolean

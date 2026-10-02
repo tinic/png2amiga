@@ -18,6 +18,8 @@ import {
   isDosMode, isVgaMode, isEgaMode, isSnesMode, isSnesDirectMode, isGenesisMode, isGbaMode, isGbaDirectMode, isC64Mode, isC64CharsetMode, isThomsonMode, isTedMode, isSmsMode, isCpcMode, isCgaMode, isCgaText, isTileFreeformMode, isFixedBufferMode, isAmigaMode, supportsCustomPalette, isInterlaceMode, modePar,
   maxDepth, defaultDepth, effectiveChipset, previewScale,
   modesForChipset,
+  supportsCellRefine,
+  requiresCellRefineDiffusion, isErrorDiffusion,
 } from '../lib/options.js'
 import { track } from '../lib/analytics.js'
 import { useImageUpload } from '../composables/useImageUpload.js'
@@ -750,6 +752,7 @@ const groupedDitherOptions = computed(() => {
     .map(g => ({
       label: g.group,
       items: g.items
+        .filter(d => !requiresCellRefineDiffusion(options) || isErrorDiffusion(d.value))
         .filter(d => !(hide_nonsquare && isNonSquareDither(d.value)))
         .filter(d => !(hide_yliluoma && YLIL_FAMILY.has(d.value)))
         .filter(d => !(hide_dbs && d.value === 'dbs'))
@@ -1222,6 +1225,9 @@ function buildWasmOptions(): WasmOptions {
     !(r.index === 0 && options.lockColor0))
   const out: WasmOptions = {
     ...rest,
+    cellRefine: options.cellRefine && supportsCellRefine(options),
+    dither: requiresCellRefineDiffusion(options) && !isErrorDiffusion(options.dither)
+      ? 'floyd-steinberg' : options.dither,
     alphaDither: alphaDither === 'none' ? '' : alphaDither,
     reserves: cleanReserves.map(r => ({
       index: r.index, r: r.r, g: r.g, b: r.b,
@@ -1270,6 +1276,16 @@ watch(() => options.cgaTextMetric, (val) => {
   if (val !== 'mse' && options.dither !== 'none') options.dither = 'none'
   if (tweakTimer) clearTimeout(tweakTimer)
   tweakTimer = setTimeout(() => { track('setting-tweak', { key: 'cgaTextMetric', value: val }); }, 500)
+})
+
+watch(() => supportsCellRefine(options), (supported) => {
+  if (!supported) options.cellRefine = false
+})
+
+watch(() => [requiresCellRefineDiffusion(options), options.dither], () => {
+  if (requiresCellRefineDiffusion(options) && !isErrorDiffusion(options.dither)) {
+    options.dither = 'floyd-steinberg'
+  }
 })
 
 // Session duration on page unload
@@ -2747,6 +2763,13 @@ async function loadExample(example: typeof EXAMPLES[number]) {
                 <div class="col-8 flex align-items-center gap-2">
                   <ToggleSwitch v-model="options.best" />
                   <span style="color: #888; font-size: 0.625rem;">~20–30× slower, parallel</span>
+                </div>
+              </div>
+              <div v-if="supportsCellRefine(options)" class="grid align-items-center">
+                <label for="cell-refine" class="col-4 text-xs text-color-secondary font-semibold"
+                  title="Improve how neighboring cells fit together. Takes longer to encode; keeps the original result if perceptual quality decreases.">Cell refine</label>
+                <div class="col-8 flex align-items-center gap-2">
+                  <ToggleSwitch v-model="options.cellRefine" inputId="cell-refine" />
                 </div>
               </div>
               <!-- Native PAR (DOS + SNES + Genesis + C64 — modes with fixed
