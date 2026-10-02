@@ -1,0 +1,66 @@
+[
+  {
+    "mode": "lores",
+    "depth": 2,
+    "dither": "floyd-steinberg",
+    "count": 4,
+    "mean_gain": 0.0,
+    "minimum_gain": 0.0
+  },
+  {
+    "mode": "lores",
+    "depth": 3,
+    "dither": "floyd-steinberg",
+    "count": 4,
+    "mean_gain": 2.4350000000000005,
+    "minimum_gain": 0.0
+  },
+  {
+    "mode": "hires",
+    "depth": 2,
+    "dither": "floyd-steinberg",
+    "count": 4,
+    "mean_gain": 4.2500000000000036,
+    "minimum_gain": 0.0
+  },
+  {
+    "mode": "hires",
+    "depth": 3,
+    "dither": "floyd-steinberg",
+    "count": 4,
+    "mean_gain": 6.077499999999999,
+    "minimum_gain": 0.0
+  },
+  {
+    "mode": "lores-lace",
+    "depth": 2,
+    "dither": "floyd-steinberg",
+    "count": 4,
+    "mean_gain": 2.397499999999999,
+    "minimum_gain": 0.0
+  },
+  {
+    "mode": "lores-lace",
+    "depth": 3,
+    "dither": "floyd-steinberg",
+    "count": 4,
+    "mean_gain": 9.0025,
+    "minimum_gain": 5.089999999999998
+  },
+  {
+    "mode": "hires-lace",
+    "depth": 2,
+    "dither": "floyd-steinberg",
+    "count": 4,
+    "mean_gain": 2.512500000000001,
+    "minimum_gain": 0.0
+  },
+  {
+    "mode": "hires-lace",
+    "depth": 3,
+    "dither": "floyd-steinberg",
+    "count": 4,
+    "mean_gain": 7.4975000000000005,
+    "minimum_gain": 4.359999999999999
+  }
+]

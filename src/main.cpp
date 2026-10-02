@@ -19,6 +19,7 @@
 #include "ssimulacra2.hpp"
 #include "iff.hpp"
 #include "palette.hpp"
+#include "palette_pairs.hpp"
 #include "palette_io.hpp"
 #include "palette_locks.hpp"
 #include "pipeline.hpp"
@@ -10260,6 +10261,17 @@ int run_main(int argc, char* argv[]) {
             }
         } else {
             dither_result = dither::apply(*image, pal_span, dith);
+        }
+
+        if ((config->mode == amiga::Mode::lores || config->mode == amiga::Mode::hires ||
+             config->mode == amiga::Mode::lores_interlace || config->mode == amiga::Mode::hires_interlace) &&
+            actual_depth >= 2 && actual_depth <= 8 &&
+            !config->dual_playfield &&
+            !config->copper && !config->scap && config->palette_file.empty() &&
+            reserve_count_std == 0 && !has_transparency) {
+            pal.colors.resize(pal_size);
+            palette_pairs::refine(*image, pal.colors, dither_result, dith, std_locked, chipset);
+            pal_span = std::span<const Color3f>(pal.colors);
         }
 
         // CGA composite hires (mode 06): cell-pattern dither against the

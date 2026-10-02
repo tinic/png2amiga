@@ -24,6 +24,7 @@
 #include "ted.hpp"
 #include "snes_io.hpp"
 #include "palette.hpp"
+#include "palette_pairs.hpp"
 #include "palette_io.hpp"
 #include "palette_locks.hpp"
 #include "palette_search.hpp"
@@ -843,7 +844,8 @@ Result<PlainAutoTrial> encode_plain_auto(const Image& img,
                                          const std::vector<LockSpec>& locks,
                                          const std::vector<ReserveSpec>& reserves,
                                          const std::vector<PinSpec>& pins,
-                                         const std::vector<bool>& tmask) {
+                                         const std::vector<bool>& tmask,
+                                         bool fit_pairs = false) {
     // Atari uses the full palette (no border slot tied to index 0).
     bool is_atari_local = amiga::is_atari(mode);
     bool lock_zero = lock_color0 && (has_transparency || !is_atari_local);
@@ -979,6 +981,15 @@ Result<PlainAutoTrial> encode_plain_auto(const Image& img,
         }
     } else {
         dr = dither::apply(img, pal_span, dith);
+    }
+    if (fit_pairs &&
+        (mode == amiga::Mode::lores || mode == amiga::Mode::hires ||
+         mode == amiga::Mode::lores_interlace || mode == amiga::Mode::hires_interlace) &&
+        depth >= 2 && depth <= 8 &&
+        !use_dpf && reserve_count == 0 && !has_transparency) {
+        out.pal.colors.resize(out.pal_size);
+        palette_pairs::refine(img, out.pal.colors, dr, dith, out.locked_mask, chipset);
+        pal_span = std::span<const Color3f>(out.pal.colors);
     }
     out.indices = std::move(dr.indices);
     out.total_error = dr.total_error;
@@ -3684,58 +3695,72 @@ Result<PipelineResult> run_pipeline(const std::uint8_t* input_data,
             for (std::size_t i = 0; i < tmask.size() && i < dither_result.indices.size(); ++i)
                 if (tmask[i]) dither_result.indices[i] = 0;
         } else {
-            // diffuse_raw_buffer + pick_palette_index_with_ostro path —
-            // same dither used by EHB+sliced / strips+EHB. Bisect against
-            // dither::apply on a fixed 64-color EHB palette showed it
-            // produces +28 SSIMULACRA2 for free (encode_copper with 0
-            // changes/line measured 63.76 vs plain EHB's apply path
-            // 35.79 on the same palette). The diffuse_raw_buffer path
-            // pairs with pick_palette_index_with_ostro's
-            // second-nearest tracking which the legacy `apply` route
-            // doesn't expose.
-            std::vector<color_space::OKLab> pal_lab;
-            std::vector<std::uint8_t> cand_to_full;
-            pal_lab.reserve(64);
-            cand_to_full.reserve(64);
-            for (std::size_t i = 0; i < ehb_pal.colors.size(); ++i) {
-                if (ehb_blocked[i]) continue;
-                pal_lab.push_back(color_space::linear_to_oklab(ehb_pal.colors[i]));
-                cand_to_full.push_back(static_cast<std::uint8_t>(i));
-            }
-            auto w = image->width();
-            std::vector<std::uint8_t> indices(w * image->height(), 0);
-            float total_err = dither::diffuse_raw_buffer(
-                *image,
-                dith,
-                [&](const color_space::OKLab& target,
-                    std::size_t x,
-                    std::size_t y) -> dither::PickResult {
-                    std::size_t k = 0;
-                    color_space::OKLab chosen{};
-                    float thr = dither::pick_palette_index_with_ostro(
-                        dith.method, target, pal_lab, x, y, dith.strength, /*k_min=*/0, k, chosen);
-                    indices[y * w + x] = cand_to_full[k];
-                    return {chosen, thr};
-                });
-            if (dith.method == dither::Method::dbs) {
-                // DBS post-pass also needs the filtered candidate set so
-                // it doesn't swap pixels back onto reserved slots.
-                std::vector<std::uint8_t> cand_indices(indices.size());
-                std::vector<std::uint8_t> full_to_cand(64, 255);
-                for (std::size_t k = 0; k < cand_to_full.size(); ++k)
-                    full_to_cand[cand_to_full[k]] = static_cast<std::uint8_t>(k);
-                for (std::size_t i = 0; i < indices.size(); ++i)
-                    cand_indices[i] = full_to_cand[indices[i]];
-                dither::apply_dbs_post_pass(
+            auto encode_palette = [&](std::span<const Color3f> colors) {
+                dither::DitherResult encoded;
+                // diffuse_raw_buffer + pick_palette_index_with_ostro path —
+                // same dither used by EHB+sliced / strips+EHB. Bisect against
+                // dither::apply on a fixed 64-color EHB palette showed it
+                // produces +28 SSIMULACRA2 for free (encode_copper with 0
+                // changes/line measured 63.76 vs plain EHB's apply path
+                // 35.79 on the same palette). The diffuse_raw_buffer path
+                // pairs with pick_palette_index_with_ostro's
+                // second-nearest tracking which the legacy `apply` route
+                // doesn't expose.
+                std::vector<color_space::OKLab> pal_lab;
+                std::vector<std::uint8_t> cand_to_full;
+                pal_lab.reserve(64);
+                cand_to_full.reserve(64);
+                for (std::size_t i = 0; i < colors.size(); ++i) {
+                    if (ehb_blocked[i]) continue;
+                    pal_lab.push_back(color_space::linear_to_oklab(colors[i]));
+                    cand_to_full.push_back(static_cast<std::uint8_t>(i));
+                }
+                auto w = image->width();
+                std::vector<std::uint8_t> indices(w * image->height(), 0);
+                float total_err = dither::diffuse_raw_buffer(
                     *image,
-                    cand_indices,
-                    [&](std::size_t /*x*/, std::size_t /*y*/)
-                        -> std::span<const color_space::OKLab> { return pal_lab; });
-                for (std::size_t i = 0; i < indices.size(); ++i)
-                    indices[i] = cand_to_full[cand_indices[i]];
+                    dith,
+                    [&](const color_space::OKLab& target,
+                        std::size_t x,
+                        std::size_t y) -> dither::PickResult {
+                        std::size_t k = 0;
+                        color_space::OKLab chosen{};
+                        float thr = dither::pick_palette_index_with_ostro(
+                            dith.method, target, pal_lab, x, y, dith.strength, /*k_min=*/0, k, chosen);
+                        indices[y * w + x] = cand_to_full[k];
+                        return {chosen, thr};
+                    });
+                if (dith.method == dither::Method::dbs) {
+                    // DBS post-pass also needs the filtered candidate set so
+                    // it doesn't swap pixels back onto reserved slots.
+                    std::vector<std::uint8_t> cand_indices(indices.size());
+                    std::vector<std::uint8_t> full_to_cand(64, 255);
+                    for (std::size_t k = 0; k < cand_to_full.size(); ++k)
+                        full_to_cand[cand_to_full[k]] = static_cast<std::uint8_t>(k);
+                    for (std::size_t i = 0; i < indices.size(); ++i)
+                        cand_indices[i] = full_to_cand[indices[i]];
+                    dither::apply_dbs_post_pass(
+                        *image,
+                        cand_indices,
+                        [&](std::size_t /*x*/, std::size_t /*y*/)
+                            -> std::span<const color_space::OKLab> { return pal_lab; });
+                    for (std::size_t i = 0; i < indices.size(); ++i)
+                        indices[i] = cand_to_full[cand_indices[i]];
+                }
+                encoded.indices = std::move(indices);
+                encoded.total_error = total_err;
+                return encoded;
+            };
+            dither_result = encode_palette(ehb_pal.colors);
+            if (!user_pal_ehb && options.reserves.empty() && chipset == amiga::Chipset::ocs) {
+                // Start both searches from the same canonical palette order
+                // exposed by the baseline encoder and comparison harness.
+                palette_locks::sort_by_brightness(ehb_pal.colors, base_locked,
+                                                  dither_result.indices, 32, true);
+                palette_pairs::refine_ehb(*image, ehb_pal.colors, dither_result,
+                                          base_locked, encode_palette);
+                base_pal.colors.assign(ehb_pal.colors.begin(), ehb_pal.colors.begin() + 32);
             }
-            dither_result.indices = std::move(indices);
-            dither_result.total_error = total_err;
         }
 
         // Apply EHB pin-index swaps. Pins act on the BASE 32 only; half-brite
@@ -4997,7 +5022,8 @@ Result<PipelineResult> run_pipeline(const std::uint8_t* input_data,
                                        effective_locks,
                                        effective_reserves,
                                        effective_pins,
-                                       tmask);
+                                       tmask,
+                                       /*fit_pairs=*/true);
         if (!trial) return std::unexpected{trial.error()};
         std::vector<Color3f> used_palette(trial->pal.colors.begin(),
                                           trial->pal.colors.begin() +

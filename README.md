@@ -286,6 +286,25 @@ gamma LUT (`intens[16]`, a non-uniform ramp — NOT nibble replication).
 | `thomson-to8-320x4` | 320×200 | 4 prog. | 2-bitplane bitmap |
 | `thomson-to8-640x2` | 640×200 | 2 prog. | 1bpp bitmap |
 
+Plain lores, hires, and their interlaced variants automatically try both
+single-color and paired palette fitting at depths 2–8 (4–256 colors), keeping
+the best S2 result including the original. OCS supports up to 32 colors in
+lores or 16 in hires; larger palettes require AGA. The search
+models spatial color mixing, snaps proposed colors to the OCS or AGA color
+grid, and fully re-encodes with the selected dither method and strength.
+Each search runs two rounds with up to eight candidates per round, retaining
+only SSIMULACRA2 improvements. Palette locks remain fixed. This pass applies to the ordinary
+single-pass encoder; `--best` retains its existing palette search. Fixed
+palettes, reserved slots, transparency, sliced/striped palettes, DPF, and
+EHB retain their existing handling. No additional option is needed.
+
+Plain OCS EHB also refines its automatic palette, trying independent
+single-color and paired-color searches from the original encoding and keeping
+whichever has the highest S2 score. Every change updates both the base color
+and its hardware-derived half-bright partner. The selected dither and locks
+are preserved; `--best`, user palettes, reserves, transparency, and
+sliced/striped EHB retain their existing paths.
+
 `--cell-refine` optionally refines colors and pixel patterns across cell
 boundaries in TO7/70, TO8 forme-couleur, CGA text, all C64 modes, and TED
 hires/multicolor. Short two-color cells and CGA glyphs use a global 3×3

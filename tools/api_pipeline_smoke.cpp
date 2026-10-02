@@ -25,6 +25,8 @@
 // point: this is the bare api::run_pipeline path, no CLI tuning.
 #include "api.hpp"
 #include "check_ordered_refine.hpp"
+#include "check_palette_pairs.hpp"
+#include "check_ehb_pairs.hpp"
 #include "ham.hpp"
 #include "png_io.hpp"
 #include <nlohmann/json.hpp>
@@ -116,6 +118,11 @@ int check_ham_beam() {
 }  // namespace
 
 int main(int argc, char** argv) {
+    if (argc == 3 && std::strcmp(argv[1], "--check-ehb-pairs") == 0)
+        return check_ehb_pairs(argv[2]);
+    if (argc == 3 && std::strcmp(argv[1], "--check-palette-pairs") == 0)
+        return check_palette_pairs(argv[2]);
+
     if (argc == 2 && std::strcmp(argv[1], "--check-ham-beam") == 0)
         return check_ham_beam();
 

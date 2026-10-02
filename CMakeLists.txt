@@ -2270,8 +2270,36 @@ sys.exit(0 if ok else 1)")
     # which exercises api::encode_state with a CLI-equivalent option
     # set (--apply-tuning fills in dither_tuning defaults).
     # ---------------------------------------------------------------
+    add_test(NAME ehb-pairs-contract
+        COMMAND api_pipeline_smoke --check-ehb-pairs ${CMAKE_SOURCE_DIR}/examples/maui.jpg)
+
+    add_test(NAME palette-pairs-contract
+        COMMAND api_pipeline_smoke --check-palette-pairs ${CMAKE_SOURCE_DIR}/examples/maui.jpg)
+
     set(_equiv_chk
         "${PNG2AMIGA_PYTHON};${CMAKE_SOURCE_DIR}/tools/check_api_equiv.py;--cli;$<TARGET_FILE:png2amiga>;--api;$<TARGET_FILE:api_pipeline_smoke>")
+    foreach(_pair_depth RANGE 2 8)
+        if(_pair_depth GREATER 5)
+            set(_pair_chipset aga)
+        else()
+            set(_pair_chipset ocs)
+        endif()
+        add_test(NAME "api-equiv-palette-pairs-d${_pair_depth}"
+            COMMAND ${_equiv_chk} --in ${CMAKE_SOURCE_DIR}/examples/maui.jpg
+                -- --mode lores --depth ${_pair_depth} --chipset ${_pair_chipset}
+                --dither opt-checker)
+    endforeach()
+
+    foreach(_low_mode hires lores-lace hires-lace)
+        foreach(_low_depth 2 3)
+            add_test(NAME "api-equiv-palette-fit-${_low_mode}-d${_low_depth}"
+                COMMAND ${_equiv_chk} --in ${CMAKE_SOURCE_DIR}/examples/maui.jpg
+                    -- --mode ${_low_mode} --depth ${_low_depth} --dither opt-checker)
+        endforeach()
+    endforeach()
+    add_test(NAME "api-equiv-palette-fit-hires-aga-d8"
+        COMMAND ${_equiv_chk} --in ${CMAKE_SOURCE_DIR}/examples/maui.jpg
+            -- --mode hires --depth 8 --chipset aga --dither opt-checker)
 
     add_test(NAME "ham6-beam-held-colors"
         COMMAND $<TARGET_FILE:api_pipeline_smoke> --check-ham-beam)
@@ -2312,6 +2340,12 @@ sys.exit(0 if ok else 1)")
     # and strips EHB byte-match the api smoke. ehb+sliced + hires still
     # use inline pipelines; their api-equiv tests land when those branches
     # migrate too.
+    add_test(NAME "api-equiv-ehb-opt-checker"
+        COMMAND ${_equiv_chk} --in ${CMAKE_SOURCE_DIR}/examples/maui.jpg
+            -- --mode ehb --dither opt-checker)
+    add_test(NAME "api-equiv-ehb-dbs"
+        COMMAND ${_equiv_chk} --in ${CMAKE_SOURCE_DIR}/examples/maui.jpg
+            -- --mode ehb --dither dbs)
     add_test(NAME "api-equiv-ehb-plain"
         COMMAND ${_equiv_chk}
             --in ${_pal_makena_in}
