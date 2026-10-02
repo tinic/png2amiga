@@ -21,6 +21,7 @@
 #include "sms.hpp"
 #include "c64_prg.hpp"
 #include "thomson.hpp"
+#include "thomson_palette_refine.hpp"
 #include "ted.hpp"
 #include "snes_io.hpp"
 #include "palette.hpp"
@@ -2196,6 +2197,8 @@ Result<PipelineResult> run_pipeline(const std::uint8_t* input_data,
             }
         } else {
             enc = thomson::encode(*image, mode, dith, {}, nullptr, options.cell_refine);
+            if (enc && mode == amiga::Mode::thomson_to8_320x16)
+                enc = thomson::refine_palette(*image, std::move(*enc), dith, options.cell_refine);
         }
         if (!enc) return std::unexpected{enc.error()};
 

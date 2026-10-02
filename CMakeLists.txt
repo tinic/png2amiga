@@ -2270,6 +2270,13 @@ sys.exit(0 if ok else 1)")
     # which exercises api::encode_state with a CLI-equivalent option
     # set (--apply-tuning fills in dither_tuning defaults).
     # ---------------------------------------------------------------
+    foreach(_to8_method opt-checker floyd-steinberg)
+        foreach(_to8_cells 0 1)
+            add_test(NAME "to8-palette-${_to8_method}-cells${_to8_cells}"
+                COMMAND api_pipeline_smoke --check-to8-palette
+                    ${CMAKE_SOURCE_DIR}/examples/maui.jpg ${_to8_method} ${_to8_cells})
+        endforeach()
+    endforeach()
     add_test(NAME ehb-pairs-contract
         COMMAND api_pipeline_smoke --check-ehb-pairs ${CMAKE_SOURCE_DIR}/examples/maui.jpg)
 

@@ -31,14 +31,27 @@ inline double dot(Color3f a, Color3f b) {
            static_cast<double>(a.g) * static_cast<double>(b.g) +
            static_cast<double>(a.b) * static_cast<double>(b.b);
 }
-inline Color3f snap(Color3f c, bool aga) {
+inline int thomson_code(Color3f c) {
+    auto channel = [](float v) {
+        return palette::thomson_channel_index(static_cast<int>(
+            std::lround(std::clamp(color_space::linear_to_srgb(v), 0.0f, 1.0f) * 255.0f)));
+    };
+    return (channel(c.r) << 8) | (channel(c.g) << 4) | channel(c.b);
+}
+inline Color3f snap(Color3f c, bool aga, bool to8 = false) {
+    if (to8) {
+        int code = thomson_code(c);
+        return color_space::srgb_hex_to_linear(
+            palette::thomson_rgb_hex(code >> 8, (code >> 4) & 15, code & 15));
+    }
     return aga ? palette::aga_to_linear(palette::linear_to_aga(c)) : palette::quantize_to_ocs(c);
 }
-inline std::vector<int> key(std::span<const Color3f> colors, bool aga) {
+inline std::vector<int> key(std::span<const Color3f> colors, bool aga, bool to8 = false) {
     std::vector<int> result;
     for (auto c : colors)
-        result.push_back(aga ? static_cast<int>(palette::linear_to_aga(c))
-                             : palette::linear_to_ocs(c));
+        result.push_back(to8   ? thomson_code(c)
+                         : aga ? static_cast<int>(palette::linear_to_aga(c))
+                               : palette::linear_to_ocs(c));
     return result;
 }
 inline std::vector<Proposal> proposals(const Image& source,
@@ -47,7 +60,8 @@ inline std::vector<Proposal> proposals(const Image& source,
                                        bool lab,
                                        bool aga,
                                        bool ehb = false,
-                                       bool paired = true) {
+                                       bool paired = true,
+                                       bool to8 = false) {
     const auto w = source.width(), h = source.height(), n = w * h,
                k = ehb ? std::size_t{32} : f.palette.size();
     std::vector<double> gram(k * k, 0);
@@ -89,7 +103,7 @@ inline std::vector<Proposal> proposals(const Image& source,
         }
     }
     std::vector<Proposal> out;
-    const auto original_key = key(std::span(f.palette).first(k), aga);
+    const auto original_key = key(std::span(f.palette).first(k), aga, to8);
     const auto unique_before = std::set<int>(original_key.begin(), original_key.end()).size();
     std::set<std::vector<int>> seen;
     for (std::size_t a = 0; a < k; ++a) {
@@ -108,13 +122,13 @@ inline std::vector<Proposal> proposals(const Image& source,
                       static_cast<float>(1 / det);
             for (float step : {0.5f, 1.0f, 1.5f}) {
                 auto pal = f.palette;
-                pal[a] = snap(unspace(colors[a] + da * step, lab), aga);
-                if (paired) pal[b] = snap(unspace(colors[b] + db * step, lab), aga);
+                pal[a] = snap(unspace(colors[a] + da * step, lab), aga, to8);
+                if (paired) pal[b] = snap(unspace(colors[b] + db * step, lab), aga, to8);
                 if (ehb) {
                     pal[a + 32] = palette::half_brite(pal[a]);
                     pal[b + 32] = palette::half_brite(pal[b]);
                 }
-                auto ka = key(std::span(pal).first(k), aga);
+                auto ka = key(std::span(pal).first(k), aga, to8);
                 if (ka == original_key || !seen.insert(ka).second ||
                     std::set<int>(ka.begin(), ka.end()).size() < unique_before)
                     continue;

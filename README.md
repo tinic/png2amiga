@@ -305,6 +305,14 @@ and its hardware-derived half-bright partner. The selected dither and locks
 are preserved; `--best`, user palettes, reserves, transparency, and
 sliced/striped EHB retain their existing paths.
 
+TO8 forme-couleur (`thomson-to8-320x16`) now also automatically selects the
+best of its original palette, single-color fitting, and paired fitting. With
+`--cell-refine`, it additionally compares fitting the palette before refining
+cells. Every candidate uses the selected dither and is fully encoded with
+TO8's intensity table and two-color-per-8×1-cell restriction; S2 selects the
+winner. This can be substantially slower with cell refinement enabled.
+TO7's fixed palette, TO8 bitmap modes, and `--best` retain their existing paths.
+
 `--cell-refine` optionally refines colors and pixel patterns across cell
 boundaries in TO7/70, TO8 forme-couleur, CGA text, all C64 modes, and TED
 hires/multicolor. Short two-color cells and CGA glyphs use a global 3×3

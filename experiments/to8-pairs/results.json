@@ -1,0 +1,578 @@
+[
+  {
+    "baseline": 2.8998525142669678,
+    "cell_refine": false,
+    "dither": "opt-checker",
+    "dither_strength": 0.8500000238418579,
+    "input": "examples/asterix.png",
+    "mode": "to8",
+    "paired": {
+      "accepted_rounds": 2,
+      "evaluations": 14,
+      "gain": 1.6513569355010986,
+      "s2": 4.551209449768066,
+      "seconds": 0.245861917
+    },
+    "single": {
+      "accepted_rounds": 2,
+      "evaluations": 15,
+      "gain": 1.7584450244903564,
+      "s2": 4.658297538757324,
+      "seconds": 0.238223333
+    },
+    "directory": "opt-checker-cells0-asterix",
+    "best_gain": 1.7584450244903564
+  },
+  {
+    "baseline": -64.16374969482422,
+    "cell_refine": false,
+    "dither": "opt-checker",
+    "dither_strength": 0.8500000238418579,
+    "input": "examples/grungy.png",
+    "mode": "to8",
+    "paired": {
+      "accepted_rounds": 0,
+      "evaluations": 2,
+      "gain": 0.0,
+      "s2": -64.16374969482422,
+      "seconds": 0.036635792
+    },
+    "single": {
+      "accepted_rounds": 0,
+      "evaluations": 3,
+      "gain": 0.0,
+      "s2": -64.16374969482422,
+      "seconds": 0.051214333
+    },
+    "directory": "opt-checker-cells0-grungy",
+    "best_gain": 0.0
+  },
+  {
+    "baseline": -17.04967498779297,
+    "cell_refine": false,
+    "dither": "opt-checker",
+    "dither_strength": 0.8500000238418579,
+    "input": "examples/makena.jpg",
+    "mode": "to8",
+    "paired": {
+      "accepted_rounds": 2,
+      "evaluations": 13,
+      "gain": 2.2568531036376953,
+      "s2": -14.792821884155273,
+      "seconds": 0.225637959
+    },
+    "single": {
+      "accepted_rounds": 2,
+      "evaluations": 11,
+      "gain": 1.8887624740600586,
+      "s2": -15.16091251373291,
+      "seconds": 0.173485542
+    },
+    "directory": "opt-checker-cells0-makena",
+    "best_gain": 2.2568531036376953
+  },
+  {
+    "baseline": -24.241439819335938,
+    "cell_refine": false,
+    "dither": "opt-checker",
+    "dither_strength": 0.8500000238418579,
+    "input": "examples/maui.jpg",
+    "mode": "to8",
+    "paired": {
+      "accepted_rounds": 2,
+      "evaluations": 16,
+      "gain": 1.3788681030273438,
+      "s2": -22.862571716308594,
+      "seconds": 0.250365
+    },
+    "single": {
+      "accepted_rounds": 2,
+      "evaluations": 13,
+      "gain": 0.7851676940917969,
+      "s2": -23.45627212524414,
+      "seconds": 0.2314145
+    },
+    "directory": "opt-checker-cells0-maui",
+    "best_gain": 1.3788681030273438
+  },
+  {
+    "baseline": -15.122536659240723,
+    "cell_refine": false,
+    "dither": "opt-checker",
+    "dither_strength": 0.8500000238418579,
+    "input": "examples/photo.jpg",
+    "mode": "to8",
+    "paired": {
+      "accepted_rounds": 2,
+      "evaluations": 16,
+      "gain": 7.904494285583496,
+      "s2": -7.218042373657227,
+      "seconds": 0.2369045
+    },
+    "single": {
+      "accepted_rounds": 2,
+      "evaluations": 16,
+      "gain": 8.062097549438477,
+      "s2": -7.060439109802246,
+      "seconds": 0.239048666
+    },
+    "directory": "opt-checker-cells0-photo",
+    "best_gain": 8.062097549438477
+  },
+  {
+    "baseline": -45.17454147338867,
+    "cell_refine": false,
+    "dither": "opt-checker",
+    "dither_strength": 0.8500000238418579,
+    "input": "examples/ramps.png",
+    "mode": "to8",
+    "paired": {
+      "accepted_rounds": 2,
+      "evaluations": 6,
+      "gain": 4.273921966552734,
+      "s2": -40.90061950683594,
+      "seconds": 0.092459417
+    },
+    "single": {
+      "accepted_rounds": 2,
+      "evaluations": 15,
+      "gain": 4.273921966552734,
+      "s2": -40.90061950683594,
+      "seconds": 0.212711958
+    },
+    "directory": "opt-checker-cells0-ramps",
+    "best_gain": 4.273921966552734
+  },
+  {
+    "baseline": 31.40838623046875,
+    "cell_refine": true,
+    "dither": "opt-checker",
+    "dither_strength": 0.8500000238418579,
+    "input": "examples/asterix.png",
+    "mode": "to8",
+    "paired": {
+      "accepted_rounds": 2,
+      "evaluations": 16,
+      "gain": 1.5797805786132812,
+      "s2": 32.98816680908203,
+      "seconds": 12.045163458
+    },
+    "single": {
+      "accepted_rounds": 2,
+      "evaluations": 16,
+      "gain": 1.2688026428222656,
+      "s2": 32.677188873291016,
+      "seconds": 11.789326666
+    },
+    "directory": "opt-checker-cells1-asterix",
+    "best_gain": 1.5797805786132812
+  },
+  {
+    "baseline": -45.60886764526367,
+    "cell_refine": true,
+    "dither": "opt-checker",
+    "dither_strength": 0.8500000238418579,
+    "input": "examples/grungy.png",
+    "mode": "to8",
+    "paired": {
+      "accepted_rounds": 0,
+      "evaluations": 4,
+      "gain": 0.0,
+      "s2": -45.60886764526367,
+      "seconds": 2.7317375
+    },
+    "single": {
+      "accepted_rounds": 0,
+      "evaluations": 4,
+      "gain": 0.0,
+      "s2": -45.60886764526367,
+      "seconds": 2.718602042
+    },
+    "directory": "opt-checker-cells1-grungy",
+    "best_gain": 0.0
+  },
+  {
+    "baseline": 18.600074768066406,
+    "cell_refine": true,
+    "dither": "opt-checker",
+    "dither_strength": 0.8500000238418579,
+    "input": "examples/makena.jpg",
+    "mode": "to8",
+    "paired": {
+      "accepted_rounds": 2,
+      "evaluations": 16,
+      "gain": 1.4952392578125,
+      "s2": 20.095314025878906,
+      "seconds": 11.277058209
+    },
+    "single": {
+      "accepted_rounds": 2,
+      "evaluations": 16,
+      "gain": 1.1765022277832031,
+      "s2": 19.77657699584961,
+      "seconds": 11.28791725
+    },
+    "directory": "opt-checker-cells1-makena",
+    "best_gain": 1.4952392578125
+  },
+  {
+    "baseline": 11.492096900939941,
+    "cell_refine": true,
+    "dither": "opt-checker",
+    "dither_strength": 0.8500000238418579,
+    "input": "examples/maui.jpg",
+    "mode": "to8",
+    "paired": {
+      "accepted_rounds": 2,
+      "evaluations": 16,
+      "gain": 1.3611087799072266,
+      "s2": 12.853205680847168,
+      "seconds": 11.912625125
+    },
+    "single": {
+      "accepted_rounds": 2,
+      "evaluations": 16,
+      "gain": 0.8612346649169922,
+      "s2": 12.353331565856934,
+      "seconds": 11.628465792
+    },
+    "directory": "opt-checker-cells1-maui",
+    "best_gain": 1.3611087799072266
+  },
+  {
+    "baseline": 15.294778823852539,
+    "cell_refine": true,
+    "dither": "opt-checker",
+    "dither_strength": 0.8500000238418579,
+    "input": "examples/photo.jpg",
+    "mode": "to8",
+    "paired": {
+      "accepted_rounds": 0,
+      "evaluations": 8,
+      "gain": 0.0,
+      "s2": 15.294778823852539,
+      "seconds": 5.705266334
+    },
+    "single": {
+      "accepted_rounds": 2,
+      "evaluations": 16,
+      "gain": 1.3485164642333984,
+      "s2": 16.643295288085938,
+      "seconds": 11.036976708
+    },
+    "directory": "opt-checker-cells1-photo",
+    "best_gain": 1.3485164642333984
+  },
+  {
+    "baseline": -0.0343618281185627,
+    "cell_refine": true,
+    "dither": "opt-checker",
+    "dither_strength": 0.8500000238418579,
+    "input": "examples/ramps.png",
+    "mode": "to8",
+    "paired": {
+      "accepted_rounds": 2,
+      "evaluations": 16,
+      "gain": 5.914760112762451,
+      "s2": 5.880398273468018,
+      "seconds": 11.015151625
+    },
+    "single": {
+      "accepted_rounds": 2,
+      "evaluations": 16,
+      "gain": 6.4202399253845215,
+      "s2": 6.385878086090088,
+      "seconds": 10.995044417
+    },
+    "directory": "opt-checker-cells1-ramps",
+    "best_gain": 6.4202399253845215
+  },
+  {
+    "baseline": 14.809326171875,
+    "cell_refine": false,
+    "dither": "floyd-steinberg",
+    "dither_strength": 0.7599999904632568,
+    "input": "examples/asterix.png",
+    "mode": "to8",
+    "paired": {
+      "accepted_rounds": 2,
+      "evaluations": 14,
+      "gain": 0.8017539978027344,
+      "s2": 15.611080169677734,
+      "seconds": 0.253221167
+    },
+    "single": {
+      "accepted_rounds": 2,
+      "evaluations": 15,
+      "gain": 0.4890155792236328,
+      "s2": 15.298341751098633,
+      "seconds": 0.270011167
+    },
+    "directory": "floyd-steinberg-cells0-asterix",
+    "best_gain": 0.8017539978027344
+  },
+  {
+    "baseline": -42.90752410888672,
+    "cell_refine": false,
+    "dither": "floyd-steinberg",
+    "dither_strength": 0.7599999904632568,
+    "input": "examples/grungy.png",
+    "mode": "to8",
+    "paired": {
+      "accepted_rounds": 1,
+      "evaluations": 3,
+      "gain": 0.054065704345703125,
+      "s2": -42.853458404541016,
+      "seconds": 0.066345334
+    },
+    "single": {
+      "accepted_rounds": 1,
+      "evaluations": 2,
+      "gain": 0.25141143798828125,
+      "s2": -42.65611267089844,
+      "seconds": 0.049253542
+    },
+    "directory": "floyd-steinberg-cells0-grungy",
+    "best_gain": 0.25141143798828125
+  },
+  {
+    "baseline": 0.5123091340065002,
+    "cell_refine": false,
+    "dither": "floyd-steinberg",
+    "dither_strength": 0.7599999904632568,
+    "input": "examples/makena.jpg",
+    "mode": "to8",
+    "paired": {
+      "accepted_rounds": 2,
+      "evaluations": 9,
+      "gain": 2.622183084487915,
+      "s2": 3.1344921588897705,
+      "seconds": 0.3067755
+    },
+    "single": {
+      "accepted_rounds": 2,
+      "evaluations": 10,
+      "gain": 2.1583051681518555,
+      "s2": 2.670614242553711,
+      "seconds": 0.180961125
+    },
+    "directory": "floyd-steinberg-cells0-makena",
+    "best_gain": 2.622183084487915
+  },
+  {
+    "baseline": -5.030442237854004,
+    "cell_refine": false,
+    "dither": "floyd-steinberg",
+    "dither_strength": 0.7599999904632568,
+    "input": "examples/maui.jpg",
+    "mode": "to8",
+    "paired": {
+      "accepted_rounds": 2,
+      "evaluations": 11,
+      "gain": 1.5974164009094238,
+      "s2": -3.43302583694458,
+      "seconds": 0.346727208
+    },
+    "single": {
+      "accepted_rounds": 2,
+      "evaluations": 12,
+      "gain": 1.4230523109436035,
+      "s2": -3.6073899269104004,
+      "seconds": 0.219385833
+    },
+    "directory": "floyd-steinberg-cells0-maui",
+    "best_gain": 1.5974164009094238
+  },
+  {
+    "baseline": 3.971790075302124,
+    "cell_refine": false,
+    "dither": "floyd-steinberg",
+    "dither_strength": 0.7599999904632568,
+    "input": "examples/photo.jpg",
+    "mode": "to8",
+    "paired": {
+      "accepted_rounds": 2,
+      "evaluations": 12,
+      "gain": 15.1505126953125,
+      "s2": 19.122303009033203,
+      "seconds": 0.21194775
+    },
+    "single": {
+      "accepted_rounds": 2,
+      "evaluations": 13,
+      "gain": 7.670021057128906,
+      "s2": 11.64181137084961,
+      "seconds": 0.228355833
+    },
+    "directory": "floyd-steinberg-cells0-photo",
+    "best_gain": 15.1505126953125
+  },
+  {
+    "baseline": -13.007988929748535,
+    "cell_refine": false,
+    "dither": "floyd-steinberg",
+    "dither_strength": 0.7599999904632568,
+    "input": "examples/ramps.png",
+    "mode": "to8",
+    "paired": {
+      "accepted_rounds": 0,
+      "evaluations": 0,
+      "gain": 0.0,
+      "s2": -13.007988929748535,
+      "seconds": 0.007628958
+    },
+    "single": {
+      "accepted_rounds": 2,
+      "evaluations": 15,
+      "gain": 6.325996398925781,
+      "s2": -6.681992530822754,
+      "seconds": 0.241643875
+    },
+    "directory": "floyd-steinberg-cells0-ramps",
+    "best_gain": 6.325996398925781
+  },
+  {
+    "baseline": 34.354217529296875,
+    "cell_refine": true,
+    "dither": "floyd-steinberg",
+    "dither_strength": 0.7599999904632568,
+    "input": "examples/asterix.png",
+    "mode": "to8",
+    "paired": {
+      "accepted_rounds": 2,
+      "evaluations": 16,
+      "gain": 1.2565841674804688,
+      "s2": 35.610801696777344,
+      "seconds": 5.063285333
+    },
+    "single": {
+      "accepted_rounds": 2,
+      "evaluations": 16,
+      "gain": 0.68731689453125,
+      "s2": 35.041534423828125,
+      "seconds": 5.298073541
+    },
+    "directory": "floyd-steinberg-cells1-asterix",
+    "best_gain": 1.2565841674804688
+  },
+  {
+    "baseline": -32.002010345458984,
+    "cell_refine": true,
+    "dither": "floyd-steinberg",
+    "dither_strength": 0.7599999904632568,
+    "input": "examples/grungy.png",
+    "mode": "to8",
+    "paired": {
+      "accepted_rounds": 0,
+      "evaluations": 4,
+      "gain": 0.0,
+      "s2": -32.002010345458984,
+      "seconds": 1.259866959
+    },
+    "single": {
+      "accepted_rounds": 0,
+      "evaluations": 4,
+      "gain": 0.0,
+      "s2": -32.002010345458984,
+      "seconds": 1.262006
+    },
+    "directory": "floyd-steinberg-cells1-grungy",
+    "best_gain": 0.0
+  },
+  {
+    "baseline": 24.101558685302734,
+    "cell_refine": true,
+    "dither": "floyd-steinberg",
+    "dither_strength": 0.7599999904632568,
+    "input": "examples/makena.jpg",
+    "mode": "to8",
+    "paired": {
+      "accepted_rounds": 2,
+      "evaluations": 16,
+      "gain": 2.25738525390625,
+      "s2": 26.358943939208984,
+      "seconds": 4.955952
+    },
+    "single": {
+      "accepted_rounds": 2,
+      "evaluations": 16,
+      "gain": 1.6893672943115234,
+      "s2": 25.790925979614258,
+      "seconds": 5.027953958
+    },
+    "directory": "floyd-steinberg-cells1-makena",
+    "best_gain": 2.25738525390625
+  },
+  {
+    "baseline": 21.712661743164062,
+    "cell_refine": true,
+    "dither": "floyd-steinberg",
+    "dither_strength": 0.7599999904632568,
+    "input": "examples/maui.jpg",
+    "mode": "to8",
+    "paired": {
+      "accepted_rounds": 2,
+      "evaluations": 16,
+      "gain": 1.911062240600586,
+      "s2": 23.62372398376465,
+      "seconds": 4.954355667
+    },
+    "single": {
+      "accepted_rounds": 2,
+      "evaluations": 16,
+      "gain": 2.002765655517578,
+      "s2": 23.71542739868164,
+      "seconds": 5.011887791
+    },
+    "directory": "floyd-steinberg-cells1-maui",
+    "best_gain": 2.002765655517578
+  },
+  {
+    "baseline": 17.956838607788086,
+    "cell_refine": true,
+    "dither": "floyd-steinberg",
+    "dither_strength": 0.7599999904632568,
+    "input": "examples/photo.jpg",
+    "mode": "to8",
+    "paired": {
+      "accepted_rounds": 2,
+      "evaluations": 16,
+      "gain": 4.497869491577148,
+      "s2": 22.454708099365234,
+      "seconds": 4.803824166
+    },
+    "single": {
+      "accepted_rounds": 2,
+      "evaluations": 15,
+      "gain": 2.9526596069335938,
+      "s2": 20.90949821472168,
+      "seconds": 4.638623958
+    },
+    "directory": "floyd-steinberg-cells1-photo",
+    "best_gain": 4.497869491577148
+  },
+  {
+    "baseline": -2.0040159225463867,
+    "cell_refine": true,
+    "dither": "floyd-steinberg",
+    "dither_strength": 0.7599999904632568,
+    "input": "examples/ramps.png",
+    "mode": "to8",
+    "paired": {
+      "accepted_rounds": 2,
+      "evaluations": 14,
+      "gain": 7.972352981567383,
+      "s2": 5.968337059020996,
+      "seconds": 3.898407542
+    },
+    "single": {
+      "accepted_rounds": 2,
+      "evaluations": 16,
+      "gain": 10.045291900634766,
+      "s2": 8.041275978088379,
+      "seconds": 4.539627416
+    },
+    "directory": "floyd-steinberg-cells1-ramps",
+    "best_gain": 10.045291900634766
+  }
+]

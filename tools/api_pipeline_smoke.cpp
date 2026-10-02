@@ -27,6 +27,7 @@
 #include "check_ordered_refine.hpp"
 #include "check_palette_pairs.hpp"
 #include "check_ehb_pairs.hpp"
+#include "check_to8_palette.hpp"
 #include "ham.hpp"
 #include "png_io.hpp"
 #include <nlohmann/json.hpp>
@@ -118,6 +119,9 @@ int check_ham_beam() {
 }  // namespace
 
 int main(int argc, char** argv) {
+    if ((argc == 5 || argc == 6) && std::strcmp(argv[1], "--check-to8-palette") == 0)
+        return check_to8_palette(argv[2],argv[3],std::string_view(argv[4]) == "1",
+                                 argc == 6 ? std::stof(argv[5]) : -1e30f);
     if (argc == 3 && std::strcmp(argv[1], "--check-ehb-pairs") == 0)
         return check_ehb_pairs(argv[2]);
     if (argc == 3 && std::strcmp(argv[1], "--check-palette-pairs") == 0)
