@@ -1302,8 +1302,7 @@ Result<ScapResult> encode_strips_dpf_ocs(
                     mutable_color[k] = k >= k_min && !reserved_mask_dpf[k] &&
                                        external_palette.empty();
                 }
-                std::vector<std::array<std::size_t, kBaseColors>> variables(num_strips);
-                variables[0] = active;
+                std::vector<std::array<std::size_t, kBaseColors>> variables(num_strips, active);
                 for (std::size_t s = 0; s < table.slots.size(); ++s) {
                     int reg = best.dec_reg[s];
                     if (reg >= 0) {
