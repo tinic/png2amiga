@@ -6,7 +6,7 @@ set -e
 cd "$(cd "$(dirname "$0")/.." && pwd)"
 
 echo "Building WASM..."
-emcmake cmake -B build-wasm -DCMAKE_BUILD_TYPE=Release .
+emcmake cmake -B build-wasm -DCMAKE_BUILD_TYPE=Release -DCMAKE_CXX_SCAN_FOR_MODULES=OFF .
 # --parallel matters more since the SIMD and scalar variants are two full
 # LTO links of the same sources.
 cmake --build build-wasm --parallel
@@ -20,6 +20,7 @@ if [ ! -d node_modules ] || [ package-lock.json -nt node_modules ]; then
   npm ci --no-audit --no-fund
 fi
 npm run build
+python3 ../tools/web-assets-manifest.py write
 
 echo "Done. Output in service/html/"
 ls -lh ../service/html/index.html ../service/html/assets/*.wasm

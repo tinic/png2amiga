@@ -15,7 +15,7 @@ function readProjectVersion(): string {
   // already populated it from `git rev-list --count HEAD`) instead of
   // shelling out, so vite needn't spawn git itself.
   let full = semver
-  const versionHpp = path.resolve(__dirname, '../build/generated/version.hpp')
+  const versionHpp = path.resolve(__dirname, '../build-wasm/generated/version.hpp')
   if (fs.existsSync(versionHpp)) {
     const txt = fs.readFileSync(versionHpp, 'utf8')
     const m2 = txt.match(/version\s*=\s*"(\d+\.\d+\.\d+\.\d+)"/)

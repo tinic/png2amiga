@@ -11,8 +11,18 @@ permissions:
   contents: read
 
 jobs:
+  verify-web-assets:
+    name: Verify committed web assets
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          submodules: true
+      - run: python3 tools/web-assets-manifest.py check
+
   build-linux:
     name: Build Linux (x86_64)
+    needs: verify-web-assets
     runs-on: ubuntu-24.04
     # Run inside the official gcc:15 Docker image (Debian trixie base).
     # Sidesteps Ubuntu's launchpad PPA flakes that the
@@ -56,6 +66,7 @@ jobs:
 
   build-macos:
     name: Build macOS (arm64)
+    needs: verify-web-assets
     runs-on: macos-latest
     steps:
       - uses: actions/checkout@v5
@@ -97,6 +108,7 @@ jobs:
 
   build-windows:
     name: Build Windows (x86_64)
+    needs: verify-web-assets
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v5
