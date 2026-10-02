@@ -177,7 +177,7 @@ release — same features, somewhat slower. Building one on any platform:
 ./build/png2amiga --mode ham6 input.png viewer.cpp
 ./build-amiga.sh viewer.cpp viewer.adf
 
-# Launch in fs-uae (A1200 by default)
+# Launch in Amiberry (A1200 by default; install Amiberry separately)
 ./run-amiga.sh viewer.adf
 ./run-amiga.sh viewer.adf A500 ntsc
 
@@ -415,12 +415,36 @@ Two strip modes:
 * **EHB + strips** (`--mode ehb --strips`) — OCS Extra Half-Brite, 32
   base registers + 32 hardware-derived half-brites. Each base swap also
   updates the matching half-brite slot via the hardware DAC. Adaptive
-  per-line hblank tracking keeps each line inside the 14-MOVE OCS hblank
+  per-line hblank tracking keeps each line inside the 13-MOVE EHB hblank
   budget. ~1100+ unique displayed colors per frame.
 
-Both modes are OCS-only, lores, no interlace. The planner runs 6
-iterative refinement passes alternating index dither and mid-line swap
-selection. Slot positions were calibrated empirically on real OCS
+Both modes are OCS-only, lores, no interlace. The DPF planner uses a
+64-state beam with two-strip lookahead, allowing a color to be loaded
+before the pixels that need it. It then performs up to four palette
+refinement iterations: each initial or mid-line color is fitted to the
+pixels selecting that register over its entire lifetime, until the next
+overwrite. Refinement preserves locked colors and the copper schedule;
+it is disabled for partial hblank resets (`--slice-changes N`). The final
+dither runs against the resulting per-strip palettes. Candidate colors
+are deduplicated by their actual RGB444 codes, preserving dark shades.
+EHB uses the same two-strip lookahead with a two-state beam. Its lifetime
+refinement jointly fits base and half-brite pixels by testing all 4096
+RGB444 colors with the hardware's truncating half-brite operation. The
+sliced entry palette remains fixed, and refinement preserves the next
+line's reset budget (at most 13 hblank and 18 visible MOVEs per line).
+EHB delays next-row resets until horizontal position `$E1`, after the
+visible right edge, and preserves `COLOR00` when black-border locking
+is enabled.
+Both planners run once; repeating the old outer loop did not feed back
+new information.
+
+At each write boundary, a guard avoids selecting the register being
+changed (including its half-brite index in EHB). DPF guards one pixel
+on either side; EHB guards three, covering the earlier transitions seen
+in the Amiberry timing probe. Previews and S2 scores include these
+constraints.
+
+Slot positions were calibrated empirically on real OCS
 hardware via `--strips-probe` (see `src/strips.hpp`); the published
 hardware budget is ~14 hblank MOVEs + ~20 visible-area MOVEs per line in
 6-plane modes, and the calibrated slot tables sit comfortably within
@@ -564,6 +588,11 @@ The project includes
 as a submodule, which provides the `m68k-amiga-elf-gcc` cross-compiler,
 `elf2hunk`, `exe2adf`, `fs-uae`, and AmigaOS SDK headers — everything
 needed to produce bootable disk images locally.
+
+`run-amiga.sh` launches the separately installed Amiberry emulator. It
+looks on `PATH` and in the standard macOS Applications folders; set
+`AMIBERRY_BIN` to use another executable. The default is an A1200;
+append `A500` and/or `ntsc` to select those settings.
 
 ```bash
 git submodule update --init

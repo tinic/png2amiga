@@ -100,7 +100,8 @@ void emit_strips_copper_list(std::string& out,
                                                 (op.hpos & 0xFE) | 0x0001);
                 w1 = 0xFFFE;
                 if (patch_wrap_at_eol && i == row.size() - 1) {
-                    w0 = 0xFFDF;
+                    // Never pull a later EOL wait back into visible pixels.
+                    w0 = std::max<std::uint16_t>(w0, 0xFFDF);
                 }
             } else {
                 auto reg = static_cast<unsigned>(op.reg & 0x1F);

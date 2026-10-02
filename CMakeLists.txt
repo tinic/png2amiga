@@ -2754,6 +2754,86 @@ sys.exit(0 if ok else 1)")
     _add_score_test(ste-low       out.pi1 36.1 --mode ste-low)
     _add_score_test(dpf           out.iff 11.0 --mode lores --dpf)
 
+    # DPF strips: dark shades expose candidate-key collisions; the ramp
+    # requires preloading future colors rather than only immediate gain.
+    # Leave margin below the measured S2 for compiler/platform variation.
+    foreach(_case IN ITEMS "chuck31|62" "grungy|57" "ramps|32")
+        string(REPLACE "|" ";" _parts "${_case}")
+        list(GET _parts 0 _image)
+        list(GET _parts 1 _min_s2)
+        add_test(NAME "output-score-dpf-strips-${_image}"
+            COMMAND ${_score_chk}
+                --in ${CMAKE_SOURCE_DIR}/examples/${_image}.png
+                --out out.png --score-min ${_min_s2}
+                -- --mode lores --dpf --strips --width 320 --height 200)
+    endforeach()
+    foreach(_case IN ITEMS "default" "locked" "partial-reset" "early" "late" "tall" "dbs-early")
+        set(_replay_args)
+        set(_replay_options)
+        if(_case STREQUAL "locked")
+            set(_replay_args --lock-index 15 00ff00)
+        elseif(_case STREQUAL "partial-reset")
+            set(_replay_args --slice-changes 2)
+        elseif(_case STREQUAL "early")
+            set(_replay_options --slot-shift -1)
+        elseif(_case STREQUAL "late")
+            set(_replay_options --slot-shift 1)
+        elseif(_case STREQUAL "tall")
+            set(_replay_options --height 249 --slot-shift 1)
+        elseif(_case STREQUAL "dbs-early")
+            set(_replay_options --slot-shift -1)
+            set(_replay_args --dither dbs)
+        endif()
+        add_test(NAME "dpf-strips-replay-${_case}"
+            COMMAND ${Python3_EXECUTABLE} ${CMAKE_SOURCE_DIR}/tools/check_strips_replay.py
+                --cli $<TARGET_FILE:png2amiga>
+                --in ${CMAKE_SOURCE_DIR}/examples/chuck31.png
+                ${_replay_options}
+                -- ${_replay_args})
+    endforeach()
+
+    # EHB must keep base/half-brite pairs consistent across copper writes.
+    foreach(_case IN ITEMS "default" "early" "late" "tall" "dbs" "reserved" "one-base" "budget")
+        set(_replay_args)
+        set(_replay_options)
+        if(_case STREQUAL "early")
+            set(_replay_options --slot-shift -3)
+        elseif(_case STREQUAL "late")
+            set(_replay_options --slot-shift 3)
+        elseif(_case STREQUAL "tall")
+            set(_replay_options --height 249 --slot-shift 3)
+        elseif(_case STREQUAL "dbs")
+            set(_replay_options --slot-shift -3)
+            set(_replay_args --dither dbs)
+        elseif(_case STREQUAL "reserved")
+            set(_replay_options --slot-shift 3)
+            set(_replay_args --reserve-range 28-31 ff00ff)
+        elseif(_case STREQUAL "one-base")
+            set(_replay_args --reserve-range 1-31 ff00ff)
+        elseif(_case STREQUAL "budget")
+            set(_replay_args --slice-changes 3)
+        endif()
+        add_test(NAME "ehb-strips-replay-${_case}"
+            COMMAND ${Python3_EXECUTABLE} ${CMAKE_SOURCE_DIR}/tools/check_strips_replay.py
+                --mode ehb --expect-black-border --cli $<TARGET_FILE:png2amiga>
+                --in ${CMAKE_SOURCE_DIR}/examples/grungy.png
+                ${_replay_options} -- ${_replay_args})
+    endforeach()
+    add_test(NAME "ehb-strips-replay-maui"
+        COMMAND ${Python3_EXECUTABLE} ${CMAKE_SOURCE_DIR}/tools/check_strips_replay.py
+            --mode ehb --expect-black-border --cli $<TARGET_FILE:png2amiga>
+            --in ${CMAKE_SOURCE_DIR}/examples/maui.jpg --height 160 --slot-shift -3)
+    foreach(_case IN ITEMS "ramps.png|68" "electrichues02.jpg|70" "ocs_4096.png|71")
+        string(REPLACE "|" ";" _parts "${_case}")
+        list(GET _parts 0 _image)
+        list(GET _parts 1 _min_s2)
+        add_test(NAME "output-score-ehb-strips-${_image}"
+            COMMAND ${_score_chk}
+                --in ${CMAKE_SOURCE_DIR}/examples/${_image}
+                --out out.png --score-min ${_min_s2}
+                -- --mode ehb --strips --width 320 --height 200)
+    endforeach()
+
 endif() # NOT EMSCRIPTEN
 
 # Mac-only convenience target: clang-tidy + cppcheck over src/ via tools/lint.sh.

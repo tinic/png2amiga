@@ -151,7 +151,7 @@ constexpr int kEHB = -1;
 inline const ScapSlotTable kStrips6bplEhb{
     /*total_planes=*/6,
     /*line_gate_hpos=*/0x3C,
-    /*end_of_line_hpos=*/0xDD,
+    /*end_of_line_hpos=*/0xE1,  // Keep next-row resets past the visible right edge.
     /*slots=*/
     {
         {8 - kEHB},   {24 - kEHB},  {40 - kEHB},  {56 - kEHB},  {72 - kEHB},

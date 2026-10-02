@@ -496,27 +496,13 @@ ScapMove make_move(std::uint8_t reg, std::uint16_t rgb_ocs, int slot_index = -1)
 // ---------------------------------------------------------------------------
 // Planner — OCS DPF, 6-plane lores 320 px.
 //
-// Two-stage approach to keep F-S texture flowing across the whole frame
-// while still letting each strip pick a palette tuned to its content:
-//
-//   Stage 1 (planning) — global F-S vs the 8-color base palette
-//   produces a per-pixel base_index whose distribution per strip drives
-//   the per-line MOVE planner. Each strip's swap is the OKLab centroid
-//   of the strip pixels currently assigned to one of its registers,
-//   chosen for biggest error reduction.
-//
-//   Stage 2 (rendering) — runs F-S a second time, but this time against
-//   the EVOLVING per-strip palette: for each pixel the nearest-color
-//   lookup uses strip_palettes[strip(x)], and residuals propagate
-//   through the standard F-S kernel across strip boundaries. Errors
-//   are in linear RGB so they discharge in whichever palette is active
-//   downstream — F-S texture is uniform; only the color rendition
-//   shifts at strip boundaries (and only by the amount the palette
-//   actually changed).
-//
-//   This combines:
-//     * uniform dither texture across the frame (no per-strip "blocks")
-//     * per-strip palette specialisation (good color fidelity)
+// Stage 1 seeds a sliced entry palette, then uses a bounded beam to choose
+// a register/color for each calibrated MOVE slot. Two-strip lookahead lets
+// a write prepare a color needed farther along the line. Under the default
+// full hblank reset, alternating assignments and RGB444 representatives
+// refines each color over its lifetime (until that register is overwritten).
+// Stage 2 dithers the whole image against these evolving palettes, so error
+// diffusion crosses strip and row boundaries without restarting its texture.
 // ---------------------------------------------------------------------------
 Result<ScapResult> encode_strips_dpf_ocs(
     const Image& image,
@@ -547,7 +533,8 @@ Result<ScapResult> encode_strips_dpf_ocs(
         // DPF: 24 jitter seeds — the 8-color PF2 palette is highly
         // sensitive to which colors win the median-cut, so heavy jitter
         // sampling buys more here than for wider palettes (EHB stays at
-        // 8). Total 5×4×24 + 1 = 481 trials, ~2–3 min on 8 cores.
+        // 8). best_sweep currently uses 5 strengths × 2 diversities × 24
+        // jitter seeds + 1 baseline = 241 trials.
         //
         // The beam (forward-look residual fill in encode_copper's sliced
         // base pass) was measured at +0.49 S2 on ocs_4096 and 0.0 S2
@@ -823,7 +810,10 @@ Result<ScapResult> encode_strips_dpf_ocs(
     for (std::size_t x = 0; x < width; ++x)
         x_strip[x] = static_cast<std::uint16_t>(strip_for_x(x));
 
-    constexpr int kPasses = 6;
+    // Planning has no feedback from the rendered indices: repeating this
+    // outer pass reproduced the same result six times. Register-lifetime
+    // refinement below now performs the actual alternating optimization.
+    constexpr int kPasses = 1;
     // run_row below executes inside pipeline::parallel_for, so report_pass
     // can be invoked concurrently from N worker threads. Without a mutex,
     // the per-thread on_progress invocations interleave on stdout.
@@ -1077,15 +1067,11 @@ Result<ScapResult> encode_strips_dpf_ocs(
                     ++strips[s].cnt[k];
                 }
                 std::array<bool, 4096> seen{};
-                auto ocs_key = [](const Color3f& c) {
-                    int r = static_cast<int>(std::lround(std::clamp(c.r, 0.0f, 1.0f) * 15.0f));
-                    int g = static_cast<int>(std::lround(std::clamp(c.g, 0.0f, 1.0f) * 15.0f));
-                    int b = static_cast<int>(std::lround(std::clamp(c.b, 0.0f, 1.0f) * 15.0f));
-                    return static_cast<std::size_t>((r << 8) | (g << 4) | b);
-                };
                 auto add_cand = [&](Color3f c) {
                     auto cs = palette::quantize_to_ocs(c);
-                    auto key = ocs_key(cs);
+                    // Deduplicate by the actual RGB444 code. Linear RGB * 15
+                    // merges distinct dark OCS colors (4096 codes -> 1728 keys).
+                    auto key = palette::linear_to_ocs(cs);
                     if (!seen[key]) {
                         seen[key] = true;
                         strips[s].cands.push_back(cs);
@@ -1101,6 +1087,26 @@ Result<ScapResult> encode_strips_dpf_ocs(
                                           static_cast<float>(suma[k] / cnt_d),
                                           static_cast<float>(sumb[k] / cnt_d)};
                     add_cand(color_space::oklab_to_linear(cd).clamped());
+                }
+            }
+
+            // Two-strip lookahead can preload a currently unused register.
+            // Rank with discounted future error while accumulating only the
+            // actual current-strip cost. At the final slot rank == total cost.
+            constexpr std::array<double, 2> kLookaheadWeights{0.6, 0.3};
+            // Make future colors available before the strip that needs them.
+            for (std::size_t s = 0; s < num_strips; ++s) {
+                std::array<bool, 4096> seen{};
+                for (const auto& c : strips[s].cands)
+                    seen[palette::linear_to_ocs(c)] = true;
+                for (std::size_t t = s + 1; t < std::min(num_strips, s + 3); ++t) {
+                    for (std::size_t c = 0; c < strips[t].cands.size(); ++c) {
+                        auto code = palette::linear_to_ocs(strips[t].cands[c]);
+                        if (seen[code]) continue;
+                        seen[code] = true;
+                        strips[s].cands.push_back(strips[t].cands[c]);
+                        strips[s].cands_lab.push_back(strips[t].cands_lab[c]);
+                    }
                 }
             }
 
@@ -1124,13 +1130,10 @@ Result<ScapResult> encode_strips_dpf_ocs(
                     return sum_pixel_min(tl_pixel_min_dpf.data(), soa.padded_n);
                 };
 
-            // Beam search params. Tuned by sweep across the test image set
-            // (lovers/photo/fromthe/space3/electrichues02). B=64 is the
-            // sweet spot for DPF: peak preview-PSNR (33.95 dB) at ~1s per
-            // 320×213 image. Wider beams (B=128, 192, 256) keep lowering
-            // planner error but PSNR plateaus — the planner's OKLab²
-            // metric drifts from blurred-sRGB PSNR past this point.
-            // K=16 saturates given 7 modifiable regs × kPerRegCap=4 = 28.
+            // Retain the bounded beam/branching budgets of the original
+            // planner. Wider immediate-error beams previously plateaued in
+            // rendered quality; future-aware ranking and lifetime refinement
+            // improve the objective without simply increasing beam width.
             constexpr std::size_t kBeamWidth = 64;
             constexpr std::size_t kCandsPerSlot = 16;
             struct BeamNode {
@@ -1139,6 +1142,7 @@ Result<ScapResult> encode_strips_dpf_ocs(
                 std::array<int, 32> dec_reg{};
                 std::array<Color3f, 32> dec_color{};
                 double cum_err = 0;
+                double rank_err = 0;
             };
             std::vector<BeamNode> beam(1);
             beam[0].P = P;
@@ -1157,10 +1161,16 @@ Result<ScapResult> encode_strips_dpf_ocs(
 
                 for (auto& state : beam) {
                     double filler_err = strip_empty ? 0.0 : strip_err_dither(s + 1, state.P_lab);
+                    double future_err = 0.0;
+                    for (std::size_t h = 1; h <= kLookaheadWeights.size() && s + 1 + h < num_strips;
+                         ++h)
+                        future_err += kLookaheadWeights[h - 1] *
+                                      strip_err_dither(s + 1 + h, state.P_lab);
                     {
                         BeamNode child = state;
                         child.dec_reg[s] = -1;
                         child.cum_err += filler_err;
+                        child.rank_err = child.cum_err + future_err;
                         next.push_back(child);
                     }
                     if (strip_empty) continue;
@@ -1175,6 +1185,7 @@ Result<ScapResult> encode_strips_dpf_ocs(
                         int reg;
                         std::size_t cand_idx;
                         double err;
+                        double rank;
                     };
                     std::vector<Move> moves;
                     moves.reserve(kBaseColors * st.cands.size());
@@ -1193,12 +1204,37 @@ Result<ScapResult> encode_strips_dpf_ocs(
                                             state.P_lab[k2].b,
                                             tl_pixel_min_dpf.data());
                         }
+                        std::array<std::vector<float>, kLookaheadWeights.size()> future_min;
+                        for (std::size_t h = 1;
+                             h <= kLookaheadWeights.size() && s + 1 + h < num_strips;
+                             ++h) {
+                            auto& future_soa = strip_pixels_soa[s + 1 + h];
+                            reset_pixel_min(future_min[h - 1], future_soa);
+                            for (std::size_t k2 = k_min; k2 < kBaseColors; ++k2) {
+                                if (k2 == k) continue;
+                                min_dist_update(future_soa,
+                                                state.P_lab[k2].L,
+                                                state.P_lab[k2].a,
+                                                state.P_lab[k2].b,
+                                                future_min[h - 1].data());
+                            }
+                        }
                         for (std::size_t ci = 0; ci < st.cands.size(); ++ci) {
                             auto& c_lab = st.cands_lab[ci];
                             double e = dist_min1_sum(
                                 soa_pixels, tl_pixel_min_dpf.data(), c_lab.L, c_lab.a, c_lab.b);
-                            if (e >= filler_err) continue;
-                            moves.push_back({static_cast<int>(k), ci, e});
+                            double rank = e;
+                            for (std::size_t h = 1;
+                                 h <= kLookaheadWeights.size() && s + 1 + h < num_strips;
+                                 ++h)
+                                rank += kLookaheadWeights[h - 1] *
+                                        dist_min1_sum(strip_pixels_soa[s + 1 + h],
+                                                      future_min[h - 1].data(),
+                                                      c_lab.L,
+                                                      c_lab.a,
+                                                      c_lab.b);
+                            if (rank >= filler_err + future_err) continue;
+                            moves.push_back({static_cast<int>(k), ci, e, rank});
                         }
                     }
                     // Per-state per-register cap so beam expansion covers
@@ -1206,7 +1242,7 @@ Result<ScapResult> encode_strips_dpf_ocs(
                     // all target the same dominant register with slight
                     // color variations.
                     std::sort(moves.begin(), moves.end(), [](const Move& a, const Move& b) {
-                        return a.err < b.err;
+                        return a.rank < b.rank;
                     });
                     constexpr std::size_t kPerRegCap = 4;
                     std::array<std::size_t, kBaseColors> reg_taken{};
@@ -1229,17 +1265,19 @@ Result<ScapResult> encode_strips_dpf_ocs(
                         child.dec_reg[s] = m.reg;
                         child.dec_color[s] = st.cands[m.cand_idx];
                         child.cum_err += m.err;
+                        child.rank_err = state.cum_err + m.rank;
                         next.push_back(child);
                     }
                 }
 
                 std::size_t keep_b = std::min(kBeamWidth, next.size());
                 if (next.size() > keep_b) {
-                    std::partial_sort(
-                        next.begin(),
-                        next.begin() + static_cast<std::ptrdiff_t>(keep_b),
-                        next.end(),
-                        [](const BeamNode& a, const BeamNode& b) { return a.cum_err < b.cum_err; });
+                    std::partial_sort(next.begin(),
+                                      next.begin() + static_cast<std::ptrdiff_t>(keep_b),
+                                      next.end(),
+                                      [](const BeamNode& a, const BeamNode& b) {
+                                          return a.rank_err < b.rank_err;
+                                      });
                     next.resize(keep_b);
                 }
                 beam.swap(next);
@@ -1249,6 +1287,86 @@ Result<ScapResult> encode_strips_dpf_ocs(
                 beam.begin(), beam.end(), [](const BeamNode& a, const BeamNode& b) {
                     return a.cum_err < b.cum_err;
                 });
+            // Optimize each written color over its whole register lifetime.
+            // Initial palette entries and visible writes are separate variables;
+            // pixel assignments and RGB444 representatives alternate (Lloyd).
+            // This does not change the calibrated MOVE schedule or its budget.
+            if (!debug_overlay && copper_changes_override == 0) {
+                const std::size_t nvars = kBaseColors + table.slots.size();
+                std::vector<Color3f> colors(nvars);
+                std::vector<bool> mutable_color(nvars, false);
+                std::array<std::size_t, kBaseColors> active{};
+                for (std::size_t k = 0; k < kBaseColors; ++k) {
+                    active[k] = k;
+                    colors[k] = P[k];
+                    mutable_color[k] = k >= k_min && !reserved_mask_dpf[k] &&
+                                       external_palette.empty();
+                }
+                std::vector<std::array<std::size_t, kBaseColors>> variables(num_strips);
+                variables[0] = active;
+                for (std::size_t s = 0; s < table.slots.size(); ++s) {
+                    int reg = best.dec_reg[s];
+                    if (reg >= 0) {
+                        const std::size_t id = kBaseColors + s;
+                        active[static_cast<std::size_t>(reg)] = id;
+                        colors[id] = best.dec_color[s];
+                        mutable_color[id] = true;
+                    }
+                    variables[s + 1] = active;
+                }
+                for (int iteration = 0; iteration < 4; ++iteration) {
+                    std::vector<color_space::OKLab> labs(nvars);
+                    for (std::size_t v = 0; v < nvars; ++v)
+                        labs[v] = color_space::linear_to_oklab(colors[v]);
+                    std::vector<std::array<double, 3>> sums(nvars);
+                    std::vector<std::size_t> counts(nvars, 0);
+                    for (std::size_t x = 0; x < width; ++x) {
+                        const auto& ids = variables[x_strip[x]];
+                        const auto& target_lab = img_lab[y * width + x];
+                        std::size_t chosen = ids[k_min];
+                        float min_error = std::numeric_limits<float>::max();
+                        for (std::size_t k = k_min; k < kBaseColors; ++k) {
+                            const auto& lab = labs[ids[k]];
+                            const float err = color_space::fma_dist_sq(
+                                target_lab.L - lab.L, target_lab.a - lab.a, target_lab.b - lab.b);
+                            if (err < min_error) {
+                                min_error = err;
+                                chosen = ids[k];
+                            }
+                        }
+                        sums[chosen][0] += static_cast<double>(target_lab.L);
+                        sums[chosen][1] += static_cast<double>(target_lab.a);
+                        sums[chosen][2] += static_cast<double>(target_lab.b);
+                        ++counts[chosen];
+                    }
+                    bool changed = false;
+                    for (std::size_t v = 0; v < nvars; ++v) {
+                        if (!mutable_color[v] || counts[v] == 0) continue;
+                        const double count = static_cast<double>(counts[v]);
+                        const color_space::OKLab mean{static_cast<float>(sums[v][0] / count),
+                                                      static_cast<float>(sums[v][1] / count),
+                                                      static_cast<float>(sums[v][2] / count)};
+                        const auto next_color = palette::quantize_to_ocs(
+                            color_space::oklab_to_linear(mean).clamped());
+                        if (palette::linear_to_ocs(next_color) != palette::linear_to_ocs(colors[v]))
+                            changed = true;
+                        colors[v] = next_color;
+                    }
+                    if (!changed) break;
+                }
+                for (std::size_t k = 0; k < kBaseColors; ++k)
+                    P[k] = colors[k];
+                recompute_lab_local();
+                strip_palettes[0] = P;
+                strip_pal_lab[0] = P_lab;
+                for (auto& op : line_moves[y]) {
+                    if (op.kind == ScapOpKind::kMove && op.slot_index < 0 && op.reg >= 9 &&
+                        op.reg <= 15)
+                        op.rgb_ocs = palette::linear_to_ocs(P[op.reg - 8]);
+                }
+                for (std::size_t s = 0; s < table.slots.size(); ++s)
+                    if (best.dec_reg[s] >= 0) best.dec_color[s] = colors[kBaseColors + s];
+            }
             for (std::size_t s = 0; s < table.slots.size(); ++s) {
                 int reg = best.dec_reg[s];
                 if (reg < 0) {
@@ -1297,6 +1415,23 @@ Result<ScapResult> encode_strips_dpf_ocs(
         }
         total_moves = total_moves_atomic.load();
 
+        // Copper/Denise transition positions can differ by a lores pixel.
+        // Do not select the register being written around a slot boundary:
+        // every remaining register has the same color on both sides.
+        std::vector<std::uint8_t> boundary_mask(width * height, 0);
+        for (std::size_t y = 0; y < height; ++y) {
+            for (const auto& op : line_moves[y]) {
+                if (op.kind != ScapOpKind::kMove || op.slot_index < 0 || op.reg < 9 || op.reg > 15)
+                    continue;
+                const int landing = table.slots[static_cast<std::size_t>(op.slot_index)].pixel_x;
+                for (int x = std::max(0, landing - 1);
+                     x <= landing + 1 && static_cast<std::size_t>(x) < width;
+                     ++x)
+                    boundary_mask[y * width + static_cast<std::size_t>(x)] |=
+                        static_cast<std::uint8_t>(1u << (op.reg - 8));
+            }
+        }
+
         // ---- Pass 2: whole-image dither against per-row, per-strip
         // palettes. Driver owns ED scaffolding (kernel, serpentine, bias
         // map, Riemersma queue scaling, ordered offsets);
@@ -1315,15 +1450,28 @@ Result<ScapResult> encode_strips_dpf_ocs(
 
                     std::size_t k = 0;
                     color_space::OKLab chosen{};
+                    const auto excluded = boundary_mask[y * width + x];
+                    std::array<color_space::OKLab, kBaseColors> allowed{};
+                    std::array<std::size_t, kBaseColors> mapping{};
+                    std::size_t allowed_count = 0;
+                    if (excluded != 0) {
+                        for (std::size_t c = k_min; c < kBaseColors; ++c) {
+                            if ((excluded & (1u << c)) != 0) continue;
+                            mapping[allowed_count] = c;
+                            allowed[allowed_count++] = pl_lab[c];
+                        }
+                        pl_span = {allowed.data(), allowed_count};
+                    }
                     float thr = dither::pick_palette_index_with_ostro(dither_settings.method,
                                                                       target,
                                                                       pl_span,
                                                                       x,
                                                                       y,
                                                                       dither_settings.strength,
-                                                                      k_min,
+                                                                      excluded != 0 ? 0 : k_min,
                                                                       k,
                                                                       chosen);
+                    if (excluded != 0) k = mapping[k];
                     indices[y * width + x] = static_cast<std::uint8_t>(k);
                     preview[x, y] = pal[k];
                     return {chosen, thr};
@@ -1350,6 +1498,22 @@ Result<ScapResult> encode_strips_dpf_ocs(
             for (std::size_t y = 0; y < height; ++y) {
                 for (std::size_t x = 0; x < width; ++x) {
                     auto s = static_cast<std::size_t>(x_strip[x]);
+                    auto& index = indices[y * width + x];
+                    const auto excluded = boundary_mask[y * width + x];
+                    if ((excluded & (1u << index)) != 0) {
+                        const auto& target = img_lab[y * width + x];
+                        float min_error = std::numeric_limits<float>::max();
+                        for (std::size_t k = k_min; k < kBaseColors; ++k) {
+                            if ((excluded & (1u << k)) != 0) continue;
+                            const auto& lab = strip_pal_lab_per_row[y][s][k];
+                            const float error = color_space::fma_dist_sq(
+                                target.L - lab.L, target.a - lab.a, target.b - lab.b);
+                            if (error < min_error) {
+                                min_error = error;
+                                index = static_cast<std::uint8_t>(k);
+                            }
+                        }
+                    }
                     preview[x, y] = strip_palettes_per_row[y][s][indices[y * width + x]];
                 }
             }
@@ -1985,24 +2149,23 @@ Result<ScapResult> encode_strips_ehb_ocs(
     for (std::size_t x = 0; x < width; ++x)
         x_strip[x] = static_cast<std::uint16_t>(strip_for_x(x));
 
-    // Iterative index refinement (#2). Each pass after the first feeds
-    // the previous pass's stage-2 indices back as base_index for the
-    // swap planner, so the planner optimises against the binding the
-    // encoder will actually produce. Empirically gains ~0.05 dB per
-    // additional pass through pass 6, then plateaus.
-    //
-    // We tried full joint base-palette + sliced refinement (#3) — recompute
-    // base from final indices, re-run sliced, re-dither stage 1 — but that
-    // REGRESSED PSNR by ~0.9 dB on the 10-image sweep. Re-running sliced
-    // from a different starting palette breaks the convergence the
-    // index iteration was building toward. Pure index refinement wins.
-    //
+    // Exact RGB444 candidates, including the hardware's truncating half-brite.
+    // Keep this on the heap for WASM's small stack.
+    std::vector<color_space::OKLab> code_lab(4096), code_half_lab(4096);
+    for (std::uint16_t code = 0; code < 4096; ++code) {
+        const auto c = palette::ocs_to_linear(code);
+        code_lab[code] = color_space::linear_to_oklab(c);
+        code_half_lab[code] = color_space::linear_to_oklab(half_brite(c));
+    }
+
+    // Planning rebinds every row from the sliced palette and original source.
+    // Repeating this deterministic pass does not feed back the rendered indices.
     // Actual hardware register state across lines. strips swaps leave
     // registers holding swap-colors at end-of-line; the per-line
     // sliced MOVEs need to diff against THIS, not against sliced_palettes
     // from the previous line.
     std::vector<Color3f> hw_state(kBaseColors);
-    constexpr int kPasses = 6;
+    constexpr int kPasses = 1;
     auto report_pass = [&](int pass_idx, float local) {
         if (on_progress) {
             float p = (static_cast<float>(pass_idx) + std::clamp(local, 0.0f, 1.0f)) /
@@ -2015,25 +2178,6 @@ Result<ScapResult> encode_strips_ehb_ocs(
         // Reset hw_state to the viewer's frame-init at each pass start.
         for (std::size_t k = 0; k < kBaseColors; ++k)
             hw_state[k] = base_palette[k];
-        if (pass > 0) {
-            // base_index is rebuilt per-row inside the planner against
-            // the per-line sliced-evolved palette (no carry-over between
-            // passes needed; stale bindings were the root cause of
-            // dark-content regressions in v1.26.0/.1).
-            for (auto& v : line_moves)
-                v.clear();
-            // err_buf is owned by dither::diffuse_raw_buffer (allocated
-            // fresh each pass-2 call), so no manual reset is needed.
-            // total_moves accumulates inside the per-line emit at line
-            // ~2325; without an explicit reset it would carry pass-0..N-1
-            // into pass-N and inflate avg_changes_per_line by ~6× (6
-            // passes default). Reset alongside line_moves so the final
-            // counter reflects only the last pass's MOVEs.
-            total_moves = 0;
-            // total_error is unconditionally reassigned later in this
-            // pass (line ~2603 / 1330) before any read, so no reset
-            // needed here.
-        }
         for (std::size_t y = 0; y < height; ++y) {
             int abs_vpos = static_cast<int>(y) + kVStart;
             auto vp = static_cast<std::uint8_t>(abs_vpos & 0xFF);
@@ -2194,15 +2338,9 @@ Result<ScapResult> encode_strips_ehb_ocs(
                     cl.spread += static_cast<double>(color_space::fma_dist_sq(dL, da, db));
                 }
                 std::array<bool, 4096> seen{};
-                auto ocs_key = [](const Color3f& c) -> std::size_t {
-                    int r = static_cast<int>(std::lround(std::clamp(c.r, 0.0f, 1.0f) * 15.0f));
-                    int g = static_cast<int>(std::lround(std::clamp(c.g, 0.0f, 1.0f) * 15.0f));
-                    int b = static_cast<int>(std::lround(std::clamp(c.b, 0.0f, 1.0f) * 15.0f));
-                    return static_cast<std::size_t>((r << 8) | (g << 4) | b);
-                };
                 auto add_cand = [&](Color3f c) {
                     auto cs = palette::quantize_to_ocs(c);
-                    auto key = ocs_key(cs);
+                    auto key = palette::linear_to_ocs(cs);
                     if (!seen[key]) {
                         seen[key] = true;
                         strips[s].cands.push_back(cs);
@@ -2220,11 +2358,34 @@ Result<ScapResult> encode_strips_ehb_ocs(
                         add_cand(color_space::oklab_to_linear(cd).clamped());
                     }
                     if (cnth[k] > 0) {
-                        // Half-brite-bound pixels want base ≈ 2×pixel.
-                        color_space::OKLab dbl{std::min(2.0f * strips[s].ch[k].L, 1.0f),
-                                               2.0f * strips[s].ch[k].a,
-                                               2.0f * strips[s].ch[k].b};
-                        add_cand(color_space::oklab_to_linear(dbl).clamped());
+                        const color_space::OKLab mean{
+                            strips[s].ch[k].L, strips[s].ch[k].a, strips[s].ch[k].b};
+                        const auto half_code = palette::linear_to_ocs(
+                            color_space::oklab_to_linear(mean).clamped());
+                        const auto base_code = static_cast<std::uint16_t>(
+                            (std::min(15, 2 * ((half_code >> 8) & 15)) << 8) |
+                            (std::min(15, 2 * ((half_code >> 4) & 15)) << 4) |
+                            std::min(15, 2 * (half_code & 15)));
+                        add_cand(palette::ocs_to_linear(base_code));
+                    }
+                }
+            }
+
+            constexpr std::array<double, 2> kLookaheadWeights{0.6, 0.3};
+            // Include the next two strips' colors before they are needed.
+            // Forward traversal keeps the horizon bounded to two strips.
+            for (std::size_t s = 0; s < num_strips; ++s) {
+                std::array<bool, 4096> seen{};
+                for (const auto& c : strips[s].cands)
+                    seen[palette::linear_to_ocs(c)] = true;
+                for (std::size_t t = s + 1; t < std::min(num_strips, s + 3); ++t) {
+                    for (std::size_t c = 0; c < strips[t].cands.size(); ++c) {
+                        auto code = palette::linear_to_ocs(strips[t].cands[c]);
+                        if (seen[code]) continue;
+                        seen[code] = true;
+                        strips[s].cands.push_back(strips[t].cands[c]);
+                        strips[s].cands_lab_b.push_back(strips[t].cands_lab_b[c]);
+                        strips[s].cands_lab_h.push_back(strips[t].cands_lab_h[c]);
                     }
                 }
             }
@@ -2252,17 +2413,8 @@ Result<ScapResult> encode_strips_ehb_ocs(
 
             // Beam state. P holds 32 base linear-RGB; P_lab_b and P_lab_h
             // are the cached OKLab of base and halve(base) respectively.
-            // B=2 is the sweet spot for EHB strips per the same sweep: PSNR
-            // peaks at 40.49 dB. Wider beams keep lowering planner error
-            // but worsen preview-PSNR because dither residuals scatter
-            // into noise the planner doesn't see — the OKLab² metric
-            // drifts hard from blurred-sRGB PSNR once the EHB plan is
-            // already this tight (default error ~51 vs DPF ~140).
-            //   B=1: err=52.13 psnr=40.31 dB  (= greedy)
-            //   B=2: err=51.16 psnr=40.49 dB  ← peak
-            //   B=3: err=50.74 psnr=40.37 dB
-            //   B=4: err=50.57 psnr=40.45 dB
-            //   B=16: err=50.03 psnr=40.19 dB (over-fits)
+            // Keep the compact beam: an eight-state S2 sweep was slower
+            // and slightly worse than two states with future-aware ranking.
             constexpr std::size_t kBeamWidth = 2;
             constexpr std::size_t kCandsPerSlot = 16;
             constexpr std::size_t kEMaxSlots = 32;
@@ -2276,11 +2428,15 @@ Result<ScapResult> encode_strips_ehb_ocs(
                 std::uint16_t projected_hblank = 0;
                 std::uint16_t useful_swaps = 0;
                 double cum_err = 0;
+                double rank_err = 0;
             };
 
             constexpr std::size_t kMaxVisibleMoves = 18;
             std::size_t slots_to_run = std::min(table.slots.size(), kMaxVisibleMoves);
             std::size_t useful_swap_cap = strips_share_ehb_max;
+            // A boundary guard needs at least one unchanged selectable base.
+            if (std::count(reserved_mask_ehb.begin(), reserved_mask_ehb.end(), false) < 2)
+                useful_swap_cap = 0;
 
             ENode init{};
             for (std::size_t k = 0; k < kBaseColors; ++k) {
@@ -2320,10 +2476,16 @@ Result<ScapResult> encode_strips_ehb_ocs(
                     double filler_err = strip_empty
                                             ? 0.0
                                             : e_strip_dither(s + 1, state.P_lab_b, state.P_lab_h);
+                    double future_err = 0.0;
+                    for (std::size_t h = 1; h <= kLookaheadWeights.size() && s + 1 + h < num_strips;
+                         ++h)
+                        future_err += kLookaheadWeights[h - 1] *
+                                      e_strip_dither(s + 1 + h, state.P_lab_b, state.P_lab_h);
                     {
                         ENode child = state;
                         child.dec_reg[s] = -1;
                         child.cum_err += filler_err;
+                        child.rank_err = child.cum_err + future_err;
                         next.push_back(child);
                     }
                     if (strip_empty) continue;
@@ -2339,12 +2501,13 @@ Result<ScapResult> encode_strips_ehb_ocs(
                         std::size_t cand_idx;
                         int hblank_delta;
                         double err;
+                        double rank;
                     };
                     std::vector<Move> moves;
                     moves.reserve(kBaseColors * st.cands.size());
 
                     for (std::size_t k = k_min; k < kBaseColors; ++k) {
-                        if (reserved_mask_ehb[k]) continue;
+                        if (reserved_mask_ehb[k] || (lock_color0 && k == 0)) continue;
                         // Hblank-budget gate: precompute delta for register
                         // k swap-vs-current.
                         bool old_diff = false;
@@ -2372,6 +2535,20 @@ Result<ScapResult> encode_strips_ehb_ocs(
                                             state.P_lab_h[k2].b,
                                             tl_pixel_min.data());
                         }
+                        std::array<std::vector<float>, kLookaheadWeights.size()> future_min;
+                        for (std::size_t h = 1;
+                             h <= kLookaheadWeights.size() && s + 1 + h < num_strips;
+                             ++h) {
+                            const auto& fs = strip_pixels_soa[s + 1 + h];
+                            reset_pixel_min(future_min[h - 1], fs);
+                            for (std::size_t k2 = k_min; k2 < kBaseColors; ++k2) {
+                                if (k2 == k || reserved_mask_ehb[k2]) continue;
+                                const auto& lb = state.P_lab_b[k2];
+                                const auto& lh = state.P_lab_h[k2];
+                                min_dist_update(fs, lb.L, lb.a, lb.b, future_min[h - 1].data());
+                                min_dist_update(fs, lh.L, lh.a, lh.b, future_min[h - 1].data());
+                            }
+                        }
                         for (std::size_t ci = 0; ci < st.cands.size(); ++ci) {
                             auto& c_lab_b = st.cands_lab_b[ci];
                             auto& c_lab_h = st.cands_lab_h[ci];
@@ -2383,7 +2560,20 @@ Result<ScapResult> encode_strips_ehb_ocs(
                                                      c_lab_h.L,
                                                      c_lab_h.a,
                                                      c_lab_h.b);
-                            if (e >= filler_err) continue;
+                            double rank = e;
+                            for (std::size_t h = 1;
+                                 h <= kLookaheadWeights.size() && s + 1 + h < num_strips;
+                                 ++h)
+                                rank += kLookaheadWeights[h - 1] *
+                                        dist_min2_sum(strip_pixels_soa[s + 1 + h],
+                                                      future_min[h - 1].data(),
+                                                      c_lab_b.L,
+                                                      c_lab_b.a,
+                                                      c_lab_b.b,
+                                                      c_lab_h.L,
+                                                      c_lab_h.a,
+                                                      c_lab_h.b);
+                            if (rank >= filler_err + future_err) continue;
                             int delta = 0;
                             if (has_next_line) {
                                 auto& cs = st.cands[ci];
@@ -2396,11 +2586,11 @@ Result<ScapResult> encode_strips_ehb_ocs(
                                     continue;
                                 }
                             }
-                            moves.push_back({static_cast<int>(k), ci, delta, e});
+                            moves.push_back({static_cast<int>(k), ci, delta, e, rank});
                         }
                     }
                     std::sort(moves.begin(), moves.end(), [](const Move& a, const Move& b) {
-                        return a.err < b.err;
+                        return a.rank < b.rank;
                     });
                     constexpr std::size_t kPerRegCap = 1;
                     std::array<std::size_t, kBaseColors> reg_taken{};
@@ -2423,6 +2613,7 @@ Result<ScapResult> encode_strips_ehb_ocs(
                         child.dec_reg[s] = m.reg;
                         child.dec_color[s] = st.cands[m.cand_idx];
                         child.cum_err += m.err;
+                        child.rank_err = state.cum_err + m.rank;
                         child.projected_hblank = static_cast<std::uint16_t>(
                             static_cast<int>(child.projected_hblank) + m.hblank_delta);
                         ++child.useful_swaps;
@@ -2436,7 +2627,7 @@ Result<ScapResult> encode_strips_ehb_ocs(
                         next.begin(),
                         next.begin() + static_cast<std::ptrdiff_t>(keep_b),
                         next.end(),
-                        [](const ENode& a, const ENode& b) { return a.cum_err < b.cum_err; });
+                        [](const ENode& a, const ENode& b) { return a.rank_err < b.rank_err; });
                     next.resize(keep_b);
                 }
                 beam.swap(next);
@@ -2446,6 +2637,109 @@ Result<ScapResult> encode_strips_ehb_ocs(
                 beam.begin(), beam.end(), [](const ENode& a, const ENode& b) {
                     return a.cum_err < b.cum_err;
                 });
+
+            // Fit each MOVE over the whole lifetime of its register value.
+            // The sliced entry palette stays fixed: changing all 32 entries
+            // independently would overflow hblank. Each fit jointly minimizes
+            // base and half-brite error over all 4096 hardware colors.
+            {
+                const std::size_t nvars = kBaseColors + slots_to_run;
+                std::vector<std::uint16_t> codes(nvars);
+                std::vector<bool> mutable_color(nvars, false);
+                std::array<std::size_t, kBaseColors> active{};
+                for (std::size_t k = 0; k < kBaseColors; ++k) {
+                    active[k] = k;
+                    codes[k] = palette::linear_to_ocs(P[k]);
+                }
+                std::vector<std::array<std::size_t, kBaseColors>> variables(num_strips);
+                variables[0] = active;
+                for (std::size_t slot = 0; slot < num_strips - 1; ++slot) {
+                    if (slot < slots_to_run && best.dec_reg[slot] >= 0) {
+                        const auto k = static_cast<std::size_t>(best.dec_reg[slot]);
+                        const auto id = kBaseColors + slot;
+                        active[k] = id;
+                        codes[id] = palette::linear_to_ocs(best.dec_color[slot]);
+                        mutable_color[id] = true;
+                    }
+                    variables[slot + 1] = active;
+                }
+                // Preserve any final value already equal to next row's entry.
+                // Refinement can then only reduce, never increase, reset writes.
+                if (has_next_line) {
+                    for (std::size_t k = 0; k < kBaseColors; ++k)
+                        if (codes[active[k]] == palette::linear_to_ocs(sliced_palettes[y + 1][k]))
+                            mutable_color[active[k]] = false;
+                }
+                struct FitStats {
+                    std::array<double, 3> base{}, half{};
+                    std::size_t nb = 0, nh = 0;
+                };
+                for (int iteration = 0; iteration < 4; ++iteration) {
+                    std::vector<FitStats> stats(nvars);
+                    for (std::size_t x = 0; x < width; ++x) {
+                        const auto& ids = variables[x_strip[x]];
+                        const auto& target = img_lab[y * width + x];
+                        float min_error = std::numeric_limits<float>::max();
+                        std::size_t chosen = 0;
+                        bool half = false;
+                        for (std::size_t k = 0; k < kBaseColors; ++k) {
+                            if (reserved_mask_ehb[k]) continue;
+                            const auto code = codes[ids[k]];
+                            for (int h = 0; h < 2; ++h) {
+                                const auto& lab = h ? code_half_lab[code] : code_lab[code];
+                                const float error = color_space::fma_dist_sq(
+                                    target.L - lab.L, target.a - lab.a, target.b - lab.b);
+                                if (error < min_error) {
+                                    min_error = error;
+                                    chosen = ids[k];
+                                    half = h != 0;
+                                }
+                            }
+                        }
+                        auto& st = stats[chosen];
+                        auto& sum = half ? st.half : st.base;
+                        sum[0] += static_cast<double>(target.L);
+                        sum[1] += static_cast<double>(target.a);
+                        sum[2] += static_cast<double>(target.b);
+                        if (half)
+                            ++st.nh;
+                        else
+                            ++st.nb;
+                    }
+                    bool changed = false;
+                    for (std::size_t v = kBaseColors; v < nvars; ++v) {
+                        const auto& st = stats[v];
+                        if (!mutable_color[v] || st.nb + st.nh == 0) continue;
+                        auto cost = [&](std::uint16_t code) {
+                            const auto& lb = code_lab[code];
+                            const auto& lh = code_half_lab[code];
+                            auto bucket = [](const auto& lab, const auto& sum, std::size_t n) {
+                                const double L = static_cast<double>(lab.L);
+                                const double ca = static_cast<double>(lab.a);
+                                const double cb = static_cast<double>(lab.b);
+                                return static_cast<double>(n) * (L * L + ca * ca + cb * cb) -
+                                       2.0 * (L * sum[0] + ca * sum[1] + cb * sum[2]);
+                            };
+                            return bucket(lb, st.base, st.nb) + bucket(lh, st.half, st.nh);
+                        };
+                        auto best_code = codes[v];
+                        double best_cost = cost(best_code);
+                        for (std::uint16_t code = 0; code < 4096; ++code) {
+                            const double error = cost(code);
+                            if (error < best_cost - 1e-12) {
+                                best_cost = error;
+                                best_code = code;
+                            }
+                        }
+                        changed |= best_code != codes[v];
+                        codes[v] = best_code;
+                    }
+                    if (!changed) break;
+                }
+                for (std::size_t slot = 0; slot < slots_to_run; ++slot)
+                    if (best.dec_reg[slot] >= 0)
+                        best.dec_color[slot] = palette::ocs_to_linear(codes[kBaseColors + slot]);
+            }
 
             // Apply chain: emit per-slot MOVEs, update P/P_eff/P_eff_lab/
             // hw_state, snapshot strip palettes for the render pass.
@@ -2483,18 +2777,12 @@ Result<ScapResult> encode_strips_ehb_ocs(
             line_moves[y].push_back(
                 make_wait(static_cast<std::uint8_t>(table.end_of_line_hpos), vp, -1));
 
-            // Quality gate: estimate per-row error with vs. without the
-            // strips swaps (every strip = entry palette). The planner's
-            // cluster-centroid objective can recommend swaps that score
-            // well on k-means but lose on the actual nearest-of-64 picker
-            // — visible as 16-pixel-wide colored bars on dark/HDR content.
-            // The underlying issue is that the planner doesn't model
-            // pixel re-binding when a slot color changes; this gate is a
-            // correctness backstop until the planner is reworked. Same
-            // shape as the HAM6+strips gate (commit 6c516d9).
+            // Keep a whole-row nearest-color backstop after refinement.
+            // If rejected, preserve the timed MOVE chain with harmless
+            // COLOR00 rewrites and restore the tracked hardware state.
             bool any_scap_swap = false;
             for (auto& m : line_moves[y]) {
-                if (m.kind == ScapOpKind::kMove && m.slot_index >= 0) {
+                if (m.kind == ScapOpKind::kMove && m.slot_index >= 0 && best.useful_swaps > 0) {
                     any_scap_swap = true;
                     break;
                 }
@@ -2527,23 +2815,14 @@ Result<ScapResult> encode_strips_ehb_ocs(
                         strip_eff[s] = strip_eff[0];
                         strip_eff_lab[s] = strip_eff_lab[0];
                     }
-                    auto& lm = line_moves[y];
-                    std::size_t removed = 0;
-                    lm.erase(std::remove_if(lm.begin(),
-                                            lm.end(),
-                                            [&](const ScapMove& m) {
-                                                if (m.kind == ScapOpKind::kMove &&
-                                                    m.slot_index >= 0) {
-                                                    ++removed;
-                                                    return true;
-                                                }
-                                                return false;
-                                            }),
-                             lm.end());
-                    if (removed > total_moves)
-                        total_moves = 0;
-                    else
-                        total_moves -= removed;
+                    for (auto& op : line_moves[y]) {
+                        if (op.kind == ScapOpKind::kMove && op.slot_index >= 0)
+                            op = make_move(
+                                0, palette::linear_to_ocs(strip_eff[0][0]), op.slot_index);
+                    }
+                    for (std::size_t k = 0; k < kBaseColors; ++k)
+                        hw_state[k] = strip_eff[0][k];
+                    total_moves -= best.useful_swaps;
                 }
             }
 
@@ -2554,6 +2833,26 @@ Result<ScapResult> encode_strips_ehb_ocs(
 
             if (height > 0 && (y & 0xF) == 0xF) {
                 report_pass(pass, static_cast<float>(y + 1) / static_cast<float>(height));
+            }
+        }
+
+        // The base and half-brite index both change when a register is
+        // written. The EHB probe lands up to two pixels earlier than the
+        // nominal table in Amiberry; allow three pixels on either side.
+        std::vector<std::uint32_t> boundary_mask(width * height, 0);
+        for (std::size_t y = 0; y < height; ++y) {
+            for (const auto& op : line_moves[y]) {
+                if (op.kind != ScapOpKind::kMove || op.slot_index < 0 || op.reg >= kBaseColors)
+                    continue;
+                const auto slot = static_cast<std::size_t>(op.slot_index);
+                if (palette::linear_to_ocs(strip_eff_per_row[y][slot][op.reg]) == op.rgb_ocs)
+                    continue;
+                const int landing = table.slots[slot].pixel_x;
+                for (int x = std::max(0, landing - 3);
+                     x <= landing + 3 && static_cast<std::size_t>(x) < width;
+                     ++x)
+                    boundary_mask[y * width + static_cast<std::size_t>(x)] |= std::uint32_t{1}
+                                                                              << op.reg;
             }
         }
 
@@ -2614,7 +2913,28 @@ Result<ScapResult> encode_strips_ehb_ocs(
                     color_space::OKLab chosen{};
                     float thr;
                     std::uint8_t full_idx;
-                    if (has_excluded) {
+                    const auto excluded = boundary_mask[y * width + x];
+                    if (excluded != 0) {
+                        std::array<color_space::OKLab, kEffective> allowed{};
+                        std::array<std::uint8_t, kEffective> mapping{};
+                        std::size_t count = 0;
+                        for (std::size_t c = 0; c < kEffective; ++c) {
+                            if (eff_blocked[c] || (excluded & (std::uint32_t{1} << (c & 31))) != 0)
+                                continue;
+                            mapping[count] = static_cast<std::uint8_t>(c);
+                            allowed[count++] = strip_eff_lab_per_row[y][s][c];
+                        }
+                        thr = dither::pick_palette_index_with_ostro(dither_settings.method,
+                                                                    target,
+                                                                    {allowed.data(), count},
+                                                                    x,
+                                                                    y,
+                                                                    dither_settings.strength,
+                                                                    0,
+                                                                    k,
+                                                                    chosen);
+                        full_idx = mapping[k];
+                    } else if (has_excluded) {
                         auto& eff_lab = eff_lab_filtered[y][s];
                         std::span<const color_space::OKLab> eff_span(eff_lab.data(),
                                                                      eff_lab.size());
@@ -2665,6 +2985,24 @@ Result<ScapResult> encode_strips_ehb_ocs(
             for (std::size_t y = 0; y < height; ++y) {
                 for (std::size_t x = 0; x < width; ++x) {
                     auto s = static_cast<std::size_t>(x_strip[x]);
+                    auto& index = indices[y * width + x];
+                    const auto excluded = boundary_mask[y * width + x];
+                    if (eff_blocked[index] ||
+                        (excluded & (std::uint32_t{1} << (index & 31))) != 0) {
+                        const auto& target = img_lab[y * width + x];
+                        float min_error = std::numeric_limits<float>::max();
+                        for (std::size_t c = 0; c < kEffective; ++c) {
+                            if (eff_blocked[c] || (excluded & (std::uint32_t{1} << (c & 31))) != 0)
+                                continue;
+                            const auto& lab = strip_eff_lab_per_row[y][s][c];
+                            const float error = color_space::fma_dist_sq(
+                                target.L - lab.L, target.a - lab.a, target.b - lab.b);
+                            if (error < min_error) {
+                                min_error = error;
+                                index = static_cast<std::uint8_t>(c);
+                            }
+                        }
+                    }
                     preview[x, y] = strip_eff_per_row[y][s][indices[y * width + x]];
                 }
             }
@@ -2756,7 +3094,7 @@ Result<ScapResult> encode_strips_ehb_ocs(
 //   * Greedy single-pass strip swap planner: per-strip pixel histogram,
 //     swap the K least-used base slots with the strip's most-frequent
 //     RGB444-bucketed colors.
-//   * No multi-pass joint refinement (EHB strips runs 6 passes).
+//   * No register-lifetime palette refinement (used by EHB strips).
 //   * No best wiring.
 //   * Inline HAM op selector — keeps scap.cpp self-contained without
 //     needing to expose ham.cpp's anonymous-namespace helpers.
