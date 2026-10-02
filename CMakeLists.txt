@@ -2834,6 +2834,36 @@ sys.exit(0 if ok else 1)")
                 -- --mode ehb --strips --width 320 --height 200)
     endforeach()
 
+    foreach(_case IN ITEMS "default" "budget" "tall")
+        set(_ham_height 16)
+        set(_ham_args)
+        if(_case STREQUAL "budget")
+            set(_ham_args --slice-changes 3)
+        elseif(_case STREQUAL "tall")
+            set(_ham_height 213)
+        endif()
+        add_test(NAME "ham6-strips-replay-${_case}"
+            COMMAND ${Python3_EXECUTABLE} ${CMAKE_SOURCE_DIR}/tools/check_strips_replay.py
+                --mode ham6 --expect-black-border --cli $<TARGET_FILE:png2amiga>
+                --in ${CMAKE_SOURCE_DIR}/examples/maui.jpg --height ${_ham_height}
+                -- ${_ham_args})
+    endforeach()
+
+    foreach(_case IN ITEMS "ocs" "aga-hires" "lace")
+        set(_wait_options)
+        set(_wait_args --mode ehb)
+        if(_case STREQUAL "aga-hires")
+            set(_wait_args --mode hires --depth 8 --chipset aga)
+        elseif(_case STREQUAL "lace")
+            set(_wait_options --lace)
+            set(_wait_args --mode ehb-lace)
+        endif()
+        add_test(NAME "sliced-viewer-waits-${_case}"
+            COMMAND ${Python3_EXECUTABLE} ${CMAKE_SOURCE_DIR}/tools/check_sliced_viewer_waits.py
+                --cli $<TARGET_FILE:png2amiga> --in ${CMAKE_SOURCE_DIR}/examples/maui.jpg
+                ${_wait_options} -- ${_wait_args})
+    endforeach()
+
 endif() # NOT EMSCRIPTEN
 
 # Mac-only convenience target: clang-tidy + cppcheck over src/ via tools/lint.sh.

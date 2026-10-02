@@ -97,7 +97,7 @@ inline const ScapSlotTable kStrips6bplOcs{
                               // is enough for the extra preload.
                               // ADJUST via --strips-debug if hw
                               // landings differ.
-    /*end_of_line_hpos=*/0xDD,
+    /*end_of_line_hpos=*/0xE1,
     /*slots=*/
     {
         // pixel_x — first pixel of the strip this slot's MOVE applies to.
@@ -173,7 +173,7 @@ constexpr int kHAM6 = -1;
 inline const ScapSlotTable kStrips6bplHam6{
     /*total_planes=*/6,
     /*line_gate_hpos=*/0x3C,
-    /*end_of_line_hpos=*/0xDD,
+    /*end_of_line_hpos=*/0xE1,
     /*slots=*/
     {
         {8 + kHAM6},   {24 + kHAM6},  {40 + kHAM6},  {56 + kHAM6},  {72 + kHAM6},
@@ -186,7 +186,7 @@ inline const ScapSlotTable kStrips6bplHam6{
 inline const ScapSlotTable kStrips8bplAga{
     /*total_planes=*/8,
     /*line_gate_hpos=*/0x40,
-    /*end_of_line_hpos=*/0xDD,
+    /*end_of_line_hpos=*/0xE1,
     /*slots=*/{},
 };
 

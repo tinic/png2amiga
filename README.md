@@ -444,6 +444,14 @@ on either side; EHB guards three, covering the earlier transitions seen
 in the Amiberry timing probe. Previews and S2 scores include these
 constraints.
 
+HAM6 strips plans scanlines in order because register values carry over
+between lines. Its preview uses the palette actually restored within
+the 13-write hblank limit; this avoids preview/export disagreement at
+the cost of losing the previous row-level parallelism. Progressive
+sliced and strip viewers wait until `$E1` before next-row palette
+writes, including across line 255; interlaced sliced viewers retain
+`$E3`.
+
 Slot positions were calibrated empirically on real OCS
 hardware via `--strips-probe` (see `src/strips.hpp`); the published
 hardware budget is ~14 hblank MOVEs + ~20 visible-area MOVEs per line in

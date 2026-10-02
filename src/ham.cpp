@@ -2068,15 +2068,9 @@ std::vector<HamSwap> find_ham_swaps(
         std::vector<Color3f> cands;
         cands.reserve(kTopK + 1);
         std::array<bool, 4096> seen{};
-        auto ocs_key = [](Color3f c) {
-            int r = static_cast<int>(std::lround(std::clamp(c.r, 0.0f, 1.0f) * 15.0f));
-            int g = static_cast<int>(std::lround(std::clamp(c.g, 0.0f, 1.0f) * 15.0f));
-            int b = static_cast<int>(std::lround(std::clamp(c.b, 0.0f, 1.0f) * 15.0f));
-            return static_cast<std::size_t>((r << 8) | (g << 4) | b);
-        };
         auto add_cand = [&](Color3f c) {
             auto cs = (chipset != amiga::Chipset::aga) ? palette::quantize_to_ocs(c) : c;
-            auto key = ocs_key(cs);
+            auto key = palette::linear_to_ocs(cs);
             if (chipset == amiga::Chipset::aga || !seen[key]) {
                 if (chipset != amiga::Chipset::aga) seen[key] = true;
                 cands.push_back(cs);

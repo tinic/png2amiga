@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Replay exported DPF/EHB bitplanes/COLOR writes and compare with the PNG preview.
+"""Replay exported DPF/EHB/HAM6 bitplanes/COLOR writes and compare with the PNG preview.
 
 Uses the established 320px OCS slot calibration, not a cycle-level emulator.
 Checks export/preview agreement and the fixed copper instruction budget.
@@ -24,7 +24,7 @@ def words(text):
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('--mode', choices=('dpf', 'ehb'), default='dpf')
+    parser.add_argument('--mode', choices=('dpf', 'ehb', 'ham6'), default='dpf')
     parser.add_argument('--cli', required=True)
     parser.add_argument('--in', dest='source', required=True)
     parser.add_argument('--expect-black-border', action='store_true')
@@ -34,11 +34,13 @@ def main():
     args = parser.parse_args()
     extra = args.extra[1:] if args.extra[:1] == ['--'] else args.extra
     is_ehb = args.mode == 'ehb'
-    slots = tuple(range(9, 282, 16)) if is_ehb else SLOTS
+    is_ham = args.mode == 'ham6'
+    is_dpf = args.mode == 'dpf'
+    slots = tuple(range(7, 296, 16)) if is_ham else (tuple(range(9, 282, 16)) if is_ehb else SLOTS)
     with tempfile.TemporaryDirectory() as directory:
         header = Path(directory) / 'image.h'
         preview = Path(directory) / 'image.png'
-        mode_flags = ['--mode', 'ehb'] if is_ehb else ['--mode', 'lores', '--dpf']
+        mode_flags = ['--mode', args.mode] if not is_dpf else ['--mode', 'lores', '--dpf']
         command = [args.cli, *mode_flags, '--strips',
                    '--width', '320', '--height', str(args.height), '--symbol', 'replay', *extra]
         for output in (header, preview):
@@ -51,7 +53,7 @@ def main():
 
         planes = [array(f'replay_plane{p}') for p in range(6)]
         assert all(len(p) == 20 * args.height for p in planes), 'Unexpected bitplane dimensions'
-        if not is_ehb:
+        if is_dpf:
             assert not any(planes[0] + planes[2] + planes[4]), 'PF1 must remain empty'
         registers = array('replay_palette') + [0] * 16
         copper = re.search(r'replay_strips_copper_list\[.*?\]\s*=\s*\{(.*?)\};',
@@ -63,9 +65,9 @@ def main():
             ops = list(zip(row[::2], row[1::2]))
             waits = [i for i, (address, _) in enumerate(ops) if address & 1]
             assert len(waits) == 2 and waits[-1] == len(ops) - 1
-            assert waits[0] <= (13 if is_ehb else 14), 'Hblank budget exceeded'
-            assert ops[waits[0]] == ((((44 + y) & 255) << 8) | (0x3D if is_ehb else 0x39), 0xFFFE)
-            expected_end = (((44 + y) & 255) << 8) | (0xE1 if is_ehb else 0xDD)
+            assert waits[0] <= (14 if is_dpf else 13), 'Hblank budget exceeded'
+            assert ops[waits[0]] == ((((44 + y) & 255) << 8) | (0x39 if is_dpf else 0x3D), 0xFFFE)
+            expected_end = (((44 + y) & 255) << 8) | 0xE1
             if 44 + y == 255 and 44 + args.height > 256:
                 expected_end = max(expected_end, 0xFFDF)
             assert ops[-1] == (expected_end, 0xFFFE)
@@ -83,13 +85,26 @@ def main():
             for op in ops[:waits[0]]:
                 move(op)
             slot = 0
+            held = registers[0]
             for x in range(320):
                 while slot < len(slots) and x >= max(0, slots[slot] + args.slot_shift):
                     move(visible[slot])
                     slot += 1
                 word = y * 20 + x // 16
                 shift = 15 - x % 16
-                if is_ehb:
+                if is_ham:
+                    value = sum(((planes[bit][word] >> shift) & 1) << bit for bit in range(6))
+                    ctrl, data = value >> 4, value & 15
+                    if ctrl == 0:
+                        held = registers[data]
+                    elif ctrl == 1:
+                        held = (held & 0xFF0) | data
+                    elif ctrl == 2:
+                        held = (held & 0x0FF) | (data << 8)
+                    else:
+                        held = (held & 0xF0F) | (data << 4)
+                    color = held
+                elif is_ehb:
                     index = sum(((planes[bit][word] >> shift) & 1) << bit for bit in range(6))
                     color = registers[index & 31]
                     if index >= 32:

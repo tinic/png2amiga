@@ -3285,30 +3285,14 @@ Result<ScapResult> encode_strips_ham6_ocs(const Image& image,
     constexpr int kVStart = 44;
     std::vector<std::uint8_t> ham_values(width * height, 0);
     std::vector<std::vector<ScapMove>> line_moves(height);
-    std::vector<std::vector<Color3f>> scanline_palettes_full(height);
     Image preview(width, height);
     double total_error = 0.0;
-    std::size_t total_moves = 0;
 
     if (on_progress) on_progress(0.0f, "encoding");
-    std::atomic<double> total_error_atomic{0.0};
-    std::atomic<std::size_t> total_moves_atomic{0};
-    std::atomic<std::size_t> rows_done{0};
 
-    // Actual hardware register state at end of the previous line. strips
-    // swaps mid-line on row y-1 leave registers holding swap-colors
-    // rather than sliced_palettes[y-1], so the per-line sliced MOVEs MUST
-    // diff vs THIS to correctly restore the intended line-entry palette.
-    // Carry-over forces serial when copper_changes_override > 0 (the
-    // user asked for a budget that depends on prior-line state).
-    // For the default override == 0, the parallel path treats every
-    // line as starting from the base palette (same init the serial
-    // path uses for row 0); the encoder is robust to that — it just
-    // emits whatever HBLANK MOVEs are needed to bring the registers
-    // to sliced_palettes[y]. Mirrors EHB+strips's serial_path
-    // conditional. AMDuProf showed this loop running 1-thread for
-    // ~273 s out of 282 s CPU; parallelising it gives near-linear
-    // speedup on multi-core hosts.
+    // Copper registers persist across scanlines. With only 13 hblank
+    // writes, a row cannot independently reset all 16 base registers.
+    // Plan in scanline order and retain values that cannot be restored.
     auto make_initial_hw_state = [&]() {
         std::vector<Color3f> s(kBaseColors);
         for (std::size_t k = 0; k < kBaseColors; ++k)
@@ -3316,11 +3300,10 @@ Result<ScapResult> encode_strips_ham6_ocs(const Image& image,
         return s;
     };
     std::vector<Color3f> outer_hw_state = make_initial_hw_state();
-    const bool serial_path = (copper_changes_override > 0);
 
     auto run_row = [&](std::size_t y, std::vector<Color3f>& hw_state) {
         if (on_progress) {
-            auto done = rows_done.fetch_add(1) + 1;
+            auto done = y + 1;
             if ((done & 0xF) == 0) {
                 on_progress(static_cast<float>(done) / static_cast<float>(height), "encoding");
             }
@@ -3382,6 +3365,8 @@ Result<ScapResult> encode_strips_ham6_ocs(const Image& image,
             }
         }
         refresh_lab();
+        // Freeze the actual post-hblank palette before midline planning.
+        const auto entry_palette = strip_pal;
         // Line gate WAIT.
         line_moves[y].push_back(make_wait(static_cast<std::uint8_t>(table.line_gate_hpos), vp, -1));
 
@@ -3429,7 +3414,7 @@ Result<ScapResult> encode_strips_ham6_ocs(const Image& image,
             strip_pres.reserve(num_strips);
             strip_srgb_spans.clear();
             strip_srgb_spans.reserve(num_strips);
-            std::vector<Color3f> running_pal = sliced_palettes[y];
+            std::vector<Color3f> running_pal = entry_palette;
             if (running_pal.size() < kBaseColors) running_pal.resize(kBaseColors);
             for (std::size_t s = 0; s < num_strips; ++s) {
                 if (s > 0) {
@@ -3677,8 +3662,6 @@ Result<ScapResult> encode_strips_ham6_ocs(const Image& image,
         }
         // Rebuild final strip state for the post-loop encode_with.
         build_strips(cur_pals, cur_srgbs, cur_pres, cur_srgb_spans);
-        scanline_palettes_full[y] = strip_pal;  // end-of-line state
-        total_moves += line_moves[y].size();
 
         // ---- 4. Final encode with triple refinement -------------------
         // The HAM-DP-aware planner above only accepted swaps that
@@ -3748,31 +3731,11 @@ Result<ScapResult> encode_strips_ham6_ocs(const Image& image,
             float bv = static_cast<float>(rgb12 & 0xF) / 15.0f;
             hw_state[m.reg] = color_space::srgb_to_linear(Color3f{r, g, bv});
         }
-        // total_moves: count of MOVEs in line_moves[y].
-        total_moves_atomic.fetch_add(line_moves[y].size());
-        // total_error: accumulate via CAS since std::atomic<double>::fetch_add
-        // is C++20 but not always supported on libstdc++; CAS keeps it portable.
-        double cur_te = total_error_atomic.load();
-        double new_te;
-        do {
-            new_te = cur_te + static_cast<double>(sl.error);
-        } while (!total_error_atomic.compare_exchange_weak(cur_te, new_te));
+        total_error += static_cast<double>(sl.error);
     };  // run_row
 
-    if (serial_path) {
-        for (std::size_t y = 0; y < height; ++y)
-            run_row(y, outer_hw_state);
-    } else {
-        // Parallel: each worker gets its own hw_state seeded to base
-        // palette (the line-entry assumption when there's no prior-row
-        // carry-over). The outer hw_state stays as-is and is unused.
-        pipeline::parallel_for(height, [&](std::size_t y) {
-            std::vector<Color3f> local_hw_state = make_initial_hw_state();
-            run_row(y, local_hw_state);
-        });
-    }
-    total_error = total_error_atomic.load();
-    total_moves = total_moves_atomic.load();
+    for (std::size_t y = 0; y < height; ++y)
+        run_row(y, outer_hw_state);
 
     // ---- 5. Pack 6-plane bitplane data --------------------------------
     auto planes = bitplane::encode(ham_values, width, height, 6);
@@ -3782,17 +3745,28 @@ Result<ScapResult> encode_strips_ham6_ocs(const Image& image,
     ScapResult res;
     res.planes = *std::move(planes);
     res.palette = base_palette;
+    res.slot_table = table;
     res.line_moves = std::move(line_moves);
     res.rendered = std::move(preview);
     res.total_error = static_cast<float>(total_error);
     res.avg_changes_per_line = static_cast<float>(ham_cap_result->changes_per_line);
     auto h_div = static_cast<float>(height ? height : 1);
-    res.avg_total_moves_per_line = static_cast<float>(total_moves) / h_div;
-    res.max_moves_per_line = 1 + table.slots.size();
-    res.avg_hblank_moves_per_line = 1.0f;
-    res.max_hblank_moves_per_line = 1;
-    res.avg_visible_moves_per_line = static_cast<float>(table.slots.size());
-    res.max_visible_moves_per_line = table.slots.size();
+    std::size_t total_hblank = 0, total_visible = 0;
+    for (const auto& row : res.line_moves) {
+        std::size_t hb = 0, vis = 0;
+        for (const auto& op : row) {
+            if (op.kind != ScapOpKind::kMove) continue;
+            if (op.slot_index < 0) ++hb; else ++vis;
+        }
+        total_hblank += hb;
+        total_visible += vis;
+        res.max_moves_per_line = std::max(res.max_moves_per_line, hb + vis);
+        res.max_hblank_moves_per_line = std::max(res.max_hblank_moves_per_line, hb);
+        res.max_visible_moves_per_line = std::max(res.max_visible_moves_per_line, vis);
+    }
+    res.avg_total_moves_per_line = static_cast<float>(total_hblank + total_visible) / h_div;
+    res.avg_hblank_moves_per_line = static_cast<float>(total_hblank) / h_div;
+    res.avg_visible_moves_per_line = static_cast<float>(total_visible) / h_div;
     if (on_progress) on_progress(1.0f, "done");
     for (auto& p : res.rendered.pixels())
         p = palette::quantize_to_ocs(p);

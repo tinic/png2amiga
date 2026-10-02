@@ -1524,15 +1524,10 @@ Result<std::string> generate_viewer(const bitplane::BitplaneData& planes,
     };
 
     if (has_copper) {
-        // Write palette changes right after the last bitplane fetch completes.
-        // Encoded byte 0xDD = binary 11011101, which puts the copper WAIT H
-        // comparator at 0x6E * 2 = 0xDC (= 220 color clocks). For hires
-        // FMODE=3, DDFSTOP is 0xD4 = 212 and the 64-bit fetch overread
-        // extends ~8 CCK past DDFSTOP, so the last fetch completes right
-        // around 220. Waking at 220 reclaims the ~2 CCK of dead time that
-        // the previous H=0xDE/222 position left on the table — visible in
-        // the e9k-debugger copper overlay. For non-FMODE=3 modes the fetch
-        // ends even earlier (no overread), so 0xDD is still safe.
+        // Palette writes must wait for displayed pixels, not merely the
+        // last bitplane fetch. $DD can recolor the right edge after DMA
+        // has already fetched those pixels. Progressive uses $E1; lace
+        // retains its later $E3 wait.
         // Line 0: write changes before display starts (no WAIT).
         // In interlace mode, field 1 renders even image rows (0, 2, 4, ...)
         // so row 0's changes go here; field 2 renders odd rows so its
@@ -1560,10 +1555,7 @@ Result<std::string> generate_viewer(const bitplane::BitplaneData& planes,
                                  std::size_t rows_in_field,
                                  int vpos_step,
                                  int vpos_first) {
-            // Interlace needs the WAIT HP pushed later (0xE3 = HPOS 226) —
-            // with 0xDD (220) the MOVEs land inside the last ~16 lores pixels
-            // of the scanline still being drawn. Progressive keeps 0xDD.
-            auto hp_byte = is_lace ? "0xE3" : "0xDD";
+            auto hp_byte = is_lace ? "0xE3" : "0xE1";
             out += std::format("    for (int y = 1; y < {}; y++) {{\n", rows_in_field);
             if (options.copper_wait_h_only) {
                 // Experimental V-mask path. First WAIT anchors V to the
@@ -1588,17 +1580,10 @@ Result<std::string> generate_viewer(const bitplane::BitplaneData& planes,
                 out += std::format("        USHORT line = (y - 1) * {} + {};\n",
                                    vpos_step,
                                    vpos_first);
-                // Special case: at line==255 use 0xFFDF — this specific
-                // pattern activates the copper's "past 0xFF" state so
-                // subsequent WAITs with wrapped vp values (vp=256, 258 ...)
-                // match correctly.
-                out += std::format("        if (line == 255) {{\n"
-                                   "            *{0}++ = 0xFFDF;\n"
-                                   "        }} else {{\n"
-                                   "            *{0}++ = ((line & 0xFF) << 8) | {1};\n"
-                                   "        }}\n",
-                                   cl_var,
-                                   hp_byte);
+                // Keep the late horizontal position on line 255 too;
+                // substituting $FFDF would reopen the right-edge race.
+                out += std::format("        *{0}++ = ((line & 0xFF) << 8) | {1};\n",
+                                   cl_var, hp_byte);
                 out += std::format("        *{0}++ = 0xfffe;\n", cl_var);
             }
             emit_copper_changes(cl_var, row_expr, aga_banks);
@@ -1630,11 +1615,11 @@ Result<std::string> generate_viewer(const bitplane::BitplaneData& planes,
         auto field_lines = is_lace ? static_cast<int>(height / 2) : static_cast<int>(height);
         auto last_line = vpos_y_start + field_lines * vpos_stride;
         auto loop_max_line = vpos_y_start + (field_lines - 2) * vpos_stride;
-        // If the per-line loop already emitted 0xFFDF (loop reached line=255
+        // If the per-line loop already waited past line 255 (loop reached line=255
         // or beyond), don't emit it here — a second 0xFFDF after we've passed
         // vp=0xFF hangs forever. Only emit in blank-below when loop is too
         // short to have emitted one itself.
-        // The strips path bakes its own 0xFFDF marker into the static table
+        // The strips path bakes its own late line-255 wait into the static table
         // when needed (see strips_copper_list emitter); suppress here so we
         // don't double-emit and hang past vp=0xFF.
         // copper_wait_h_only mode skips the per-line wrap marker entirely
@@ -1840,11 +1825,7 @@ Result<std::string> generate_viewer(const bitplane::BitplaneData& planes,
                                    y_start);
             } else {
                 out += std::format("        USHORT line = (y - 1) + {};\n", y_start);
-                out += "        if (line == 255) {\n";
-                out += "            *cl2++ = 0xFFDF;  // activates past-0xFF state\n";
-                out += "        } else {\n";
-                out += "            *cl2++ = ((line & 0xFF) << 8) | 0xE3;\n";
-                out += "        }\n";
+                out += "        *cl2++ = ((line & 0xFF) << 8) | 0xE3;\n";
                 out += "        *cl2++ = 0xfffe;\n";
             }
             emit_copper_changes("cl2", "(y * 2 + 1)", aga_banks);
