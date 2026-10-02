@@ -32,7 +32,9 @@ const BUDGETS = [
   // 2.65 MB up from 2.55 MB — the Master System / Game Gear tile encoder
   // (clustering, flip dedup, merge + Lloyd refit) and the Amstrad CPC /
   // CPC Plus encoders add ~80 KB for eight new hardware target modes.
-  { match: /^png2amiga-.*\.wasm$/,  max:   2.65 * 1024 * 1024, label: 'wasm binary' },
+  // 2.75 MB up from 2.65 MB — strip lifetime color refinement and the
+  // Emscripten 6 toolchain bring the SIMD release build to 2.67 MB.
+  { match: /^png2amiga-.*\.wasm$/,  max:   2.75 * 1024 * 1024, label: 'wasm binary' },
   { match: /^wasm\.worker-.*\.js$/, max:  20 * 1024, label: 'worker'     },
   { match: /^crt-.*\.js$/,          max:  30 * 1024, label: 'crt module' },
   { match: /^index-.*\.css$/,       max: 500 * 1024, label: 'css'        },
