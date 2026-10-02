@@ -2864,6 +2864,13 @@ sys.exit(0 if ok else 1)")
                 ${_wait_options} -- ${_wait_args})
     endforeach()
 
+    foreach(_case IN ITEMS "aga" "ocs" "dpf" "dpf-sliced")
+        add_test(NAME "amiga-export-replay-${_case}"
+            COMMAND ${Python3_EXECUTABLE} ${CMAKE_SOURCE_DIR}/tools/check_amiga_export_replay.py
+                --cli $<TARGET_FILE:png2amiga> --in ${CMAKE_SOURCE_DIR}/examples/maui.jpg
+                --case ${_case})
+    endforeach()
+
 endif() # NOT EMSCRIPTEN
 
 # Mac-only convenience target: clang-tidy + cppcheck over src/ via tools/lint.sh.

@@ -4064,16 +4064,18 @@ Result<PipelineResult> run_pipeline(const std::uint8_t* input_data,
             auto shift_palette = [&](std::vector<Color3f>& p) {
                 std::vector<Color3f> shifted(pf2_base, Color3f{0, 0, 0});
                 shifted.insert(shifted.end(), p.begin(), p.end());
+                shifted[0] = p[0];
+                shifted[pf2_base] = Color3f{0, 0, 0};
                 p = std::move(shifted);
             };
             for (auto& pal : copper_result->scanline_palettes)
                 shift_palette(pal);
             for (auto& line : copper_result->scanline_changes)
                 for (auto& ch : line)
-                    ch.reg = static_cast<std::uint8_t>(ch.reg + pf2_base);
+                    ch.reg = ch.reg == 0 ? 0 : static_cast<std::uint8_t>(ch.reg + pf2_base);
             copper_result->num_colors += pf2_base;
             for (auto& idx : slot_indices)
-                idx = static_cast<std::uint8_t>(idx + pf2_base);
+                idx = idx == 0 ? 0 : static_cast<std::uint8_t>(idx + pf2_base);
         }
 
         // Use the first scanline's palette as the nominal palette
@@ -4971,9 +4973,11 @@ Result<PipelineResult> run_pipeline(const std::uint8_t* input_data,
             auto pf2_base = std::size_t{1} << (trial_planes.depth / 2);
             std::vector<Color3f> shifted(pf2_base, Color3f{0, 0, 0});
             shifted.insert(shifted.end(), used_palette.begin(), used_palette.end());
+            // PF2 index zero is transparent and displays COLOR00.
+            shifted[0] = used_palette[0];
             used_palette = std::move(shifted);
             for (auto& idx : trial_indices)
-                idx = static_cast<std::uint8_t>(idx + pf2_base);
+                idx = idx == 0 ? 0 : static_cast<std::uint8_t>(idx + pf2_base);
         }
         PipelineResult result;
         result.rendered = std::move(trial->rendered);
@@ -5124,9 +5128,11 @@ Result<PipelineResult> run_pipeline(const std::uint8_t* input_data,
         auto pf2_base = std::size_t{1} << (planes->depth / 2);
         std::vector<Color3f> shifted(pf2_base, Color3f{0, 0, 0});
         shifted.insert(shifted.end(), used_palette.begin(), used_palette.end());
+        // PF2 index zero is transparent and displays COLOR00.
+        shifted[0] = used_palette[0];
         used_palette = std::move(shifted);
         for (auto& idx : dither_result.indices)
-            idx = static_cast<std::uint8_t>(idx + pf2_base);
+            idx = idx == 0 ? 0 : static_cast<std::uint8_t>(idx + pf2_base);
     }
     if (!preview) return std::unexpected{preview.error()};
 
