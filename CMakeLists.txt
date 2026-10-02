@@ -2758,9 +2758,9 @@ sys.exit(0 if ok else 1)")
     _add_score_test(dpf           out.iff 11.0 --mode lores --dpf)
 
     # DPF strips: dark shades expose candidate-key collisions; the ramp
-    # requires preloading future colors rather than only immediate gain.
+    # requires future-color preloading and guard-aware planning/refinement.
     # Leave margin below the measured S2 for compiler/platform variation.
-    foreach(_case IN ITEMS "chuck31|62" "grungy|57" "ramps|32")
+    foreach(_case IN ITEMS "chuck31|62" "grungy|57" "ramps|38")
         string(REPLACE "|" ";" _parts "${_case}")
         list(GET _parts 0 _image)
         list(GET _parts 1 _min_s2)

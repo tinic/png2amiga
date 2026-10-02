@@ -1,0 +1,60 @@
+{
+  "baseline_commit": "8158ac7e",
+  "size": [
+    320,
+    200
+  ],
+  "dither": "default Floyd-Steinberg",
+  "final_source_sha256": "c2de496cc05b481cb05879480efecdc7ead6f5d67b6f6ce0d0ad8f7a84156901",
+  "selected": {
+    "dpf": "guard-aware planning and lifetime fitting",
+    "ehb": "guard-aware planning; skip hardware-identical candidate writes"
+  },
+  "validation": "26 targeted CTests passed; 14 EHB tests repeated and passed after no-op candidate cleanup",
+  "modes": {
+    "dpf": {
+      "baseline_mean_s2": 58.42521739130434,
+      "final_mean_s2": 59.66130434782609,
+      "mean_delta": 1.2360869565217392,
+      "wins": 22,
+      "ties": 0,
+      "losses": 1,
+      "regressions": [
+        {
+          "image": "space3.png",
+          "s2": 51.58,
+          "seconds": 0.701,
+          "delta": -0.37
+        }
+      ]
+    },
+    "ehb": {
+      "baseline_mean_s2": 73.52478260869565,
+      "final_mean_s2": 73.80173913043478,
+      "mean_delta": 0.27695652173913043,
+      "wins": 20,
+      "ties": 0,
+      "losses": 3,
+      "regressions": [
+        {
+          "image": "brick.png",
+          "s2": 80.89,
+          "seconds": 0.848,
+          "delta": -0.21
+        },
+        {
+          "image": "logo.png",
+          "s2": 71.3,
+          "seconds": 0.866,
+          "delta": -0.16
+        },
+        {
+          "image": "shooter.png",
+          "s2": 68.51,
+          "seconds": 1.032,
+          "delta": -0.09
+        }
+      ]
+    }
+  }
+}

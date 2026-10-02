@@ -1,0 +1,1415 @@
+{
+  "dpf-guard": {
+    "cli": "/Users/turo/png2amiga/build/png2amiga",
+    "flags": [
+      "--mode",
+      "lores",
+      "--dpf",
+      "--strips",
+      "--width",
+      "320",
+      "--height",
+      "200"
+    ],
+    "results": [
+      {
+        "image": "fantasy.png",
+        "s2": 63.53,
+        "seconds": 1.661,
+        "delta": 1.51
+      },
+      {
+        "image": "grungy.png",
+        "s2": 60.47,
+        "seconds": 0.836,
+        "delta": 0.16
+      },
+      {
+        "image": "macaw.jpg",
+        "s2": 54.76,
+        "seconds": 1.526,
+        "delta": 1.4
+      },
+      {
+        "image": "maui.jpg",
+        "s2": 61.86,
+        "seconds": 1.444,
+        "delta": -0.09
+      },
+      {
+        "image": "photo.jpg",
+        "s2": 52.89,
+        "seconds": 0.766,
+        "delta": 1.22
+      },
+      {
+        "image": "ramps.png",
+        "s2": 35.4,
+        "seconds": 0.913,
+        "delta": 0.8
+      }
+    ]
+  },
+  "ehb-all-both": {
+    "cli": "/Users/turo/png2amiga/build/png2amiga",
+    "flags": [
+      "--mode",
+      "ehb",
+      "--strips",
+      "--width",
+      "320",
+      "--height",
+      "200"
+    ],
+    "results": [
+      {
+        "image": "3macao.jpg",
+        "s2": 74.1,
+        "seconds": 0.942,
+        "delta": 1.01
+      },
+      {
+        "image": "asterix.png",
+        "s2": 79.26,
+        "seconds": 0.973,
+        "delta": 0.28
+      },
+      {
+        "image": "brick.png",
+        "s2": 81.02,
+        "seconds": 0.524,
+        "delta": -0.08
+      },
+      {
+        "image": "chuck29.png",
+        "s2": 73.51,
+        "seconds": 0.664,
+        "delta": 0.18
+      },
+      {
+        "image": "chuck30.png",
+        "s2": 77.39,
+        "seconds": 0.73,
+        "delta": 0.07
+      },
+      {
+        "image": "chuck31.png",
+        "s2": 75.21,
+        "seconds": 0.6,
+        "delta": 0.05
+      },
+      {
+        "image": "electrichues02.jpg",
+        "s2": 72.9,
+        "seconds": 0.709,
+        "delta": 0.36
+      },
+      {
+        "image": "fantasy.png",
+        "s2": 77.01,
+        "seconds": 0.906,
+        "delta": 0.51
+      },
+      {
+        "image": "fantasy1.png",
+        "s2": 74.19,
+        "seconds": 0.992,
+        "delta": 0.39
+      },
+      {
+        "image": "fantasy2.png",
+        "s2": 73.33,
+        "seconds": 1.056,
+        "delta": 0.75
+      },
+      {
+        "image": "fromthe.png",
+        "s2": 74.37,
+        "seconds": 0.949,
+        "delta": -0.12
+      },
+      {
+        "image": "grungy.png",
+        "s2": 71.4,
+        "seconds": 0.614,
+        "delta": -0.19
+      },
+      {
+        "image": "jungle.webp",
+        "s2": 80.8,
+        "seconds": 0.827,
+        "delta": 0.01
+      },
+      {
+        "image": "logo.png",
+        "s2": 71.47,
+        "seconds": 0.696,
+        "delta": 0.01
+      },
+      {
+        "image": "lovers.jpg",
+        "s2": 73.32,
+        "seconds": 0.849,
+        "delta": 0.12
+      },
+      {
+        "image": "macaw.jpg",
+        "s2": 74.34,
+        "seconds": 0.874,
+        "delta": 0.22
+      },
+      {
+        "image": "makena.jpg",
+        "s2": 73.01,
+        "seconds": 0.727,
+        "delta": 0.25
+      },
+      {
+        "image": "maui.jpg",
+        "s2": 74.27,
+        "seconds": 0.776,
+        "delta": 0.15
+      },
+      {
+        "image": "ocs_4096.png",
+        "s2": 73.95,
+        "seconds": 0.604,
+        "delta": 0.41
+      },
+      {
+        "image": "photo.jpg",
+        "s2": 60.96,
+        "seconds": 0.577,
+        "delta": -0.02
+      },
+      {
+        "image": "ramps.png",
+        "s2": 71.0,
+        "seconds": 0.61,
+        "delta": 1.04
+      },
+      {
+        "image": "shooter.png",
+        "s2": 68.58,
+        "seconds": 0.939,
+        "delta": -0.02
+      },
+      {
+        "image": "space3.png",
+        "s2": 71.59,
+        "seconds": 0.734,
+        "delta": 0.53
+      }
+    ]
+  },
+  "ehb-guard": {
+    "cli": "/Users/turo/png2amiga/build/png2amiga",
+    "flags": [
+      "--mode",
+      "ehb",
+      "--strips",
+      "--width",
+      "320",
+      "--height",
+      "200"
+    ],
+    "results": [
+      {
+        "image": "fantasy.png",
+        "s2": 77.01,
+        "seconds": 1.561,
+        "delta": 0.51
+      },
+      {
+        "image": "grungy.png",
+        "s2": 71.4,
+        "seconds": 1.219,
+        "delta": -0.19
+      },
+      {
+        "image": "macaw.jpg",
+        "s2": 74.32,
+        "seconds": 1.785,
+        "delta": 0.2
+      },
+      {
+        "image": "maui.jpg",
+        "s2": 74.32,
+        "seconds": 1.39,
+        "delta": 0.2
+      },
+      {
+        "image": "photo.jpg",
+        "s2": 60.9,
+        "seconds": 1.218,
+        "delta": -0.08
+      },
+      {
+        "image": "ramps.png",
+        "s2": 71.03,
+        "seconds": 1.279,
+        "delta": 1.07
+      }
+    ]
+  },
+  "ehb-final": {
+    "cli": "/Users/turo/png2amiga/build/png2amiga",
+    "flags": [
+      "--mode",
+      "ehb",
+      "--strips",
+      "--width",
+      "320",
+      "--height",
+      "200"
+    ],
+    "results": [
+      {
+        "image": "3macao.jpg",
+        "s2": 73.61,
+        "seconds": 1.746,
+        "delta": 0.52
+      },
+      {
+        "image": "asterix.png",
+        "s2": 79.14,
+        "seconds": 2.084,
+        "delta": 0.16
+      },
+      {
+        "image": "brick.png",
+        "s2": 80.89,
+        "seconds": 0.848,
+        "delta": -0.21
+      },
+      {
+        "image": "chuck29.png",
+        "s2": 73.38,
+        "seconds": 1.222,
+        "delta": 0.05
+      },
+      {
+        "image": "chuck30.png",
+        "s2": 77.41,
+        "seconds": 1.582,
+        "delta": 0.09
+      },
+      {
+        "image": "chuck31.png",
+        "s2": 75.31,
+        "seconds": 0.966,
+        "delta": 0.15
+      },
+      {
+        "image": "electrichues02.jpg",
+        "s2": 72.96,
+        "seconds": 1.226,
+        "delta": 0.42
+      },
+      {
+        "image": "fantasy.png",
+        "s2": 77.17,
+        "seconds": 1.466,
+        "delta": 0.67
+      },
+      {
+        "image": "fantasy1.png",
+        "s2": 74.19,
+        "seconds": 1.567,
+        "delta": 0.39
+      },
+      {
+        "image": "fantasy2.png",
+        "s2": 72.89,
+        "seconds": 1.879,
+        "delta": 0.31
+      },
+      {
+        "image": "fromthe.png",
+        "s2": 74.51,
+        "seconds": 1.428,
+        "delta": 0.02
+      },
+      {
+        "image": "grungy.png",
+        "s2": 71.92,
+        "seconds": 0.677,
+        "delta": 0.33
+      },
+      {
+        "image": "jungle.webp",
+        "s2": 80.88,
+        "seconds": 1.18,
+        "delta": 0.09
+      },
+      {
+        "image": "logo.png",
+        "s2": 71.3,
+        "seconds": 0.866,
+        "delta": -0.16
+      },
+      {
+        "image": "lovers.jpg",
+        "s2": 73.47,
+        "seconds": 1.241,
+        "delta": 0.27
+      },
+      {
+        "image": "macaw.jpg",
+        "s2": 74.21,
+        "seconds": 1.204,
+        "delta": 0.09
+      },
+      {
+        "image": "makena.jpg",
+        "s2": 72.93,
+        "seconds": 0.935,
+        "delta": 0.17
+      },
+      {
+        "image": "maui.jpg",
+        "s2": 74.16,
+        "seconds": 1.041,
+        "delta": 0.04
+      },
+      {
+        "image": "ocs_4096.png",
+        "s2": 73.67,
+        "seconds": 0.713,
+        "delta": 0.13
+      },
+      {
+        "image": "photo.jpg",
+        "s2": 61.13,
+        "seconds": 0.673,
+        "delta": 0.15
+      },
+      {
+        "image": "ramps.png",
+        "s2": 72.04,
+        "seconds": 0.69,
+        "delta": 2.08
+      },
+      {
+        "image": "shooter.png",
+        "s2": 68.51,
+        "seconds": 1.032,
+        "delta": -0.09
+      },
+      {
+        "image": "space3.png",
+        "s2": 71.76,
+        "seconds": 1.019,
+        "delta": 0.7
+      }
+    ]
+  },
+  "dpf-final": {
+    "cli": "/Users/turo/png2amiga/build/png2amiga",
+    "flags": [
+      "--mode",
+      "lores",
+      "--dpf",
+      "--strips",
+      "--width",
+      "320",
+      "--height",
+      "200"
+    ],
+    "results": [
+      {
+        "image": "3macao.jpg",
+        "s2": 57.32,
+        "seconds": 0.634,
+        "delta": 1.2
+      },
+      {
+        "image": "asterix.png",
+        "s2": 60.89,
+        "seconds": 0.644,
+        "delta": 0.65
+      },
+      {
+        "image": "brick.png",
+        "s2": 78.68,
+        "seconds": 0.277,
+        "delta": 0.15
+      },
+      {
+        "image": "chuck29.png",
+        "s2": 59.3,
+        "seconds": 0.484,
+        "delta": 1.5
+      },
+      {
+        "image": "chuck30.png",
+        "s2": 62.98,
+        "seconds": 0.547,
+        "delta": 1.49
+      },
+      {
+        "image": "chuck31.png",
+        "s2": 66.04,
+        "seconds": 0.472,
+        "delta": 1.24
+      },
+      {
+        "image": "electrichues02.jpg",
+        "s2": 53.03,
+        "seconds": 0.7,
+        "delta": 0.8
+      },
+      {
+        "image": "fantasy.png",
+        "s2": 63.32,
+        "seconds": 0.696,
+        "delta": 1.3
+      },
+      {
+        "image": "fantasy1.png",
+        "s2": 58.03,
+        "seconds": 0.712,
+        "delta": 0.83
+      },
+      {
+        "image": "fantasy2.png",
+        "s2": 55.67,
+        "seconds": 0.834,
+        "delta": 0.72
+      },
+      {
+        "image": "fromthe.png",
+        "s2": 56.42,
+        "seconds": 0.833,
+        "delta": 2.72
+      },
+      {
+        "image": "grungy.png",
+        "s2": 60.54,
+        "seconds": 0.435,
+        "delta": 0.23
+      },
+      {
+        "image": "jungle.webp",
+        "s2": 67.84,
+        "seconds": 0.545,
+        "delta": 2.05
+      },
+      {
+        "image": "logo.png",
+        "s2": 61.89,
+        "seconds": 0.548,
+        "delta": 0.57
+      },
+      {
+        "image": "lovers.jpg",
+        "s2": 54.54,
+        "seconds": 0.658,
+        "delta": 0.37
+      },
+      {
+        "image": "macaw.jpg",
+        "s2": 56.09,
+        "seconds": 0.893,
+        "delta": 2.73
+      },
+      {
+        "image": "makena.jpg",
+        "s2": 65.87,
+        "seconds": 0.646,
+        "delta": 0.74
+      },
+      {
+        "image": "maui.jpg",
+        "s2": 62.2,
+        "seconds": 0.886,
+        "delta": 0.25
+      },
+      {
+        "image": "ocs_4096.png",
+        "s2": 72.13,
+        "seconds": 0.551,
+        "delta": 1.01
+      },
+      {
+        "image": "photo.jpg",
+        "s2": 52.82,
+        "seconds": 0.637,
+        "delta": 1.15
+      },
+      {
+        "image": "ramps.png",
+        "s2": 41.57,
+        "seconds": 0.376,
+        "delta": 6.97
+      },
+      {
+        "image": "shooter.png",
+        "s2": 53.46,
+        "seconds": 0.742,
+        "delta": 0.13
+      },
+      {
+        "image": "space3.png",
+        "s2": 51.58,
+        "seconds": 0.701,
+        "delta": -0.37
+      }
+    ]
+  },
+  "ehb-baseline": {
+    "cli": "/Users/turo/png2amiga/build/strip-seams/baseline-cli",
+    "flags": [
+      "--mode",
+      "ehb",
+      "--strips",
+      "--width",
+      "320",
+      "--height",
+      "200"
+    ],
+    "results": [
+      {
+        "image": "fantasy.png",
+        "s2": 76.5,
+        "seconds": 5.589
+      },
+      {
+        "image": "grungy.png",
+        "s2": 71.59,
+        "seconds": 3.153
+      },
+      {
+        "image": "macaw.jpg",
+        "s2": 74.12,
+        "seconds": 4.856
+      },
+      {
+        "image": "maui.jpg",
+        "s2": 74.12,
+        "seconds": 3.582
+      },
+      {
+        "image": "photo.jpg",
+        "s2": 60.98,
+        "seconds": 1.856
+      },
+      {
+        "image": "ramps.png",
+        "s2": 69.96,
+        "seconds": 2.296
+      }
+    ]
+  },
+  "ehb-all-baseline": {
+    "cli": "/Users/turo/png2amiga/build/strip-seams/baseline-cli",
+    "flags": [
+      "--mode",
+      "ehb",
+      "--strips",
+      "--width",
+      "320",
+      "--height",
+      "200"
+    ],
+    "results": [
+      {
+        "image": "3macao.jpg",
+        "s2": 73.09,
+        "seconds": 0.78
+      },
+      {
+        "image": "asterix.png",
+        "s2": 78.98,
+        "seconds": 0.831
+      },
+      {
+        "image": "brick.png",
+        "s2": 81.1,
+        "seconds": 0.441
+      },
+      {
+        "image": "chuck29.png",
+        "s2": 73.33,
+        "seconds": 0.567
+      },
+      {
+        "image": "chuck30.png",
+        "s2": 77.32,
+        "seconds": 0.625
+      },
+      {
+        "image": "chuck31.png",
+        "s2": 75.16,
+        "seconds": 0.489
+      },
+      {
+        "image": "electrichues02.jpg",
+        "s2": 72.54,
+        "seconds": 0.601
+      },
+      {
+        "image": "fantasy.png",
+        "s2": 76.5,
+        "seconds": 0.763
+      },
+      {
+        "image": "fantasy1.png",
+        "s2": 73.8,
+        "seconds": 0.858
+      },
+      {
+        "image": "fantasy2.png",
+        "s2": 72.58,
+        "seconds": 0.898
+      },
+      {
+        "image": "fromthe.png",
+        "s2": 74.49,
+        "seconds": 0.803
+      },
+      {
+        "image": "grungy.png",
+        "s2": 71.59,
+        "seconds": 0.488
+      },
+      {
+        "image": "jungle.webp",
+        "s2": 80.79,
+        "seconds": 0.68
+      },
+      {
+        "image": "logo.png",
+        "s2": 71.46,
+        "seconds": 0.58
+      },
+      {
+        "image": "lovers.jpg",
+        "s2": 73.2,
+        "seconds": 0.73
+      },
+      {
+        "image": "macaw.jpg",
+        "s2": 74.12,
+        "seconds": 0.729
+      },
+      {
+        "image": "makena.jpg",
+        "s2": 72.76,
+        "seconds": 0.609
+      },
+      {
+        "image": "maui.jpg",
+        "s2": 74.12,
+        "seconds": 0.65
+      },
+      {
+        "image": "ocs_4096.png",
+        "s2": 73.54,
+        "seconds": 0.5
+      },
+      {
+        "image": "photo.jpg",
+        "s2": 60.98,
+        "seconds": 0.476
+      },
+      {
+        "image": "ramps.png",
+        "s2": 69.96,
+        "seconds": 0.498
+      },
+      {
+        "image": "shooter.png",
+        "s2": 68.6,
+        "seconds": 0.671
+      },
+      {
+        "image": "space3.png",
+        "s2": 71.06,
+        "seconds": 0.639
+      }
+    ]
+  },
+  "dpf-all-both": {
+    "cli": "/Users/turo/png2amiga/build/png2amiga",
+    "flags": [
+      "--mode",
+      "lores",
+      "--dpf",
+      "--strips",
+      "--width",
+      "320",
+      "--height",
+      "200"
+    ],
+    "results": [
+      {
+        "image": "3macao.jpg",
+        "s2": 57.32,
+        "seconds": 0.644,
+        "delta": 1.2
+      },
+      {
+        "image": "asterix.png",
+        "s2": 60.89,
+        "seconds": 0.727,
+        "delta": 0.65
+      },
+      {
+        "image": "brick.png",
+        "s2": 78.68,
+        "seconds": 0.331,
+        "delta": 0.15
+      },
+      {
+        "image": "chuck29.png",
+        "s2": 59.3,
+        "seconds": 0.57,
+        "delta": 1.5
+      },
+      {
+        "image": "chuck30.png",
+        "s2": 62.98,
+        "seconds": 0.429,
+        "delta": 1.49
+      },
+      {
+        "image": "chuck31.png",
+        "s2": 66.04,
+        "seconds": 0.333,
+        "delta": 1.24
+      },
+      {
+        "image": "electrichues02.jpg",
+        "s2": 53.03,
+        "seconds": 0.426,
+        "delta": 0.8
+      },
+      {
+        "image": "fantasy.png",
+        "s2": 63.32,
+        "seconds": 0.638,
+        "delta": 1.3
+      },
+      {
+        "image": "fantasy1.png",
+        "s2": 58.03,
+        "seconds": 0.726,
+        "delta": 0.83
+      },
+      {
+        "image": "fantasy2.png",
+        "s2": 55.67,
+        "seconds": 0.783,
+        "delta": 0.72
+      },
+      {
+        "image": "fromthe.png",
+        "s2": 56.42,
+        "seconds": 0.671,
+        "delta": 2.72
+      },
+      {
+        "image": "grungy.png",
+        "s2": 60.54,
+        "seconds": 0.464,
+        "delta": 0.23
+      },
+      {
+        "image": "jungle.webp",
+        "s2": 67.84,
+        "seconds": 0.639,
+        "delta": 2.05
+      },
+      {
+        "image": "logo.png",
+        "s2": 61.89,
+        "seconds": 0.406,
+        "delta": 0.57
+      },
+      {
+        "image": "lovers.jpg",
+        "s2": 54.54,
+        "seconds": 0.56,
+        "delta": 0.37
+      },
+      {
+        "image": "macaw.jpg",
+        "s2": 56.09,
+        "seconds": 0.554,
+        "delta": 2.73
+      },
+      {
+        "image": "makena.jpg",
+        "s2": 65.87,
+        "seconds": 0.49,
+        "delta": 0.74
+      },
+      {
+        "image": "maui.jpg",
+        "s2": 62.2,
+        "seconds": 0.461,
+        "delta": 0.25
+      },
+      {
+        "image": "ocs_4096.png",
+        "s2": 72.13,
+        "seconds": 0.342,
+        "delta": 1.01
+      },
+      {
+        "image": "photo.jpg",
+        "s2": 52.82,
+        "seconds": 0.317,
+        "delta": 1.15
+      },
+      {
+        "image": "ramps.png",
+        "s2": 41.57,
+        "seconds": 0.354,
+        "delta": 6.97
+      },
+      {
+        "image": "shooter.png",
+        "s2": 53.46,
+        "seconds": 0.433,
+        "delta": 0.13
+      },
+      {
+        "image": "space3.png",
+        "s2": 51.58,
+        "seconds": 0.444,
+        "delta": -0.37
+      }
+    ]
+  },
+  "dpf-baseline": {
+    "cli": "/Users/turo/png2amiga/build/strip-seams/baseline-cli",
+    "flags": [
+      "--mode",
+      "lores",
+      "--dpf",
+      "--strips",
+      "--width",
+      "320",
+      "--height",
+      "200"
+    ],
+    "results": [
+      {
+        "image": "fantasy.png",
+        "s2": 62.02,
+        "seconds": 1.538
+      },
+      {
+        "image": "grungy.png",
+        "s2": 60.31,
+        "seconds": 0.58
+      },
+      {
+        "image": "macaw.jpg",
+        "s2": 53.36,
+        "seconds": 1.194
+      },
+      {
+        "image": "maui.jpg",
+        "s2": 61.95,
+        "seconds": 0.979
+      },
+      {
+        "image": "photo.jpg",
+        "s2": 51.67,
+        "seconds": 0.564
+      },
+      {
+        "image": "ramps.png",
+        "s2": 34.6,
+        "seconds": 0.607
+      }
+    ]
+  },
+  "ehb-all-guard": {
+    "cli": "/Users/turo/png2amiga/build/png2amiga",
+    "flags": [
+      "--mode",
+      "ehb",
+      "--strips",
+      "--width",
+      "320",
+      "--height",
+      "200"
+    ],
+    "results": [
+      {
+        "image": "3macao.jpg",
+        "s2": 74.13,
+        "seconds": 0.899,
+        "delta": 1.04
+      },
+      {
+        "image": "asterix.png",
+        "s2": 79.16,
+        "seconds": 0.973,
+        "delta": 0.18
+      },
+      {
+        "image": "brick.png",
+        "s2": 81.04,
+        "seconds": 0.528,
+        "delta": -0.06
+      },
+      {
+        "image": "chuck29.png",
+        "s2": 73.52,
+        "seconds": 0.694,
+        "delta": 0.19
+      },
+      {
+        "image": "chuck30.png",
+        "s2": 77.55,
+        "seconds": 0.738,
+        "delta": 0.23
+      },
+      {
+        "image": "chuck31.png",
+        "s2": 75.27,
+        "seconds": 0.615,
+        "delta": 0.11
+      },
+      {
+        "image": "electrichues02.jpg",
+        "s2": 72.86,
+        "seconds": 0.724,
+        "delta": 0.32
+      },
+      {
+        "image": "fantasy.png",
+        "s2": 77.01,
+        "seconds": 0.949,
+        "delta": 0.51
+      },
+      {
+        "image": "fantasy1.png",
+        "s2": 74.37,
+        "seconds": 1.141,
+        "delta": 0.57
+      },
+      {
+        "image": "fantasy2.png",
+        "s2": 73.18,
+        "seconds": 1.135,
+        "delta": 0.6
+      },
+      {
+        "image": "fromthe.png",
+        "s2": 74.54,
+        "seconds": 2.435,
+        "delta": 0.05
+      },
+      {
+        "image": "grungy.png",
+        "s2": 71.4,
+        "seconds": 1.452,
+        "delta": -0.19
+      },
+      {
+        "image": "jungle.webp",
+        "s2": 80.82,
+        "seconds": 1.791,
+        "delta": 0.03
+      },
+      {
+        "image": "logo.png",
+        "s2": 71.51,
+        "seconds": 1.257,
+        "delta": 0.05
+      },
+      {
+        "image": "lovers.jpg",
+        "s2": 73.47,
+        "seconds": 0.954,
+        "delta": 0.27
+      },
+      {
+        "image": "macaw.jpg",
+        "s2": 74.32,
+        "seconds": 0.9,
+        "delta": 0.2
+      },
+      {
+        "image": "makena.jpg",
+        "s2": 72.94,
+        "seconds": 0.762,
+        "delta": 0.18
+      },
+      {
+        "image": "maui.jpg",
+        "s2": 74.32,
+        "seconds": 0.794,
+        "delta": 0.2
+      },
+      {
+        "image": "ocs_4096.png",
+        "s2": 73.89,
+        "seconds": 0.605,
+        "delta": 0.35
+      },
+      {
+        "image": "photo.jpg",
+        "s2": 60.9,
+        "seconds": 0.591,
+        "delta": -0.08
+      },
+      {
+        "image": "ramps.png",
+        "s2": 71.03,
+        "seconds": 0.868,
+        "delta": 1.07
+      },
+      {
+        "image": "shooter.png",
+        "s2": 68.6,
+        "seconds": 0.791,
+        "delta": 0.0
+      },
+      {
+        "image": "space3.png",
+        "s2": 71.53,
+        "seconds": 0.755,
+        "delta": 0.47
+      }
+    ]
+  },
+  "ehb-fit": {
+    "cli": "/Users/turo/png2amiga/build/png2amiga",
+    "flags": [
+      "--mode",
+      "ehb",
+      "--strips",
+      "--width",
+      "320",
+      "--height",
+      "200"
+    ],
+    "results": [
+      {
+        "image": "fantasy.png",
+        "s2": 76.63,
+        "seconds": 0.943,
+        "delta": 0.13
+      },
+      {
+        "image": "grungy.png",
+        "s2": 71.37,
+        "seconds": 0.554,
+        "delta": -0.22
+      },
+      {
+        "image": "macaw.jpg",
+        "s2": 74.18,
+        "seconds": 0.734,
+        "delta": 0.06
+      },
+      {
+        "image": "maui.jpg",
+        "s2": 74.11,
+        "seconds": 0.663,
+        "delta": -0.01
+      },
+      {
+        "image": "photo.jpg",
+        "s2": 60.96,
+        "seconds": 0.986,
+        "delta": -0.02
+      },
+      {
+        "image": "ramps.png",
+        "s2": 69.98,
+        "seconds": 1.193,
+        "delta": 0.02
+      }
+    ]
+  },
+  "dpf-both": {
+    "cli": "/Users/turo/png2amiga/build/png2amiga",
+    "flags": [
+      "--mode",
+      "lores",
+      "--dpf",
+      "--strips",
+      "--width",
+      "320",
+      "--height",
+      "200"
+    ],
+    "results": [
+      {
+        "image": "fantasy.png",
+        "s2": 63.32,
+        "seconds": 1.101,
+        "delta": 1.3
+      },
+      {
+        "image": "grungy.png",
+        "s2": 60.54,
+        "seconds": 0.529,
+        "delta": 0.23
+      },
+      {
+        "image": "macaw.jpg",
+        "s2": 56.09,
+        "seconds": 0.911,
+        "delta": 2.73
+      },
+      {
+        "image": "maui.jpg",
+        "s2": 62.2,
+        "seconds": 0.862,
+        "delta": 0.25
+      },
+      {
+        "image": "photo.jpg",
+        "s2": 52.82,
+        "seconds": 0.538,
+        "delta": 1.15
+      },
+      {
+        "image": "ramps.png",
+        "s2": 41.57,
+        "seconds": 0.621,
+        "delta": 6.97
+      }
+    ]
+  },
+  "dpf-fit": {
+    "cli": "/Users/turo/png2amiga/build/png2amiga",
+    "flags": [
+      "--mode",
+      "lores",
+      "--dpf",
+      "--strips",
+      "--width",
+      "320",
+      "--height",
+      "200"
+    ],
+    "results": [
+      {
+        "image": "fantasy.png",
+        "s2": 62.19,
+        "seconds": 1.238,
+        "delta": 0.17
+      },
+      {
+        "image": "grungy.png",
+        "s2": 60.36,
+        "seconds": 0.671,
+        "delta": 0.05
+      },
+      {
+        "image": "macaw.jpg",
+        "s2": 55.82,
+        "seconds": 0.89,
+        "delta": 2.46
+      },
+      {
+        "image": "maui.jpg",
+        "s2": 62.44,
+        "seconds": 0.699,
+        "delta": 0.49
+      },
+      {
+        "image": "photo.jpg",
+        "s2": 52.09,
+        "seconds": 0.391,
+        "delta": 0.42
+      },
+      {
+        "image": "ramps.png",
+        "s2": 39.36,
+        "seconds": 0.49,
+        "delta": 4.76
+      }
+    ]
+  },
+  "dpf-all-baseline": {
+    "cli": "/Users/turo/png2amiga/build/strip-seams/baseline-cli",
+    "flags": [
+      "--mode",
+      "lores",
+      "--dpf",
+      "--strips",
+      "--width",
+      "320",
+      "--height",
+      "200"
+    ],
+    "results": [
+      {
+        "image": "3macao.jpg",
+        "s2": 56.12,
+        "seconds": 0.711
+      },
+      {
+        "image": "asterix.png",
+        "s2": 60.24,
+        "seconds": 0.594
+      },
+      {
+        "image": "brick.png",
+        "s2": 78.53,
+        "seconds": 0.248
+      },
+      {
+        "image": "chuck29.png",
+        "s2": 57.8,
+        "seconds": 0.368
+      },
+      {
+        "image": "chuck30.png",
+        "s2": 61.49,
+        "seconds": 0.446
+      },
+      {
+        "image": "chuck31.png",
+        "s2": 64.8,
+        "seconds": 0.435
+      },
+      {
+        "image": "electrichues02.jpg",
+        "s2": 52.23,
+        "seconds": 0.406
+      },
+      {
+        "image": "fantasy.png",
+        "s2": 62.02,
+        "seconds": 0.572
+      },
+      {
+        "image": "fantasy1.png",
+        "s2": 57.2,
+        "seconds": 0.56
+      },
+      {
+        "image": "fantasy2.png",
+        "s2": 54.95,
+        "seconds": 0.614
+      },
+      {
+        "image": "fromthe.png",
+        "s2": 53.7,
+        "seconds": 0.547
+      },
+      {
+        "image": "grungy.png",
+        "s2": 60.31,
+        "seconds": 0.303
+      },
+      {
+        "image": "jungle.webp",
+        "s2": 65.79,
+        "seconds": 0.401
+      },
+      {
+        "image": "logo.png",
+        "s2": 61.32,
+        "seconds": 0.337
+      },
+      {
+        "image": "lovers.jpg",
+        "s2": 54.17,
+        "seconds": 0.458
+      },
+      {
+        "image": "macaw.jpg",
+        "s2": 53.36,
+        "seconds": 0.442
+      },
+      {
+        "image": "makena.jpg",
+        "s2": 65.13,
+        "seconds": 0.393
+      },
+      {
+        "image": "maui.jpg",
+        "s2": 61.95,
+        "seconds": 0.406
+      },
+      {
+        "image": "ocs_4096.png",
+        "s2": 71.12,
+        "seconds": 0.344
+      },
+      {
+        "image": "photo.jpg",
+        "s2": 51.67,
+        "seconds": 0.256
+      },
+      {
+        "image": "ramps.png",
+        "s2": 34.6,
+        "seconds": 0.257
+      },
+      {
+        "image": "shooter.png",
+        "s2": 53.33,
+        "seconds": 0.396
+      },
+      {
+        "image": "space3.png",
+        "s2": 51.95,
+        "seconds": 0.375
+      }
+    ]
+  },
+  "ehb-both": {
+    "cli": "/Users/turo/png2amiga/build/png2amiga",
+    "flags": [
+      "--mode",
+      "ehb",
+      "--strips",
+      "--width",
+      "320",
+      "--height",
+      "200"
+    ],
+    "results": [
+      {
+        "image": "fantasy.png",
+        "s2": 77.01,
+        "seconds": 2.116,
+        "delta": 0.51
+      },
+      {
+        "image": "grungy.png",
+        "s2": 71.4,
+        "seconds": 1.236,
+        "delta": -0.19
+      },
+      {
+        "image": "macaw.jpg",
+        "s2": 74.34,
+        "seconds": 1.926,
+        "delta": 0.22
+      },
+      {
+        "image": "maui.jpg",
+        "s2": 74.27,
+        "seconds": 1.721,
+        "delta": 0.15
+      },
+      {
+        "image": "photo.jpg",
+        "s2": 60.96,
+        "seconds": 1.286,
+        "delta": -0.02
+      },
+      {
+        "image": "ramps.png",
+        "s2": 71.0,
+        "seconds": 1.405,
+        "delta": 1.04
+      }
+    ]
+  }
+}

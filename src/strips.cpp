@@ -491,6 +491,22 @@ ScapMove make_move(std::uint8_t reg, std::uint16_t rgb_ocs, int slot_index = -1)
     return m;
 }
 
+// Extra nearest-color error caused by excluding a changing register at a
+// calibrated MOVE boundary. The left side loses the old value; the right
+// side loses the candidate value. Cache the other-register error per sample.
+struct GuardProbe {
+    color_space::OKLab target;
+    float other;
+    float old_error;
+    bool left;
+};
+constexpr int kDpfGuardRadius = 1;
+constexpr int kEhbGuardRadius = 3;
+
+float lab_error(const color_space::OKLab& a, const color_space::OKLab& b) {
+    return color_space::fma_dist_sq(a.L - b.L, a.a - b.a, a.b - b.b);
+}
+
 }  // namespace
 
 // ---------------------------------------------------------------------------
@@ -1219,10 +1235,34 @@ Result<ScapResult> encode_strips_dpf_ocs(
                                                 future_min[h - 1].data());
                             }
                         }
+                        std::array<GuardProbe, 2 * kDpfGuardRadius + 1> guard{};
+                        std::size_t guard_count = 0;
+                        {
+                            const int landing = table.slots[s].pixel_x;
+                            for (int gx = std::max(0, landing - kDpfGuardRadius);
+                                 gx <= landing + kDpfGuardRadius &&
+                                 static_cast<std::size_t>(gx) < width;
+                                 ++gx) {
+                                const auto& guard_target =
+                                    img_lab[y * width + static_cast<std::size_t>(gx)];
+                                float other = std::numeric_limits<float>::max();
+                                for (std::size_t j = k_min; j < kBaseColors; ++j) {
+                                    if (j == k) continue;
+                                    other = std::min(other,
+                                                     lab_error(guard_target, state.P_lab[j]));
+                                }
+                                const float old = lab_error(guard_target, state.P_lab[k]);
+                                guard[guard_count++] = {guard_target, other, old, gx < landing};
+                            }
+                        }
                         for (std::size_t ci = 0; ci < st.cands.size(); ++ci) {
                             auto& c_lab = st.cands_lab[ci];
                             double e = dist_min1_sum(
                                 soa_pixels, tl_pixel_min_dpf.data(), c_lab.L, c_lab.a, c_lab.b);
+                            for (const auto& g : std::span(guard).first(guard_count)) {
+                                float selected = g.left ? g.old_error : lab_error(g.target, c_lab);
+                                e += static_cast<double>(g.other - std::min(g.other, selected));
+                            }
                             double rank = e;
                             for (std::size_t h = 1;
                                  h <= kLookaheadWeights.size() && s + 1 + h < num_strips;
@@ -1313,6 +1353,18 @@ Result<ScapResult> encode_strips_dpf_ocs(
                     }
                     variables[s + 1] = active;
                 }
+                // Match the final picker: guarded pixels cannot fit this register.
+                std::vector<std::uint32_t> fit_mask(width, 0);
+                for (std::size_t slot = 0; slot < table.slots.size(); ++slot) {
+                    int reg = best.dec_reg[slot];
+                    if (reg < 0) continue;
+                    const int landing = table.slots[slot].pixel_x;
+                    for (int gx = std::max(0, landing - kDpfGuardRadius);
+                         gx <= landing + kDpfGuardRadius &&
+                         static_cast<std::size_t>(gx) < width;
+                         ++gx)
+                        fit_mask[static_cast<std::size_t>(gx)] |= std::uint32_t{1} << reg;
+                }
                 for (int iteration = 0; iteration < 4; ++iteration) {
                     std::vector<color_space::OKLab> labs(nvars);
                     for (std::size_t v = 0; v < nvars; ++v)
@@ -1325,6 +1377,7 @@ Result<ScapResult> encode_strips_dpf_ocs(
                         std::size_t chosen = ids[k_min];
                         float min_error = std::numeric_limits<float>::max();
                         for (std::size_t k = k_min; k < kBaseColors; ++k) {
+                            if (fit_mask[x] & (std::uint32_t{1} << k)) continue;
                             const auto& lab = labs[ids[k]];
                             const float err = color_space::fma_dist_sq(
                                 target_lab.L - lab.L, target_lab.a - lab.a, target_lab.b - lab.b);
@@ -1423,8 +1476,8 @@ Result<ScapResult> encode_strips_dpf_ocs(
                 if (op.kind != ScapOpKind::kMove || op.slot_index < 0 || op.reg < 9 || op.reg > 15)
                     continue;
                 const int landing = table.slots[static_cast<std::size_t>(op.slot_index)].pixel_x;
-                for (int x = std::max(0, landing - 1);
-                     x <= landing + 1 && static_cast<std::size_t>(x) < width;
+                for (int x = std::max(0, landing - kDpfGuardRadius);
+                     x <= landing + kDpfGuardRadius && static_cast<std::size_t>(x) < width;
                      ++x)
                     boundary_mask[y * width + static_cast<std::size_t>(x)] |=
                         static_cast<std::uint8_t>(1u << (op.reg - 8));
@@ -2548,7 +2601,34 @@ Result<ScapResult> encode_strips_ehb_ocs(
                                 min_dist_update(fs, lh.L, lh.a, lh.b, future_min[h - 1].data());
                             }
                         }
+                        std::array<GuardProbe, 2 * kEhbGuardRadius + 1> guard{};
+                        std::size_t guard_count = 0;
+                        {
+                            const int landing = table.slots[s].pixel_x;
+                            for (int gx = std::max(0, landing - kEhbGuardRadius);
+                                 gx <= landing + kEhbGuardRadius &&
+                                 static_cast<std::size_t>(gx) < width;
+                                 ++gx) {
+                                const auto& guard_target =
+                                    img_lab[y * width + static_cast<std::size_t>(gx)];
+                                float other = std::numeric_limits<float>::max();
+                                for (std::size_t j = k_min; j < kBaseColors; ++j) {
+                                    if (j == k || reserved_mask_ehb[j]) continue;
+                                    other = std::min(other,
+                                                     lab_error(guard_target, state.P_lab_b[j]));
+                                    other = std::min(other,
+                                                     lab_error(guard_target, state.P_lab_h[j]));
+                                }
+                                float old = lab_error(guard_target, state.P_lab_b[k]);
+                                old = std::min(old, lab_error(guard_target, state.P_lab_h[k]));
+                                guard[guard_count++] = {guard_target, other, old, gx < landing};
+                            }
+                        }
                         for (std::size_t ci = 0; ci < st.cands.size(); ++ci) {
+                            // The filler already represents keeping this hardware color.
+                            // Rounding in the two error sums must not admit a no-op MOVE.
+                            if (palette::linear_to_ocs(st.cands[ci]) ==
+                                palette::linear_to_ocs(state.P[k])) continue;
                             auto& c_lab_b = st.cands_lab_b[ci];
                             auto& c_lab_h = st.cands_lab_h[ci];
                             double e = dist_min2_sum(soa_pixels,
@@ -2559,6 +2639,13 @@ Result<ScapResult> encode_strips_ehb_ocs(
                                                      c_lab_h.L,
                                                      c_lab_h.a,
                                                      c_lab_h.b);
+                            for (const auto& g : std::span(guard).first(guard_count)) {
+                                float selected = g.left
+                                                     ? g.old_error
+                                                     : std::min(lab_error(g.target, c_lab_b),
+                                                                lab_error(g.target, c_lab_h));
+                                e += static_cast<double>(g.other - std::min(g.other, selected));
+                            }
                             double rank = e;
                             for (std::size_t h = 1;
                                  h <= kLookaheadWeights.size() && s + 1 + h < num_strips;
@@ -2847,8 +2934,8 @@ Result<ScapResult> encode_strips_ehb_ocs(
                 if (palette::linear_to_ocs(strip_eff_per_row[y][slot][op.reg]) == op.rgb_ocs)
                     continue;
                 const int landing = table.slots[slot].pixel_x;
-                for (int x = std::max(0, landing - 3);
-                     x <= landing + 3 && static_cast<std::size_t>(x) < width;
+                for (int x = std::max(0, landing - kEhbGuardRadius);
+                     x <= landing + kEhbGuardRadius && static_cast<std::size_t>(x) < width;
                      ++x)
                     boundary_mask[y * width + static_cast<std::size_t>(x)] |= std::uint32_t{1}
                                                                               << op.reg;

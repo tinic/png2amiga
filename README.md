@@ -445,7 +445,10 @@ At each write boundary, a guard avoids selecting the register being
 changed (including its half-brite index in EHB). DPF guards one pixel
 on either side; EHB guards three, covering the earlier transitions seen
 in the Amiberry timing probe. Previews and S2 scores include these
-constraints.
+constraints. The DPF and EHB planners also charge the nearest-color error
+caused by these guards on both sides of each proposed write, so they avoid
+swaps whose apparent benefit disappears at the boundary. DPF lifetime
+refinement excludes the guarded register from pixel assignments as well.
 
 HAM6 strips plans scanlines in order because register values carry over
 between lines. Its preview uses the palette actually restored within
