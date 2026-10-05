@@ -1,5 +1,6 @@
 #include "amiga.hpp"
 #include "api.hpp"
+#include "thomson_k7.hpp"
 #include "smol-atlas.h"
 #include "c64.hpp"
 #include "c64_prg.hpp"
@@ -1320,6 +1321,7 @@ void print_usage() {
         "      .idx                          Raw chunky indices (1 byte/pixel, scan order);\n"
         "                                    also via --output-indexed / --output-each .idx\n"
         "      .pi1 / .pi2 / .pi3            Atari Degas (STF/STE low / med / hi)\n"
+        "      .k7                           TO7/70 tape picture viewer (LOADM\"\",,R)\n"
         "      .prg                          C64 PRG (autostart)\n"
         "      .koa                          C64 Koala paint\n"
         "      .hir                          C64 hires bitmap\n"
@@ -5655,6 +5657,11 @@ int run_main(int argc, char* argv[]) {
         std::println(stderr, "Error: {}", config.error().message);
         return exit_code::usage;
     }
+    if (ends_with(config->output_path, ".k7") &&
+        config->mode != amiga::Mode::thomson_to7_320x16) {
+        std::println(stderr, "Error: K7 export requires thomson-to7-320x16 (TO7/70) mode");
+        return exit_code::usage;
+    }
     g_quiet = config->quiet;
     g_print_palette = config->print_palette;
     g_print_palette_json = config->print_palette_json;
@@ -7630,10 +7637,26 @@ int run_main(int argc, char* argv[]) {
                    ends_with(config->output_path, ".pi2") ||
                    ends_with(config->output_path, ".pi3")) {
             std::println(stderr,
-                         "Thomson / TED modes support .png, .h, and .bin/.raw output "
+                         "Thomson / TED modes support .png, .h, .bin/.raw (TO7/70 also .k7) "
                          "(got '{}').",
                          config->output_path);
             return exit_code::cant_create;
+        } else if (ends_with(config->output_path, ".k7")) {
+            auto tape = thomson::k7::encode(config->mode, st.raw_frame);
+            if (!tape) {
+                std::println(stderr, "K7: {}", tape.error().message);
+                return exit_code::cant_create;
+            }
+            std::ofstream of(config->output_path, std::ios::binary);
+            of.write(reinterpret_cast<const char*>(tape->data()),
+                     static_cast<std::streamsize>(tape->size()));
+            of.close();
+            if (!of) {
+                std::println(stderr, "K7 write error: {}", config->output_path);
+                return exit_code::cant_create;
+            }
+            cli_status("K7:       {} ({} bytes; TO7/70: LOADM\"\",,R)",
+                       config->output_path, tape->size());
         } else if (ends_with(config->output_path, ".bin") ||
                    ends_with(config->output_path, ".raw")) {
             std::ofstream of(config->output_path, std::ios::binary);

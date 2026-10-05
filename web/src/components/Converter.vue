@@ -27,7 +27,7 @@ import { useWasm } from '../composables/useWasm.js'
 
 import DitherGallery from './DitherGallery.vue'
 
-const { loading: wasmLoading, error: wasmError, abort: abortWasm, convertRGBA, convertPNG, convertIFF, convertHeader, convertViewer, convertDegas, convertRaw, convertPRG, convertKoa, convertScr, convertHir, convertMask, convertMaskRaw } = useWasm()
+const { loading: wasmLoading, error: wasmError, abort: abortWasm, convertRGBA, convertPNG, convertIFF, convertHeader, convertViewer, convertDegas, convertRaw, convertPRG, convertK7, convertKoa, convertScr, convertHir, convertMask, convertMaskRaw } = useWasm()
 
 function onStopEncode(): void {
   abortWasm()
@@ -2234,6 +2234,20 @@ async function downloadScr() {
   converting.value = false
 }
 
+async function downloadK7() {
+  if (!imageBytes.value) return
+  converting.value = true
+  try {
+    const result = await convertK7(imageBytes.value, buildWasmOptions())
+    if (result.error) { errorMsg.value = result.error; return }
+    if (!result.data) return
+    downloadBlob(result.data, baseStem() + '.k7', 'application/octet-stream')
+    exportCount++
+    track('export', { format: 'k7', mode: options.mode, exportCount })
+  } catch (error) { errorMsg.value = errorMessage(error) }
+  finally { converting.value = false }
+}
+
 async function downloadPRG() {
   if (!imageBytes.value) return
   converting.value = true
@@ -2963,8 +2977,10 @@ async function loadExample(example: typeof EXAMPLES[number]) {
                 title="Download a GBA C header: Bitmap[] of BGR555 words (Mode 3/5) or 8bpp indices + Pal[256] (Mode 4), with Width / Height / BitmapLen defines." />
             </div>
             <!-- Thomson / TED export: PNG preview + generic .h header +
-                 native-layout .bin (no IFF / viewer — not Amiga/DOS). -->
+                 native-layout raw data; TO7/70 also has a K7 picture viewer. -->
             <div v-if="isThomsonMode(options.mode) || isTedMode(options.mode)" class="flex gap-2">
+              <Button v-if="options.mode === 'thomson-to7-320x16'" label="k7" icon="pi pi-download" class="flex-1" :disabled="!imageBytes || converting" @click="downloadK7"
+                title='Download a TO7/70 tape picture viewer. Load with LOADM"",,R; Reset exits.' />
               <Button label="png" icon="pi pi-download" class="flex-1" :disabled="!imageBytes || converting" @click="downloadPNG"
                 title="Download the converted image as a PNG preview file." />
               <Button label="h" icon="pi pi-download" class="flex-1" severity="secondary" :disabled="!imageBytes || converting" @click="downloadHeader"

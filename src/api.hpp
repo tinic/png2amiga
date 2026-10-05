@@ -528,6 +528,10 @@ ConvertResult convert_raw(const std::uint8_t* input_data,
                           std::size_t input_size,
                           const Options& options);
 
+// TO7/70 K7 tape containing a binary picture viewer (LOADM"",,R).
+ConvertResult convert_k7(const std::uint8_t* input_data,
+                         std::size_t input_size, const Options& options);
+
 // Thomson TO8 companion .pal bytes for a programmable palette. Each color
 // is encoded as 2 gate-array bytes (low byte = (g4<<4)|b4, high byte = r4),
 // where r4/g4/b4 are the 4-bit intens[] channel indices. Input is the

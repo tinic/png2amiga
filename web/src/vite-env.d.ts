@@ -208,6 +208,7 @@ declare module '@wasm/png2amiga.js' {
     convertDegas(bytes: Uint8Array, opts: WasmOptions): ConvertResult
     convertRaw(bytes: Uint8Array, opts: WasmOptions): ConvertResult
     convertPRG(bytes: Uint8Array, opts: WasmOptions): ConvertResult
+    convertK7(bytes: Uint8Array, opts: WasmOptions): ConvertResult
     convertKoa(bytes: Uint8Array, opts: WasmOptions): ConvertResult
     convertScr(bytes: Uint8Array, opts: WasmOptions): ConvertResult
     convertHir(bytes: Uint8Array, opts: WasmOptions): ConvertResult

@@ -339,18 +339,20 @@ constexpr std::uint32_t thomson_rgb_hex(int r, int g, int b) noexcept {
 }
 
 // ---------------------------------------------------------------------------
-// Thomson TO7/70 FIXED 16-color palette. ROM power-on palette, matching
-// MAME thom_pal_init (src/mame/thomson/thomson_m.cpp). Each entry is (r,g,b)
-// 4-bit indices into kThomsonIntens. Index order is the hardware color index.
-//   0 black 1 red 2 green 3 yellow 4 blue 5 magenta 6 cyan 7 white
-//   8 grey 9 pink 10 light-green 11 sand 12 light-blue 13 parme
-//   14 sky-blue 15 orange
+// Thomson TO7/70 fixed RGB palette, using the to7.fr display interpretation:
+// https://to7.fr/static/to7/js/to7screen.js (TO7screen.palette).
+// Pastel colors are NOT TO8 EF9369 channel indices. MAME's TO8-derived
+// approximation differs substantially, notably pink, light blue and orange.
+// Keep this separate from kThomsonIntens and programmable TO8 palettes.
+// Index order: black, red, green, yellow, blue, magenta, cyan, white,
+// grey, pink, light green, sand, light blue, parme, light cyan, orange.
 // ---------------------------------------------------------------------------
-inline constexpr std::array<std::array<std::uint8_t, 3>, 16> kThomsonTo770Idx = {{
-    {0, 0, 0},     {15, 0, 0},  {0, 15, 0},   {15, 15, 0},  {0, 0, 15},  {15, 0, 15},
-    {0, 15, 15},   {15, 15, 15}, {7, 7, 7},   {10, 3, 3},   {3, 10, 3},  {10, 10, 3},
-    {3, 3, 10},    {10, 3, 10}, {7, 14, 14},  {11, 7, 0},
-}};
+inline constexpr std::array<std::uint32_t, 16> kThomsonTo770Rgb = {
+    0x000000, 0xff0000, 0x00ff00, 0xffff00,
+    0x0000ff, 0xff00ff, 0x00ffff, 0xffffff,
+    0xaaaaaa, 0xffaaaa, 0xaaffaa, 0xffffaa,
+    0x2aaaff, 0xffaaff, 0xaaffff, 0xffaa2a,
+};
 
 // ---------------------------------------------------------------------------
 // Commodore TED (Plus/4, C16) FIXED palette — 128 entries indexed by the

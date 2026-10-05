@@ -41,13 +41,15 @@ PalView make_view(const std::vector<PaletteEntry>& pal) {
     return v;
 }
 
-// TO7/70 fixed palette as PaletteEntry list.
-std::vector<PaletteEntry> to770_palette() {
-    std::vector<PaletteEntry> p;
-    p.reserve(16);
-    for (auto& e : palette::kThomsonTo770Idx)
-        p.push_back({e[0], e[1], e[2]});
-    return p;
+// TO7/70 has a fixed RGB palette, not a programmable EF9369 palette.
+PalView to770_view() {
+    PalView view;
+    for (auto rgb : palette::kThomsonTo770Rgb) {
+        auto lin = color_space::srgb_hex_to_linear(rgb);
+        view.lin.push_back(lin);
+        view.lab.push_back(color_space::linear_to_oklab(lin));
+    }
+    return view;
 }
 
 // Snap a linear color to the nearest TO8 palette entry (per-channel 4-bit
@@ -144,7 +146,7 @@ float oklab_error(const Image& a, const Image& b) {
 // coherence — see the comment at the pair loop), then run the central
 // error-diffusion driver picking 0/1 within each cell's pair.
 Result<EncodeResult> encode_formecouleur(const Image& image,
-                                         const std::vector<PaletteEntry>& palette_entries,
+                                         const PalView& view,
                                          const dither::Settings& settings,
                                          const FormeCouleurParams& fc,
                                          bool refine_cells = false) {
@@ -160,7 +162,6 @@ Result<EncodeResult> encode_formecouleur(const Image& image,
         }};
     }
 
-    auto view = make_view(palette_entries);
     const std::size_t N = view.lab.size();  // 16
 
     std::vector<OKLab> src_lab(W * H);
@@ -485,12 +486,11 @@ Result<EncodeResult> encode(const Image& image,
                             const std::vector<PaletteEntry>* to8_palette,
                             bool refine_cells) {
     if (amiga::is_thomson_formecouleur(mode)) {
-        std::vector<PaletteEntry> pal =
-            (mode == amiga::Mode::thomson_to7_320x16)
-                ? to770_palette()
-                : ((to8_palette && to8_palette->size() == 16) ? *to8_palette
-                                                              : quantize_to8(image, 16));
-        auto r = encode_formecouleur(image, pal, settings, fc, refine_cells);
+        if (mode == amiga::Mode::thomson_to7_320x16)
+            return encode_formecouleur(image, to770_view(), settings, fc, refine_cells);
+        auto pal = (to8_palette && to8_palette->size() == 16) ? *to8_palette
+                                                             : quantize_to8(image, 16);
+        auto r = encode_formecouleur(image, make_view(pal), settings, fc, refine_cells);
         if (!r) return r;
         // TO7/70 has a fixed palette → no .pal emitted; TO8 carries it.
         if (mode == amiga::Mode::thomson_to8_320x16) r->palette = pal;
@@ -572,7 +572,7 @@ Result<std::vector<PaletteEntry>> formecouleur_palette_search(const Image& image
     src_pre.prepare(image.pixels(), image.width(), image.height());
 
     auto fitness = [&](const std::vector<PaletteEntry>& pal) -> float {
-        auto r = encode_formecouleur(image, pal, settings, FormeCouleurParams{});
+        auto r = encode_formecouleur(image, make_view(pal), settings, FormeCouleurParams{});
         if (!r) return -std::numeric_limits<float>::infinity();
         return ssimulacra2::compute(src_pre, r->rendered.pixels());
     };

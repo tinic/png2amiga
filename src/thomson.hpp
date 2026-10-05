@@ -28,8 +28,8 @@
 namespace png2amiga::thomson {
 
 // Per-color 4-bit channel indices into the EF9369 intens[] LUT. For the
-// fixed TO7/70 palette these are the hardware power-on values; for the TO8
-// programmable modes they are the snapped quantizer output.
+// programmable TO8 modes these are the snapped quantizer output. TO7/70
+// uses a separate fixed RGB palette and returns no PaletteEntry list.
 struct PaletteEntry {
     std::uint8_t r;  // 0..15
     std::uint8_t g;  // 0..15

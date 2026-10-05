@@ -1,4 +1,5 @@
 #include "api.hpp"
+#include "thomson_k7.hpp"
 #include "amiga.hpp"
 #include "bitplane.hpp"
 #include "cga_composite.hpp"
@@ -6233,6 +6234,17 @@ ConvertResult c64_export(
 }
 
 }  // namespace
+
+ConvertResult convert_k7(const std::uint8_t* input_data,
+                         std::size_t input_size, const Options& options) {
+    if (options.mode != "thomson-to7-320x16")
+        return make_error("K7 export requires thomson-to7-320x16 (TO7/70) mode");
+    auto result = run_pipeline(input_data, input_size, options);
+    if (!result) return make_error(result.error().message);
+    auto tape = thomson::k7::encode(result->mode, result->raw_frame);
+    if (!tape) return make_error(tape.error().message);
+    return make_result(std::move(*tape), *result);
+}
 
 std::vector<std::uint8_t> thomson_pal_bytes(std::span<const Color3f> palette) {
     std::vector<std::uint8_t> out;

@@ -305,6 +305,22 @@ and its hardware-derived half-bright partner. The selected dither and locks
 are preserved; `--best`, user palettes, reserves, transparency, and
 sliced/striped EHB retain their existing paths.
 
+TO7/70 can export a `.k7` tape containing a standalone picture viewer:
+
+```sh
+./build/png2amiga --mode thomson-to7-320x16 examples/maui.jpg maui.k7
+```
+
+The web UI also offers a **k7** download button for this mode. In
+[to7.fr](https://to7.fr/), select **TO7-70** with BASIC 1.0, import the tape
+(drag the `.k7` onto the emulator and choose **Importer**), rewind it, and
+enter `LOADM"",,R`. Reset exits the viewer. This export requires the 16-color
+TO7/70; the original 8-color TO7 and TO8 modes are not supported by this viewer.
+The tape stores both native screen planes without recompression or requantization.
+TO7/70 quantization and previews use the fixed RGB palette displayed by to7.fr;
+TO8 retains its separate programmable EF9369 palette. Other emulators may use
+different RGB approximations for the same TO7/70 hardware color numbers.
+
 TO8 forme-couleur (`thomson-to8-320x16`) now also automatically selects the
 best of its original palette, single-color fitting, and paired fitting. With
 `--cell-refine`, it additionally compares fitting the palette before refining

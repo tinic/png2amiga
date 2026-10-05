@@ -2270,6 +2270,9 @@ sys.exit(0 if ok else 1)")
     # which exercises api::encode_state with a CLI-equivalent option
     # set (--apply-tuning fills in dither_tuning defaults).
     # ---------------------------------------------------------------
+    add_test(NAME thomson-k7-contract
+        COMMAND api_pipeline_smoke --check-thomson-k7 ${CMAKE_SOURCE_DIR}/examples/maui.jpg)
+
     foreach(_to8_method opt-checker floyd-steinberg)
         foreach(_to8_cells 0 1)
             add_test(NAME "to8-palette-${_to8_method}-cells${_to8_cells}"
