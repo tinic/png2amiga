@@ -106,7 +106,7 @@ Result<EncodeResult> encode(const Image& image, amiga::Mode mode,
         auto d = dither::apply(image, out.palette, settings);
         out.rendered = Image(image.width(), image.height());
         std::size_t bpp = screen == 8 ? 8 : screen == 6 ? 2 : 4;
-        std::size_t ppb = static_cast<std::size_t>(8 / bpp);
+        std::size_t ppb = 8 / bpp;
         for (std::size_t i = 0; i < d.indices.size(); ++i) {
             auto q = d.indices[i];
             out.vram[i / ppb] |= static_cast<std::uint8_t>(q << (8 - bpp * (i % ppb + 1)));
