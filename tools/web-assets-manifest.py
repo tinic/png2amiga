@@ -55,7 +55,8 @@ def assets_hash():
     if not (html / 'index.html').is_file() or not list((html / 'assets').glob('*.wasm')):
         raise ValueError('Production HTML/WASM assets are missing')
     return digest((p.relative_to(ROOT).as_posix(), p.read_bytes())
-                  for p in html.rglob('*') if p.is_file() and p != MANIFEST)
+                  for p in html.rglob('*')
+                  if p.is_file() and p != MANIFEST and p.name not in {'.DS_Store', 'Thumbs.db'})
 
 
 def main():
