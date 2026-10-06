@@ -149,11 +149,11 @@ Result<EncodeResult> encode_formecouleur(const Image& image,
                                          const PalView& view,
                                          const dither::Settings& settings,
                                          const FormeCouleurParams& fc,
-                                         bool refine_cells = false) {
-    constexpr std::size_t W = 320;
-    constexpr std::size_t H = 200;
+                                         bool refine_cells = false, bool msx = false) {
+    const std::size_t W = msx ? image.width() : 320;
+    const std::size_t H = msx ? image.height() : 200;
     constexpr std::size_t kCellW = 8;
-    constexpr std::size_t kCols = W / kCellW;  // 40
+    const std::size_t kCols = W / kCellW;  // 40
     if (image.width() != W || image.height() != H) {
         return std::unexpected{Error{
             ErrorCode::invalid_dimensions,
@@ -376,6 +376,12 @@ Result<EncodeResult> encode_formecouleur(const Image& image,
                 (c0 & 0x07) | ((c1 & 0x07) << 3) |
                 (((~c1) & 0x08) << 3) |    // bit6 = NOT(fg bit3)
                 (((~c0) & 0x08) << 4));    // bit7 = NOT(bg bit3)
+            if (msx) {
+                // TMS9918 color 0 is transparent; use opaque black (1).
+                if (!c0) c0 = 1;
+                if (!c1) c1 = 1;
+                color = static_cast<std::uint8_t>((c1 << 4) | c0);
+            }
             res.page_a[cell] = color;
         }
     }
@@ -478,6 +484,17 @@ Result<EncodeResult> encode_bitmap(const Image& image,
 }
 
 }  // namespace
+
+Result<EncodeResult> encode_msx_cells(const Image& image,
+                                    const std::vector<Color3f>& colors,
+                                    const dither::Settings& settings, bool refine_cells) {
+    if (image.width() != 256 || image.height() != 192 || colors.size() != 16)
+        return std::unexpected{Error{ErrorCode::invalid_dimensions, "MSX SCREEN 2 requires 256x192 and 16 colors"}};
+    PalView view;
+    view.lin = colors;
+    for (const auto& c : colors) view.lab.push_back(color_space::linear_to_oklab(c));
+    return encode_formecouleur(image, view, settings, {}, refine_cells, true);
+}
 
 Result<EncodeResult> encode(const Image& image,
                             amiga::Mode mode,

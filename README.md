@@ -39,7 +39,11 @@ the active scanline, used in demoscene productions like Desire's
 
 **Atari modes**: STF Low/Medium/Hi, STE Low/Medium/Hi (9-bit palette
 on STF, 12-bit on STE; ST-Hi is hardware-locked monochrome). Degas
-Elite `.PI1`/`.PI2`/`.PI3` output.
+Elite `.PI1`/`.PI2`/`.PI3` output. Spectrum 512/4096 raster modes add
+`.spu`, `.cpp`, and standalone Atari TOS `.exe`/`.prg` exports.
+
+**ZX Spectrum**: 256×192, two colors per 8×8 cell with shared BRIGHT;
+native `.scr` export.
 
 **IBM PC modes**: CGA 320×200 / 640×200 / composite (NTSC artifact
 colors), CGA text-mode glyph matching at 80x{200,100,50,25} and
@@ -241,6 +245,8 @@ Run `./build/png2amiga --help` for the full flag reference.
 | `stf-hi` / `ste-hi` | 640×400 | 1 | 2 (B/W) | hardware-locked monochrome |
 | `ste-low` | 320×200 | 4 | 16 | 12-bit (4096 colors) |
 | `ste-med` | 640×200 | 2 | 4 | 12-bit (4096 colors) |
+| `stf-spectrum512` | 320×199 + blank line | 4 | up to 42 + black/line | 9-bit, timed raster palettes |
+| `ste-spectrum4096` | 320×199 + blank line | 4 | up to 42 + black/line | 12-bit, timed raster palettes |
 
 ## IBM PC Modes
 
@@ -304,6 +310,48 @@ whichever has the highest S2 score. Every change updates both the base color
 and its hardware-derived half-bright partner. The selected dither and locks
 are preserved; `--best`, user palettes, reserves, transparency, and
 sliced/striped EHB retain their existing paths.
+
+MSX modes are available in the CLI and in the **MSX1** / **MSX2** web selectors:
+
+| Mode | Screen | Colors |
+|---|---|---|
+| `msx1-screen2` | 256×192 | TMS9918 fixed palette, two colors per 8×1 cell |
+| `msx2-screen5` | 256×212 | 16 selected from 512 |
+| `msx2-screen6` | 512×212 | 4 selected from 512 |
+| `msx2-screen7` | 512×212 | 16 selected from 512 |
+| `msx2-screen8` | 256×212 | Fixed 256-color GGGRRRBB |
+
+SCREEN 2 reuses the Thomson color-pair optimizer and supports `--cell-refine`.
+Its transparent ink 0 is replaced with opaque black ink 1. The MSX1 RGB preview
+uses a conventional TMS9918 approximation; analog colors vary between machines.
+MSX2 palettes use RGB333, and SCREEN 8 uses the V9938 blue levels 0, 2, 4, 7.
+All modes accept the existing dithering controls, including `--dither opt-checker`.
+`--best` and external palette/slot overrides are not supported in these modes.
+
+```sh
+./build/png2amiga --mode msx1-screen2 --dither opt-checker examples/maui.jpg maui.sc2
+./build/png2amiga --mode msx2-screen5 --dither opt-checker examples/maui.jpg maui.sc5
+```
+
+Exports: `.png` preview, `.h` VRAM array, `.raw`/`.bin` CPU-visible VRAM from
+address zero, and `.sc2`/`.sc5`/`.sc6`/`.sc7`/`.sc8` MSX BASIC BLOAD files.
+Screen files contain data, not an executable or cassette archive. In MSX BASIC:
+
+```basic
+SCREEN 2:BLOAD "MAUI.SC2",S
+```
+
+For MSX2, select the matching screen and disable transparent color zero and
+sprites. SCREEN 5/6/7 include the palette in BASIC's VRAM mirror; restore it
+**after** loading:
+
+```basic
+SCREEN 5:VDP(9)=VDP(9) OR 34:BLOAD "MAUI.SC5",S:COLOR=RESTORE
+```
+
+SCREEN 8 uses the same sequence without `COLOR=RESTORE`. SCREEN 7/8 require
+128 KB VRAM. These are non-interlaced screens without sprite or raster tricks.
+Layouts follow the [Yamaha V9938 technical manual](https://map.grauw.nl/resources/video/yamaha_v9938.pdf).
 
 TO7/70 can export a `.k7` tape containing a standalone picture viewer:
 
@@ -961,3 +1009,50 @@ Exit codes (sysexits.h):
 ## License
 
 MIT
+
+### ZX Spectrum and Atari Spectrum 512/4096
+
+`--mode zx-spectrum` converts to a 256×192 ZX screen. Each 8×8 cell has
+one INK/PAPER pair and a shared BRIGHT bit; FLASH is disabled. `.scr` exports
+6912 native bytes (6144 interleaved bitmap bytes + 768 attributes), suitable
+for loading at address 16384. PNG and C-header exports are also available.
+
+`--mode stf-spectrum512` and `--mode ste-spectrum4096` use 320×199 image
+pixels, plus the standard blank first scanline in the physical 320×200
+screen. Three palettes per line are written at staggered horizontal
+positions; quantization and dithering respect each register's actual
+lifetime. Registers 0 and 15 remain black in every bank, leaving up to
+42 nonblack colors plus black per line. Spectrum 512 uses the ST's 9-bit
+palette; Spectrum 4096 requires the STE's 12-bit palette.
+
+```sh
+./build/png2amiga --mode stf-spectrum512 --dither opt-checker examples/maui.jpg maui.exe
+./run-atari.sh maui.exe st
+./build/png2amiga --mode ste-spectrum4096 --dither opt-checker examples/maui.jpg maui.cpp
+./build-atari.sh maui.cpp
+./run-atari.sh maui.exe ste
+./build/png2amiga --mode zx-spectrum --dither opt-checker examples/maui.jpg maui.scr
+```
+
+The Atari `.exe` is an **Atari TOS executable**, also exportable as `.prg`;
+rename `.exe` to `.prg` when launching from the TOS desktop. It contains the
+image and a standalone timed viewer, requires a PAL-capable color display
+and an 8 MHz 68000 ST/STE, and exits with Space or Escape. It switches to
+50 Hz while displaying and restores the screen, palette and interrupts on
+exit. Spectrum 4096 refuses to run on an original ST. TT/Falcon and accelerated
+CPUs are unsupported. PNG, `.h`, and uncompressed `.spu` exports are available;
+4096 SPU files contain STE palette words and require a compatible reader.
+
+Generated `.cpp` files contain readable GNU 68000 inline assembly and the
+image data. `build-atari.sh` rebuilds the same executable using the bundled
+GNU toolchain, or a prefix supplied with `M68K_PREFIX`. `run-atari.sh` uses
+Hatari and its bundled EmuTOS (`HATARI` and `HATARI_TOS` override the paths).
+The web UI exports these formats directly, including executables, without
+requiring the compile service.
+
+`python3 tools/check-spectrum-hatari.py` checks every displayed pixel against
+an independent SPU decoder, all four ST wakeup states, ST/STE compatibility,
+source/executable equivalence, and return to the TOS desktop. It requires
+Hatari, EmuTOS, Pillow and the native CLI. Emulator checks validate the cycle
+schedule; physical ST/STE hardware has not yet been tested. Analog monitor
+brightness can differ from the normalized PNG palette.

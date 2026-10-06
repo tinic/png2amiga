@@ -1,6 +1,8 @@
 #include "amiga.hpp"
 #include "api.hpp"
 #include "thomson_k7.hpp"
+#include "msx.hpp"
+#include "retro.hpp"
 #include "smol-atlas.h"
 #include "c64.hpp"
 #include "c64_prg.hpp"
@@ -1170,6 +1172,8 @@ void print_usage() {
         "    C64:    c64-multicolor | c64-hires | c64-fli | c64-afli |\n"
         "            c64-petscii | c64-charset-hires | c64-charset-multicolor\n"
         "    GBA:    gba-mode3 | gba-mode4 | gba-mode5\n"
+        "    ZX/Atari: zx-spectrum | stf-spectrum512 | ste-spectrum4096\n"
+        "    MSX: msx1-screen2 | msx2-screen5 | msx2-screen6 | msx2-screen7 | msx2-screen8\n"
         "    Thomson: thomson-to7-320x16 | thomson-to8-320x16 |\n"
         "            thomson-to8-160x16 | thomson-to8-320x4 | thomson-to8-640x2\n"
         "    TED:    ted-hires | ted-multicolor\n"
@@ -2103,6 +2107,22 @@ Result<Config> parse_args(int argc, char* argv[]) {
                     config.mode = amiga::Mode::gba_mode4;
                 else if (v == "gba-mode5" || v == "gba-5")
                     config.mode = amiga::Mode::gba_mode5;
+                else if (v == "zx-spectrum")
+                    config.mode = amiga::Mode::zx_spectrum;
+                else if (v == "stf-spectrum512")
+                    config.mode = amiga::Mode::stf_spectrum512;
+                else if (v == "ste-spectrum4096")
+                    config.mode = amiga::Mode::ste_spectrum4096;
+                else if (v == "msx1-screen2")
+                    config.mode = amiga::Mode::msx1_screen2;
+                else if (v == "msx2-screen5")
+                    config.mode = amiga::Mode::msx2_screen5;
+                else if (v == "msx2-screen6")
+                    config.mode = amiga::Mode::msx2_screen6;
+                else if (v == "msx2-screen7")
+                    config.mode = amiga::Mode::msx2_screen7;
+                else if (v == "msx2-screen8")
+                    config.mode = amiga::Mode::msx2_screen8;
                 else if (v == "thomson-to7-320x16")
                     config.mode = amiga::Mode::thomson_to7_320x16;
                 else if (v == "thomson-to8-320x16")
@@ -2396,7 +2416,7 @@ Result<Config> parse_args(int argc, char* argv[]) {
         auto m = config.mode;
         bool non_amiga = amiga::is_atari(m) || amiga::is_vga(m) || amiga::is_ega(m) ||
                          amiga::is_cga(m) || amiga::is_c64(m) || amiga::is_snes(m) ||
-                         amiga::is_genesis(m) || amiga::is_gba(m) || amiga::is_thomson(m) ||
+                         amiga::is_genesis(m) || amiga::is_gba(m) || (amiga::is_thomson(m) || amiga::is_msx(m) || amiga::is_retro_raster(m)) ||
                          amiga::is_ted(m) || amiga::is_sms(m) || amiga::is_cpc(m);
         if (non_amiga) {
             std::string which;
@@ -2423,11 +2443,11 @@ Result<Config> parse_args(int argc, char* argv[]) {
     // strips regimes explicitly. The CLI block below errors out otherwise.
 
     if (config.cell_refine &&
-        (!amiga::is_thomson_formecouleur(config.mode) && !amiga::is_c64(config.mode) &&
+        (!amiga::is_thomson_formecouleur(config.mode) && config.mode != amiga::Mode::msx1_screen2 && !amiga::is_c64(config.mode) &&
          !amiga::is_ted(config.mode) &&
          !(amiga::is_cga_text(config.mode) && config.cga_text_metric == "blur"))) {
         return std::unexpected{Error{ErrorCode::unsupported_mode,
-                                     "--cell-refine requires Thomson attribute, C64, TED, or CGA "
+                                     "--cell-refine requires MSX1/Thomson attribute, C64, TED, or CGA "
                                      "text with the blur metric"}};
     }
 
@@ -2878,6 +2898,19 @@ std::string_view mode_to_options_string(amiga::Mode m) {
         return "gba-mode4";
     case amiga::Mode::gba_mode5:
         return "gba-mode5";
+    case amiga::Mode::zx_spectrum: return "zx-spectrum";
+    case amiga::Mode::stf_spectrum512: return "stf-spectrum512";
+    case amiga::Mode::ste_spectrum4096: return "ste-spectrum4096";
+    case amiga::Mode::msx1_screen2:
+        return "msx1-screen2";
+    case amiga::Mode::msx2_screen5:
+        return "msx2-screen5";
+    case amiga::Mode::msx2_screen6:
+        return "msx2-screen6";
+    case amiga::Mode::msx2_screen7:
+        return "msx2-screen7";
+    case amiga::Mode::msx2_screen8:
+        return "msx2-screen8";
     case amiga::Mode::thomson_to7_320x16:
         return "thomson-to7-320x16";
     case amiga::Mode::thomson_to8_320x16:
@@ -3717,6 +3750,9 @@ std::pair<std::size_t, std::size_t> preview_display_dims(
             break;
         }
         sy = 2;
+    } else if (amiga::is_msx(mode)) {
+        sx = amiga::get_mode_params(mode).screen_width == 512 ? 1 : 2;
+        sy = 2;
     } else if (amiga::is_sms(mode)) {
         sx = 2;
         sy = 2;
@@ -3794,7 +3830,7 @@ std::pair<std::size_t, std::size_t> preview_display_dims(
     //    the web's freshly-opened-mode state.
     if (amiga::is_cga(mode) || amiga::is_ega(mode) || amiga::is_vga(mode) || amiga::is_c64(mode) ||
         amiga::is_atari(mode) || amiga::is_snes(mode) || amiga::is_genesis(mode) ||
-        amiga::is_thomson(mode) || amiga::is_ted(mode) || amiga::is_sms(mode) ||
+        (amiga::is_thomson(mode) || amiga::is_msx(mode) || amiga::is_retro_raster(mode)) || amiga::is_ted(mode) || amiga::is_sms(mode) ||
         amiga::is_cpc(mode)) {
         auto params = amiga::get_mode_params(mode);
         double par = static_cast<double>(params.par);
@@ -5657,6 +5693,13 @@ int run_main(int argc, char* argv[]) {
         std::println(stderr, "Error: {}", config.error().message);
         return exit_code::usage;
     }
+    for (int screen : {2, 5, 6, 7, 8}) {
+        if (ends_with(config->output_path, std::format(".sc{}", screen)) &&
+            msx::screen_number(config->mode) != screen) {
+            std::println(stderr, "MSX .sc{} output requires the matching MSX SCREEN mode", screen);
+            return exit_code::cant_create;
+        }
+    }
     if (ends_with(config->output_path, ".k7") &&
         config->mode != amiga::Mode::thomson_to7_320x16) {
         std::println(stderr, "Error: K7 export requires thomson-to7-320x16 (TO7/70) mode");
@@ -5744,6 +5787,14 @@ int run_main(int argc, char* argv[]) {
                 "gba-mode3",
                 "gba-mode4",
                 "gba-mode5",
+                "zx-spectrum",
+                "stf-spectrum512",
+                "ste-spectrum4096",
+                "msx1-screen2",
+                "msx2-screen5",
+                "msx2-screen6",
+                "msx2-screen7",
+                "msx2-screen8",
                 "sms-mode4",
                 "gg-mode4",
                 "cpc-mode0",
@@ -5761,7 +5812,9 @@ int run_main(int argc, char* argv[]) {
             cli_status("png2amiga {} — supported modes:", png2amiga::version);
             cli_status("  Amiga:    lores, lores-lace, hires, hires-lace, ham6, ham8, ehb (+ "
                        "-lace, -hires variants)");
-            cli_status("  Atari:    stf-low, stf-med, stf-hi, ste-low, ste-med, ste-hi");
+            cli_status("  Atari:    stf-low, stf-med, stf-hi, ste-low, ste-med, ste-hi,");
+            cli_status("            stf-spectrum512, ste-spectrum4096");
+            cli_status("  Sinclair: zx-spectrum");
             cli_status("  IBM PC:   vga-13h/10h/12h, ega-320/640/hi, cga-320/640/composite, "
                        "cga-text80x{{200,100,50,25}}");
             cli_status("  SNES:     snes-mode7-256, snes-mode7-direct");
@@ -5769,6 +5822,7 @@ int run_main(int argc, char* argv[]) {
             cli_status("  C64:      c64-multicolor, c64-hires, c64-fli, c64-afli, c64-petscii,");
             cli_status("            c64-charset-hires, c64-charset-multicolor");
             cli_status("  GBA:      gba-mode3, gba-mode4, gba-mode5");
+            cli_status("  MSX:      msx1-screen2, msx2-screen5, msx2-screen6, msx2-screen7, msx2-screen8");
             cli_status("  Thomson:  thomson-to7-320x16, thomson-to8-320x16, "
                        "thomson-to8-160x16,");
             cli_status("            thomson-to8-320x4, thomson-to8-640x2");
@@ -6209,7 +6263,7 @@ int run_main(int argc, char* argv[]) {
             !amiga::is_ega(config->mode) && !amiga::is_cga(config->mode) &&
             !amiga::is_snes(config->mode) && !amiga::is_genesis(config->mode) &&
             !amiga::is_c64(config->mode) && !amiga::is_gba(config->mode) &&
-            !amiga::is_thomson(config->mode) && !amiga::is_ted(config->mode) &&
+            !(amiga::is_thomson(config->mode) || amiga::is_msx(config->mode) || amiga::is_retro_raster(config->mode)) && !amiga::is_ted(config->mode) &&
             !amiga::is_sms(config->mode) && !amiga::is_cpc(config->mode)) {
             auto max_d = amiga::max_user_depth(config->mode, cs);
             if (config->depth > max_d) {
@@ -6818,7 +6872,7 @@ int run_main(int argc, char* argv[]) {
              amiga::is_cga(config->mode) || amiga::is_ega(config->mode) ||
              amiga::is_snes(config->mode) || amiga::is_genesis(config->mode) ||
              amiga::is_c64(config->mode) || amiga::is_gba(config->mode) ||
-             amiga::is_thomson(config->mode) || amiga::is_ted(config->mode) ||
+             (amiga::is_thomson(config->mode) || amiga::is_msx(config->mode) || amiga::is_retro_raster(config->mode)) || amiga::is_ted(config->mode) ||
              amiga::is_sms(config->mode) || amiga::is_cpc(config->mode));
         // Use mode default width. For lores modes, don't upscale if source
         // is smaller. Hires always uses 640 (that's the point of hires), and a
@@ -7008,7 +7062,7 @@ int run_main(int argc, char* argv[]) {
              amiga::is_ega(config->mode) || amiga::is_cga(config->mode) ||
              amiga::is_snes(config->mode) || amiga::is_genesis(config->mode) ||
              amiga::is_c64(config->mode) || amiga::is_gba(config->mode) ||
-             amiga::is_thomson(config->mode) || amiga::is_ted(config->mode) ||
+             (amiga::is_thomson(config->mode) || amiga::is_msx(config->mode) || amiga::is_retro_raster(config->mode)) || amiga::is_ted(config->mode) ||
              amiga::is_sms(config->mode) || amiga::is_cpc(config->mode)) {
         // Atari/DOS/SNES/Genesis/C64 modes have their bitplane depth baked
         // into the hardware (ST Low=4, VGA 13h=8, EGA=4, CGA 320=2,
@@ -7039,7 +7093,7 @@ int run_main(int argc, char* argv[]) {
         auto early_chipset = effective_chipset(*config);
         print_depth = (early_chipset == amiga::Chipset::aga) ? 8 : 6;
     }
-    if (amiga::is_thomson(config->mode) || amiga::is_ted(config->mode) ||
+    if ((amiga::is_thomson(config->mode) || amiga::is_msx(config->mode) || amiga::is_retro_raster(config->mode)) || amiga::is_ted(config->mode) ||
         amiga::is_sms(config->mode) || amiga::is_cpc(config->mode)) {
         // Thomson / TED / SMS / CPC have no Amiga bitplanes — report the buffer dims +
         // color count (16 / 4 / 2 for Thomson; 121-color palette for TED).
@@ -7127,7 +7181,7 @@ int run_main(int argc, char* argv[]) {
                          !amiga::is_ega(config->mode) && !amiga::is_cga(config->mode) &&
                          !amiga::is_cga_text(config->mode) && !amiga::is_c64(config->mode) &&
                          !amiga::is_snes(config->mode) && !amiga::is_genesis(config->mode) &&
-                         !amiga::is_gba(config->mode) && !amiga::is_thomson(config->mode) &&
+                         !amiga::is_gba(config->mode) && !(amiga::is_thomson(config->mode) || amiga::is_msx(config->mode) || amiga::is_retro_raster(config->mode)) &&
                          !amiga::is_ted(config->mode) && !amiga::is_sms(config->mode) &&
                          !amiga::is_cpc(config->mode);
     if (amiga_chipset) cli_print_chipset(chipset);
@@ -7558,14 +7612,14 @@ int run_main(int argc, char* argv[]) {
     // Fixed-buffer attribute / bitmap modes. PNG preview + native-layout
     // raw .bin (+ companion .pal for the programmable TO8 modes) + generic
     // C header. Reject .iff / viewer outputs.
-    if (amiga::is_thomson(config->mode) || amiga::is_ted(config->mode)) {
+    if ((amiga::is_thomson(config->mode) || amiga::is_msx(config->mode) || amiga::is_retro_raster(config->mode)) || amiga::is_ted(config->mode)) {
         if (has_transparency) {
             for (std::size_t i = 0; i < transparency_mask.size(); ++i)
                 if (transparency_mask[i]) image->pixels()[i] = Color3f{0, 0, 0};
         }
         auto src_png = png_io::encode(*image);
         if (!src_png) {
-            std::println(stderr, "Thomson/TED: source re-encode failed: {}",
+            std::println(stderr, "MSX/Thomson/TED: source re-encode failed: {}",
                          src_png.error().message);
             return exit_code::internal;
         }
@@ -7589,11 +7643,13 @@ int run_main(int argc, char* argv[]) {
 
         auto enc = api::encode_state_image(*image, aopts);
         if (!enc.ok()) {
-            std::println(stderr, "Thomson/TED encode error: {}", enc.error_msg);
+            std::println(stderr, "MSX/Thomson/TED encode error: {}", enc.error_msg);
             return exit_code::internal;
         }
         auto& st = enc.state;
         const char* mode_desc = [&] {
+            if (amiga::is_retro_raster(config->mode)) return "ZX/Atari Spectrum native screen";
+            if (amiga::is_msx(config->mode)) return "MSX native screen";
             switch (config->mode) {
             case amiga::Mode::thomson_to7_320x16:
                 return "Thomson TO7/70 forme-couleur (320x200, 16 fixed, 2/8x1)";
@@ -7629,6 +7685,30 @@ int run_main(int argc, char* argv[]) {
 
         if (config->output_path.empty()) {
             // No -o — skip output.
+        } else if (amiga::is_retro_raster(config->mode) &&
+                   (ends_with(config->output_path, ".cpp") || ends_with(config->output_path, ".exe") ||
+                    ends_with(config->output_path, ".prg") || ends_with(config->output_path, ".scr") ||
+                    ends_with(config->output_path, ".spu"))) {
+            std::vector<std::uint8_t> bytes;
+            if (ends_with(config->output_path, ".cpp")) {
+                auto text = retro::viewer_source(config->mode, st.raw_frame);
+                if (!text) { std::println(stderr, "{}", text.error().message); return exit_code::cant_create; }
+                bytes.assign(text->begin(), text->end());
+            } else if (ends_with(config->output_path, ".exe") || ends_with(config->output_path, ".prg")) {
+                auto exe = retro::executable(config->mode, st.raw_frame);
+                if (!exe) { std::println(stderr, "{}", exe.error().message); return exit_code::cant_create; }
+                bytes = std::move(*exe);
+            } else {
+                if ((ends_with(config->output_path, ".scr")) != (config->mode == amiga::Mode::zx_spectrum)) {
+                    std::println(stderr, "Use .scr for ZX Spectrum and .spu for Atari Spectrum");
+                    return exit_code::cant_create;
+                }
+                bytes = st.raw_frame;
+            }
+            std::ofstream of(config->output_path, std::ios::binary);
+            of.write(reinterpret_cast<const char*>(bytes.data()), static_cast<std::streamsize>(bytes.size()));
+            of.close(); if (!of) return exit_code::cant_create;
+            cli_status("Export:   {} ({} bytes)", config->output_path, bytes.size());
         } else if (ends_with(config->output_path, ".iff") ||
                    ends_with(config->output_path, ".lbm") ||
                    ends_with(config->output_path, ".cpp") ||
@@ -7637,10 +7717,19 @@ int run_main(int argc, char* argv[]) {
                    ends_with(config->output_path, ".pi2") ||
                    ends_with(config->output_path, ".pi3")) {
             std::println(stderr,
-                         "Thomson / TED modes support .png, .h, .bin/.raw (TO7/70 also .k7) "
+                         "MSX / Thomson / TED modes support .png, .h, .bin/.raw (MSX also .scN; TO7/70 .k7) "
                          "(got '{}').",
                          config->output_path);
             return exit_code::cant_create;
+        } else if (amiga::is_msx(config->mode) &&
+                   ends_with(config->output_path, std::format(".sc{}", msx::screen_number(config->mode)))) {
+            auto bytes = msx::screen_file(config->mode, st.raw_frame);
+            if (!bytes) return exit_code::internal;
+            std::ofstream of(config->output_path, std::ios::binary);
+            of.write(reinterpret_cast<const char*>(bytes->data()), static_cast<std::streamsize>(bytes->size()));
+            of.close();
+            if (!of) return exit_code::cant_create;
+            cli_status("MSX:      {} ({} bytes; BLOAD with ,S)", config->output_path, bytes->size());
         } else if (ends_with(config->output_path, ".k7")) {
             auto tape = thomson::k7::encode(config->mode, st.raw_frame);
             if (!tape) {
@@ -7663,7 +7752,7 @@ int run_main(int argc, char* argv[]) {
             of.write(reinterpret_cast<const char*>(st.raw_frame.data()),
                      static_cast<std::streamsize>(st.raw_frame.size()));
             if (!of) {
-                std::println(stderr, "Thomson/TED write error: {}", config->output_path);
+                std::println(stderr, "MSX/Thomson/TED write error: {}", config->output_path);
                 return exit_code::internal;
             }
             cli_status("Raw:      {} ({} bytes)", config->output_path, st.raw_frame.size());
@@ -7683,7 +7772,7 @@ int run_main(int argc, char* argv[]) {
         } else if (ends_with(config->output_path, ".h")) {
             auto cr = api::convert_cheader(src_png->data(), src_png->size(), aopts);
             if (!cr.error.empty()) {
-                std::println(stderr, "Thomson/TED header: {}", cr.error);
+                std::println(stderr, "MSX/Thomson/TED header: {}", cr.error);
                 return exit_code::internal;
             }
             std::ofstream of(config->output_path);

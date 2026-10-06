@@ -79,6 +79,8 @@ set(PNG2AMIGA_CORE_SOURCES
     src/genesis.cpp
     src/c64.cpp
     src/c64_prg.cpp
+    src/msx.cpp
+    src/retro.cpp
     src/thomson.cpp
     src/ted.cpp
     src/tile_merge.cpp
@@ -2270,6 +2272,10 @@ sys.exit(0 if ok else 1)")
     # which exercises api::encode_state with a CLI-equivalent option
     # set (--apply-tuning fills in dither_tuning defaults).
     # ---------------------------------------------------------------
+    add_test(NAME retro-screen-contract
+        COMMAND api_pipeline_smoke --check-retro ${CMAKE_SOURCE_DIR}/examples/maui.jpg)
+    add_test(NAME msx-screen-contract
+        COMMAND api_pipeline_smoke --check-msx ${CMAKE_SOURCE_DIR}/examples/maui.jpg)
     add_test(NAME thomson-k7-contract
         COMMAND api_pipeline_smoke --check-thomson-k7 ${CMAKE_SOURCE_DIR}/examples/maui.jpg)
 
@@ -2501,6 +2507,22 @@ sys.exit(0 if ok else 1)")
         COMMAND ${_equiv_chk} --in ${_pal_makena_in} -- --mode c64-charset-hires)
     add_test(NAME "api-equiv-c64-charset-multicolor"
         COMMAND ${_equiv_chk} --in ${_pal_makena_in} -- --mode c64-charset-multicolor)
+    add_test(NAME "api-equiv-zx-spectrum"
+        COMMAND ${_equiv_chk} --in ${_pal_makena_in} -- --mode zx-spectrum)
+    add_test(NAME "api-equiv-stf-spectrum512"
+        COMMAND ${_equiv_chk} --in ${_pal_makena_in} -- --mode stf-spectrum512)
+    add_test(NAME "api-equiv-ste-spectrum4096"
+        COMMAND ${_equiv_chk} --in ${_pal_makena_in} -- --mode ste-spectrum4096)
+    add_test(NAME "api-equiv-msx1-screen2"
+        COMMAND ${_equiv_chk} --in ${_pal_makena_in} -- --mode msx1-screen2)
+    add_test(NAME "api-equiv-msx2-screen5"
+        COMMAND ${_equiv_chk} --in ${_pal_makena_in} -- --mode msx2-screen5)
+    add_test(NAME "api-equiv-msx2-screen6"
+        COMMAND ${_equiv_chk} --in ${_pal_makena_in} -- --mode msx2-screen6)
+    add_test(NAME "api-equiv-msx2-screen7"
+        COMMAND ${_equiv_chk} --in ${_pal_makena_in} -- --mode msx2-screen7)
+    add_test(NAME "api-equiv-msx2-screen8"
+        COMMAND ${_equiv_chk} --in ${_pal_makena_in} -- --mode msx2-screen8)
     add_test(NAME "api-equiv-thomson-to7-320x16"
         COMMAND ${_equiv_chk} --in ${_pal_makena_in} -- --mode thomson-to7-320x16)
     add_test(NAME "api-equiv-thomson-to8-320x16"

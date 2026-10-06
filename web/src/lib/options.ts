@@ -1,6 +1,6 @@
 // Type-side declarations.
 
-export type Chipset = 'ocs' | 'aga' | 'stf' | 'ste' | 'vga' | 'ega' | 'cga' | 'snes' | 'genesis' | 'c64' | 'gba' | 'thomson' | 'ted' | 'sms' | 'cpc' | 'cpcplus'
+export type Chipset = 'ocs' | 'aga' | 'stf' | 'ste' | 'vga' | 'ega' | 'cga' | 'snes' | 'genesis' | 'c64' | 'gba' | 'zx' | 'msx1' | 'msx2' | 'thomson' | 'ted' | 'sms' | 'cpc' | 'cpcplus'
 
 export interface ModeOption {
   value: string
@@ -197,6 +197,14 @@ const ALL_MODES: ModeOption[] = [
   { value: 'gba-mode3', label: 'Mode 3 (240×160, direct)',  chipset: 'gba' },
   { value: 'gba-mode4', label: 'Mode 4 (240×160, palette)', chipset: 'gba' },
   { value: 'gba-mode5', label: 'Mode 5 (160×128, direct)',  chipset: 'gba' },
+  { value: 'zx-spectrum', label: 'ZX Spectrum (256×192, 2 colors/8×8)', chipset: 'zx' },
+  { value: 'stf-spectrum512', label: 'Spectrum 512 (320×199, raster palette)', chipset: 'stf' },
+  { value: 'ste-spectrum4096', label: 'Spectrum 4096 (320×199, raster palette)', chipset: 'ste' },
+  { value: 'msx1-screen2', label: 'SCREEN 2 (256×192, 2 colors/8×1)', chipset: 'msx1' },
+  { value: 'msx2-screen5', label: 'SCREEN 5 (256×212, 16 colors)', chipset: 'msx2' },
+  { value: 'msx2-screen6', label: 'SCREEN 6 (512×212, 4 colors)', chipset: 'msx2' },
+  { value: 'msx2-screen7', label: 'SCREEN 7 (512×212, 16 colors)', chipset: 'msx2' },
+  { value: 'msx2-screen8', label: 'SCREEN 8 (256×212, 256 colors)', chipset: 'msx2' },
   // Thomson TO7/70 + TO8 — EF9369 gamma palette, two-page VRAM.
   { value: 'thomson-to7-320x16', label: 'TO7/70 320×16 (forme-couleur)', chipset: 'thomson' },
   { value: 'thomson-to8-320x16', label: 'TO8 320×16 (forme-couleur)',    chipset: 'thomson' },
@@ -220,7 +228,7 @@ const ALL_MODES: ModeOption[] = [
 
 // Chipsets whose mode list is exactly `m.chipset === chipset`.
 const FIXED_CHIPSETS = new Set<Chipset>(
-  ['stf', 'ste', 'vga', 'ega', 'cga', 'snes', 'genesis', 'c64', 'gba', 'thomson', 'ted', 'sms', 'cpc', 'cpcplus'])
+  ['stf', 'ste', 'vga', 'ega', 'cga', 'snes', 'genesis', 'c64', 'gba', 'zx', 'msx1', 'msx2', 'thomson', 'ted', 'sms', 'cpc', 'cpcplus'])
 
 // Filter modes available for a given chipset
 export function modesForChipset(chipset: Chipset): ModeOption[] {
@@ -258,6 +266,9 @@ export const CHIPSETS: ChipsetOption[] = [
   { value: 'sms',     label: 'Sega Master System / Game Gear' },
   { value: 'genesis', label: 'Sega Genesis / Mega Drive' },
   { value: 'gba',     label: 'Game Boy Advance' },
+  { value: 'zx', label: 'ZX Spectrum' },
+  { value: 'msx1', label: 'MSX1 (TMS9918)' },
+  { value: 'msx2', label: 'MSX2 (V9938)' },
   { value: 'thomson', label: 'Thomson TO7/70 + TO8' },
   { value: 'ted',     label: 'Commodore Plus/4 (TED)' },
   { value: 'cpc',     label: 'Amstrad CPC (27 colors)' },
@@ -614,6 +625,9 @@ const EXAMPLES_BY_CHIPSET: Record<Chipset, Example[]> = {
   snes:    AMIGA_EXAMPLES,
   genesis: AMIGA_EXAMPLES,
   gba:     AMIGA_EXAMPLES,
+  zx: AMIGA_EXAMPLES,
+  msx1: AMIGA_EXAMPLES,
+  msx2: AMIGA_EXAMPLES,
   thomson: AMIGA_EXAMPLES,
   ted:     AMIGA_EXAMPLES,
   sms:     AMIGA_EXAMPLES,
@@ -782,11 +796,18 @@ export function isAmigaMode(mode: string): boolean {
 // Offering the picker for the last two groups is worse than useless: it
 // either silently does nothing or fails the convert.
 const NO_CUSTOM_PALETTE = [
-  isC64Mode, isCgaText, isSnesMode, isGenesisMode, isThomsonMode, isTedMode,
+  isAtariSpectrumMode, isC64Mode, isCgaText, isSnesMode, isGenesisMode, isZxMode, isMsxMode, isThomsonMode, isTedMode,
   isSmsMode, isCpcMode, isGbaDirectMode,
 ] as const
 export function supportsCustomPalette(mode: string): boolean {
   return NO_CUSTOM_PALETTE.every(p => !p(mode))
+}
+export function isZxMode(mode: string): boolean { return mode === 'zx-spectrum' }
+export function isAtariSpectrumMode(mode: string): boolean {
+  return mode === 'stf-spectrum512' || mode === 'ste-spectrum4096'
+}
+export function isMsxMode(mode: string): boolean {
+  return mode.startsWith('msx1-') || mode.startsWith('msx2-')
 }
 export function isThomsonMode(mode: string): boolean {
   return mode.startsWith('thomson-')
@@ -833,7 +854,7 @@ export function isCgaText(mode: string): boolean {
 // Match api.cpp's cell_refine validation, including CGA's metric restriction.
 export function supportsCellRefine({ mode, cgaTextMetric }: Pick<Options, 'mode' | 'cgaTextMetric'>): boolean {
   return ALL_MODES.some(m => m.value === mode) && (
-    isC64Mode(mode) || isTedMode(mode) || isThomsonFormeCouleur(mode) ||
+    isC64Mode(mode) || isTedMode(mode) || isThomsonFormeCouleur(mode) || mode === 'msx1-screen2' ||
     (isCgaText(mode) && cgaTextMetric === 'blur')
   )
 }
@@ -868,7 +889,7 @@ export function isFixedBufferMode(mode: string): boolean {
   return FIXED_BUFFER_FAMILIES.some(p => p(mode))
 }
 const FIXED_BUFFER_FAMILIES = [
-  isDosMode, isC64Mode, isAtariMode, isGbaMode, isThomsonMode, isTedMode, isSmsMode, isCpcMode,
+  isDosMode, isC64Mode, isAtariMode, isGbaMode, isZxMode, isMsxMode, isThomsonMode, isTedMode, isSmsMode, isCpcMode,
 ] as const
 
 // Hardware Pixel Aspect Ratio (display_pixel_width / display_pixel_height).
@@ -918,6 +939,7 @@ const MODE_PAR: Record<string, number> = {
   //   low  320×200 → 4:3 ⇒ PAR ≈ 0.833 (slightly tall, like ega-320)
   //   med  640×200 → 4:3 ⇒ PAR ≈ 0.417 (2.4× tall, like ega-640)
   //   hi   640×400 monochrome monitor ⇒ PAR 1.0 (square)
+  'stf-spectrum512': 0.833, 'ste-spectrum4096': 0.833,
   'stf-low':  0.833,  'ste-low':  0.833,
   'stf-med':  0.417,  'ste-med':  0.417,
   'stf-hi':   1,      'ste-hi':   1,
@@ -927,6 +949,8 @@ const MODE_PAR: Record<string, number> = {
   'gba-mode5': 1,
   // Thomson 4:3 monitor: 320×200 → 0.833 (like DOS/Atari 320×200); 160×200
   // → 1.667 (2× hardware doubling); 640×200 → 0.417 (like ega-640).
+  'msx1-screen2': 1.143, 'msx2-screen5': 1.143, 'msx2-screen6': 0.5715,
+  'msx2-screen7': 0.5715, 'msx2-screen8': 1.143,
   'thomson-to7-320x16': 0.833,
   'thomson-to8-320x16': 0.833,
   'thomson-to8-320x4':  0.833,
@@ -1001,6 +1025,9 @@ const DOS_PREVIEW_SCALE: Record<string, PreviewScale> = {
   'c64-fli':         { sx: 4, sy: 2 },
   // Thomson — 320-wide buffers 2×2 → 640×400; 160-wide 4×2 (2:1 doubling
   // baked in); 640-wide 1×2. PAR 1.0 (square pixels).
+  'msx1-screen2': { sx: 2, sy: 2 }, 'msx2-screen5': { sx: 2, sy: 2 },
+  'msx2-screen6': { sx: 1, sy: 2 }, 'msx2-screen7': { sx: 1, sy: 2 },
+  'msx2-screen8': { sx: 2, sy: 2 },
   'thomson-to7-320x16':  { sx: 2, sy: 2 },
   'thomson-to8-320x16':  { sx: 2, sy: 2 },
   'thomson-to8-320x4':   { sx: 2, sy: 2 },
@@ -1061,7 +1088,7 @@ export function decomposeMode(uiMode: string): DecomposedMode {
 // constraints) report 0 to mean "no user-adjustable depth slider".
 const FIXED_DEPTH_PREDICATES = [
   isHamMode, isEhbMode, isAtariMode, isDosMode, isC64Mode, isGbaMode,
-  isThomsonMode, isTedMode, isSmsMode, isCpcMode,
+  isZxMode, isMsxMode, isThomsonMode, isTedMode, isSmsMode, isCpcMode,
 ] as const
 export function maxDepth(mode: string, chipset: Chipset): number {
   for (const p of FIXED_DEPTH_PREDICATES) if (p(mode)) return 0
@@ -1072,6 +1099,7 @@ export function maxDepth(mode: string, chipset: Chipset): number {
 // Modes whose default bitplane depth is fixed by hardware. Looked up
 // before the family-based fallbacks below so e.g. cga-640 picks 1 not 4.
 const FIXED_DEFAULT_DEPTH: Record<string, number> = {
+  'zx-spectrum': 1, 'stf-spectrum512': 4, 'ste-spectrum4096': 4,
   'stf-low': 4, 'ste-low': 4,
   'stf-med': 2, 'ste-med': 2,
   'stf-hi':  1, 'ste-hi':  1,
@@ -1082,6 +1110,8 @@ const FIXED_DEFAULT_DEPTH: Record<string, number> = {
   'gba-mode4': 8,
   'gba-mode3': 16, 'gba-mode5': 16,
   // Thomson: 16/4/2-color buffers (conceptual bit depth).
+  'msx1-screen2': 4, 'msx2-screen5': 4, 'msx2-screen6': 2,
+  'msx2-screen7': 4, 'msx2-screen8': 8,
   'thomson-to7-320x16': 4, 'thomson-to8-320x16': 4, 'thomson-to8-160x16': 4,
   'thomson-to8-320x4': 2, 'thomson-to8-640x2': 1,
   // TED: hires 1bpp (2/cell), multicolor 2bpp (4/cell).
@@ -1131,6 +1161,12 @@ export function numColors(mode: string, depth: number): string {
 }
 // Modes whose color count is a fixed gamut label rather than 1 << depth.
 const FIXED_COLOR_LABELS: Record<string, string> = {
+  'zx-spectrum': '15 (2/cell, shared BRIGHT)',
+  'stf-spectrum512': '42 + black/line from 512',
+  'ste-spectrum4096': '42 + black/line from 4096',
+  'msx1-screen2': '15 opaque (2/cell)',
+  'msx2-screen5': '16 of 512', 'msx2-screen6': '4 of 512',
+  'msx2-screen7': '16 of 512', 'msx2-screen8': '256',
   'sms-mode4': '2 × 16 of 64',
   'gg-mode4':  '2 × 16 of 4096',
   'cpc-mode0': '16 of 27', 'cpc-mode1': '4 of 27', 'cpc-mode2': '2 of 27',

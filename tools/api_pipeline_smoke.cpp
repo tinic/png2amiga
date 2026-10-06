@@ -29,6 +29,8 @@
 #include "check_ehb_pairs.hpp"
 #include "check_to8_palette.hpp"
 #include "check_thomson_k7.hpp"
+#include "check_msx.hpp"
+#include "check_retro.hpp"
 #include "ham.hpp"
 #include "png_io.hpp"
 #include <nlohmann/json.hpp>
@@ -120,6 +122,10 @@ int check_ham_beam() {
 }  // namespace
 
 int main(int argc, char** argv) {
+    if (argc == 3 && std::strcmp(argv[1], "--check-retro") == 0)
+        return check_retro(argv[2]);
+    if (argc == 3 && std::strcmp(argv[1], "--check-msx") == 0)
+        return check_msx(argv[2]);
     if (argc == 3 && std::strcmp(argv[1], "--check-thomson-k7") == 0)
         return check_thomson_k7(argv[2]);
     if ((argc == 5 || argc == 6) && std::strcmp(argv[1], "--check-to8-palette") == 0)

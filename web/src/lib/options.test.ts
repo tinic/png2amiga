@@ -11,6 +11,7 @@ import {
   defaultOptions,
   effectiveChipset,
   isAmigaMode,
+  supportsCustomPalette,
   hamType,
   isAtariMode,
   isCgaMode,
@@ -37,7 +38,7 @@ describe('cell refinement support', () => {
     'c64-hires', 'c64-multicolor', 'c64-fli', 'c64-afli', 'c64-petscii',
     'c64-charset-hires', 'c64-charset-multicolor',
     'ted-hires', 'ted-multicolor',
-    'thomson-to7-320x16', 'thomson-to8-320x16',
+    'msx1-screen2', 'thomson-to7-320x16', 'thomson-to8-320x16',
     'cga-text80x200', 'cga-text80x100', 'cga-text80x50', 'cga-text80x25',
     'cga-text40x200', 'cga-text40x100',
   ])
@@ -386,5 +387,15 @@ describe('defaultOptions', () => {
 
   it('seeds the CGA text metric default', () => {
     expect(defaultOptions().cgaTextMetric).toBe('blur')
+  })
+})
+
+// These screens have coupled attributes or timed raster palettes, not a
+// user-adjustable global Amiga palette.
+describe('ZX and Atari Spectrum hardware modes', () => {
+  it.each(['zx-spectrum', 'stf-spectrum512', 'ste-spectrum4096'])('%s locks hardware controls', mode => {
+    expect(isAmigaMode(mode)).toBe(false)
+    expect(supportsCustomPalette(mode)).toBe(false)
+    expect(supportsCellRefine({ mode, cgaTextMetric: 'blur' })).toBe(false)
   })
 })

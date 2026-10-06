@@ -76,6 +76,12 @@ Result<EncodeResult> encode(const Image& image,
                             const std::vector<PaletteEntry>* to8_palette = nullptr,
                             bool refine_cells = false);
 
+// Shared 8x1 pair optimizer for MSX1. Returns row-major color nibbles in
+// page_a and pattern bytes in page_b; the MSX encoder arranges VRAM tables.
+Result<EncodeResult> encode_msx_cells(const Image& image,
+                                    const std::vector<Color3f>& colors,
+                                    const dither::Settings& settings, bool refine_cells);
+
 // Evolutionary population palette search for TO8 forme-couleur
 // (mirrors palette_search.cpp's GA shape: elitist quarter, crossover +
 // OKLab-nudge mutations snapped to the intens[] grid, SSIMULACRA2

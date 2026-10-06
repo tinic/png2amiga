@@ -177,6 +177,16 @@ enum class Mode : unsigned char {
     gba_mode4,  // 240×160, 8bpp, 256-color BGR555 palette
     gba_mode5,  // 160×128, 16bpp BGR555 direct-color (no palette)
 
+    zx_spectrum,
+    stf_spectrum512,
+    ste_spectrum4096,
+
+    // MSX1 TMS9918 attribute screen and MSX2 V9938 bitmaps.
+    msx1_screen2,
+    msx2_screen5,
+    msx2_screen6,
+    msx2_screen7,
+    msx2_screen8,
     // Thomson TO7/70 + TO8 — French micros, EF9369/TEA5114 gamma-corrected
     // 4-bit-per-channel palette (non-uniform intens[] ramp). VRAM is two
     // 8 KB pages (pageA / pageB). Fixed-buffer modes, square pixels.
@@ -418,6 +428,22 @@ constexpr ModeParams get_mode_params(Mode mode) noexcept {
         return {240, 160, 8, 256, false, false, false, false, 1, 1, 1.0f};
     case Mode::gba_mode5:
         return {160, 128, 16, 32768, false, false, false, false, 1, 1, 1.0f};
+    case Mode::zx_spectrum:
+        return {256, 192, 1, 16, false, false, false, false, 1, 1, 1.0f};
+    case Mode::stf_spectrum512:
+    case Mode::ste_spectrum4096:
+        return {320, 199, 4, 48, false, false, false, false, 1, 1, 0.833f};
+    // MSX: ~5.37 MHz pixels (8:7); SCREEN 6/7 double horizontal resolution.
+    case Mode::msx1_screen2:
+        return {256, 192, 4, 16, false, false, false, false, 1, 1, 1.143f};
+    case Mode::msx2_screen5:
+        return {256, 212, 4, 16, false, false, false, false, 1, 1, 1.143f};
+    case Mode::msx2_screen6:
+        return {512, 212, 2, 4, false, false, false, false, 1, 1, 0.5715f};
+    case Mode::msx2_screen7:
+        return {512, 212, 4, 16, false, false, false, false, 1, 1, 0.5715f};
+    case Mode::msx2_screen8:
+        return {256, 212, 8, 256, false, false, false, false, 1, 1, 1.143f};
     // Thomson — fixed 200-line buffers, square pixels (PAR 1.0). The
     // 160-wide and 640-wide modes hardware-double / halve horizontally but
     // are square on the actual display; we letterbox the source to the
@@ -649,6 +675,17 @@ constexpr bool is_gba_direct(Mode mode) noexcept {
 // GBA paletted mode (8bpp + 256-entry BGR555 palette).
 constexpr bool is_gba_paletted(Mode mode) noexcept {
     return mode == Mode::gba_mode4;
+}
+
+constexpr bool is_atari_spectrum(Mode mode) noexcept {
+    return mode == Mode::stf_spectrum512 || mode == Mode::ste_spectrum4096;
+}
+constexpr bool is_retro_raster(Mode mode) noexcept {
+    return mode == Mode::zx_spectrum || is_atari_spectrum(mode);
+}
+// MSX1 / MSX2 native screens.
+constexpr bool is_msx(Mode mode) noexcept {
+    return mode >= Mode::msx1_screen2 && mode <= Mode::msx2_screen8;
 }
 
 // Thomson TO7/70 + TO8 modes.

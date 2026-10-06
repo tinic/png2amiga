@@ -528,6 +528,10 @@ ConvertResult convert_raw(const std::uint8_t* input_data,
                           std::size_t input_size,
                           const Options& options);
 
+// MSX BASIC BLOAD screen file (.sc2/.sc5/.sc6/.sc7/.sc8).
+ConvertResult convert_msx(const std::uint8_t* input_data,
+                          std::size_t input_size, const Options& options);
+
 // TO7/70 K7 tape containing a binary picture viewer (LOADM"",,R).
 ConvertResult convert_k7(const std::uint8_t* input_data,
                          std::size_t input_size, const Options& options);

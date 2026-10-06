@@ -364,6 +364,23 @@ val js_convert_prg(val input_array, val js_opts) {
     return obj;
 }
 
+val js_convert_msx(val input_array, val js_opts) {
+    auto length = input_array["length"].as<std::size_t>();
+    std::vector<std::uint8_t> input(length);
+    val view = val(typed_memory_view(length, input.data()));
+    view.call<void>("set", input_array);
+
+    auto opts = parse_js_options(js_opts);
+    auto result = convert_msx(input.data(), input.size(), opts);
+
+    val obj = val::object();
+    obj.set("width", result.width);
+    obj.set("height", result.height);
+    obj.set("error", result.error);
+    if (!result.data.empty()) obj.set("data", make_uint8_array(result.data));
+    return obj;
+}
+
 val js_convert_k7(val input_array, val js_opts) {
     auto length = input_array["length"].as<std::size_t>();
     std::vector<std::uint8_t> input(length);
@@ -531,6 +548,7 @@ EMSCRIPTEN_BINDINGS(png2amiga) {
     function("convertRaw", &js_convert_raw);
     function("convertPRG", &js_convert_prg);
     function("convertK7", &js_convert_k7);
+    function("convertMSX", &js_convert_msx);
     function("convertKoa", &js_convert_koa);
     function("convertScr", &js_convert_scr);
     function("convertHir", &js_convert_hir);

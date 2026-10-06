@@ -22,6 +22,8 @@
 #include "sms.hpp"
 #include "c64_prg.hpp"
 #include "thomson.hpp"
+#include "msx.hpp"
+#include "retro.hpp"
 #include "thomson_palette_refine.hpp"
 #include "ted.hpp"
 #include "snes_io.hpp"
@@ -119,6 +121,14 @@ amiga::Mode parse_mode(const std::string& s) {
     if (s == "c64-petscii") return amiga::Mode::c64_petscii;
     if (s == "c64-charset-hires") return amiga::Mode::c64_charset_hires;
     if (s == "c64-charset-multicolor") return amiga::Mode::c64_charset_multicolor;
+    if (s == "zx-spectrum") return amiga::Mode::zx_spectrum;
+    if (s == "stf-spectrum512") return amiga::Mode::stf_spectrum512;
+    if (s == "ste-spectrum4096") return amiga::Mode::ste_spectrum4096;
+    if (s == "msx1-screen2") return amiga::Mode::msx1_screen2;
+    if (s == "msx2-screen5") return amiga::Mode::msx2_screen5;
+    if (s == "msx2-screen6") return amiga::Mode::msx2_screen6;
+    if (s == "msx2-screen7") return amiga::Mode::msx2_screen7;
+    if (s == "msx2-screen8") return amiga::Mode::msx2_screen8;
     if (s == "thomson-to7-320x16") return amiga::Mode::thomson_to7_320x16;
     if (s == "thomson-to8-320x16") return amiga::Mode::thomson_to8_320x16;
     if (s == "thomson-to8-160x16") return amiga::Mode::thomson_to8_160x16;
@@ -548,7 +558,7 @@ TargetDims compute_target_dims(std::size_t src_w,
     bool is_fixed_buf = amiga::is_atari(mode) || amiga::is_vga(mode) || amiga::is_ega(mode) ||
                         amiga::is_cga(mode) || amiga::is_cga_text(mode) || amiga::is_snes(mode) ||
                         amiga::is_genesis(mode) || amiga::is_c64(mode) || amiga::is_gba(mode) ||
-                        amiga::is_thomson(mode) || amiga::is_ted(mode) ||
+                        (amiga::is_thomson(mode) || amiga::is_msx(mode) || amiga::is_retro_raster(mode)) || amiga::is_ted(mode) ||
                         amiga::is_sms(mode) || amiga::is_cpc(mode);
     // Tile-based platforms with freeform sizing — Genesis (8×8 cells)
     // and SNES Mode 7 (8×8 cells) use the same 1:1 source-pixel
@@ -655,7 +665,7 @@ TargetDims compute_target_dims(std::size_t src_w,
                             amiga::is_ega(mode) || amiga::is_cga(mode) ||
                             amiga::is_cga_text(mode) || amiga::is_snes(mode) ||
                             amiga::is_genesis(mode) || amiga::is_c64(mode) ||
-                            amiga::is_gba(mode) || amiga::is_thomson(mode) ||
+                            amiga::is_gba(mode) || (amiga::is_thomson(mode) || amiga::is_msx(mode) || amiga::is_retro_raster(mode)) ||
                             amiga::is_ted(mode) || amiga::is_sms(mode) ||
                             amiga::is_cpc(mode));
     // Neither: use mode default width, but don't upscale small images.  Amiga
@@ -1132,10 +1142,10 @@ Result<PipelineResult> run_pipeline(const std::uint8_t* input_data,
     }
 
     if (options.cell_refine &&
-        (!amiga::is_thomson_formecouleur(mode) && !amiga::is_c64(mode) && !amiga::is_ted(mode) &&
+        (!amiga::is_thomson_formecouleur(mode) && mode != amiga::Mode::msx1_screen2 && !amiga::is_c64(mode) && !amiga::is_ted(mode) &&
          !(amiga::is_cga_text(mode) && options.cga_text_metric == "blur"))) {
         return std::unexpected{Error{ErrorCode::unsupported_mode,
-                                     "--cell-refine requires Thomson attribute, C64, TED, or CGA "
+                                     "--cell-refine requires MSX1/Thomson attribute, C64, TED, or CGA "
                                      "text with the blur metric"}};
     }
 
@@ -1207,8 +1217,8 @@ Result<PipelineResult> run_pipeline(const std::uint8_t* input_data,
         if (amiga::is_ted(mode))
             return reject("not supported in TED modes (the Plus/4/C16 palette "
                           "is fixed in hardware)");
-        if (amiga::is_thomson(mode))
-            return reject("not supported in Thomson modes (fixed TO7/70 palette "
+        if ((amiga::is_thomson(mode) || amiga::is_msx(mode) || amiga::is_retro_raster(mode)))
+            return reject("not supported in ZX/Atari Spectrum/MSX/Thomson modes (fixed or auto-quantized palette; "
                           "or auto-quantized TO8 palette)");
         if (amiga::is_cga(mode) || amiga::is_cga_text(mode))
             return reject("not supported in CGA modes (palette is "
@@ -1233,20 +1243,20 @@ Result<PipelineResult> run_pipeline(const std::uint8_t* input_data,
     // Thomson + TED modes use a fixed (TO7/70, TED) or auto-quantized (TO8)
     // palette — no slot to lock/pin and no external palette load. Reject
     // rather than silently ignore, matching the C64 convention.
-    if ((amiga::is_thomson(mode) || amiga::is_ted(mode) || amiga::is_sms(mode) ||
+    if (((amiga::is_thomson(mode) || amiga::is_msx(mode) || amiga::is_retro_raster(mode)) || amiga::is_ted(mode) || amiga::is_sms(mode) ||
          amiga::is_cpc(mode)) &&
         (!options.locks.empty() || !options.pins.empty() || has_user_palette(options))) {
         return std::unexpected{Error{
             ErrorCode::unsupported_mode,
             "--lock-index / --pin-index-at / --palette: not supported in "
-            "Thomson / TED / Master System / CPC modes (palette is fixed or "
+            "ZX / Atari Spectrum / MSX / Thomson / TED / Master System / CPC modes (palette is fixed or "
             "auto-quantized)",
         }};
     }
     // No transparency-slot-0 semantics on these targets either: a forced
     // black slot would just waste one of 16 entries. Hard-off regardless
     // of the flag so no generic path can ever apply it.
-    if (amiga::is_thomson(mode) || amiga::is_ted(mode) || amiga::is_sms(mode) ||
+    if ((amiga::is_thomson(mode) || amiga::is_msx(mode) || amiga::is_retro_raster(mode)) || amiga::is_ted(mode) || amiga::is_sms(mode) ||
         amiga::is_cpc(mode))
         options.lock_color0 = false;
 
@@ -1259,7 +1269,7 @@ Result<PipelineResult> run_pipeline(const std::uint8_t* input_data,
         bool non_amiga = amiga::is_atari(mode) || amiga::is_vga(mode) || amiga::is_ega(mode) ||
                          amiga::is_cga(mode) || amiga::is_c64(mode) || amiga::is_snes(mode) ||
                          amiga::is_genesis(mode) || amiga::is_gba(mode) ||
-                         amiga::is_thomson(mode) || amiga::is_ted(mode) ||
+                         (amiga::is_thomson(mode) || amiga::is_msx(mode) || amiga::is_retro_raster(mode)) || amiga::is_ted(mode) ||
                          amiga::is_sms(mode) || amiga::is_cpc(mode);
         if (non_amiga) {
             std::string which;
@@ -1312,7 +1322,7 @@ Result<PipelineResult> run_pipeline(const std::uint8_t* input_data,
     // DOS + SNES + Genesis + GBA modes: depth also fixed by the hardware
     // buffer (GBA mode4 = 8bpp; the direct modes don't use depth at all).
     if (amiga::is_vga(mode) || amiga::is_ega(mode) || amiga::is_cga(mode) || amiga::is_snes(mode) ||
-        amiga::is_genesis(mode) || amiga::is_gba(mode) || amiga::is_thomson(mode) ||
+        amiga::is_genesis(mode) || amiga::is_gba(mode) || (amiga::is_thomson(mode) || amiga::is_msx(mode) || amiga::is_retro_raster(mode)) ||
         amiga::is_ted(mode) || amiga::is_sms(mode) || amiga::is_cpc(mode))
         depth = amiga::get_mode_params(mode).bitplane_depth;
 
@@ -1389,7 +1399,7 @@ Result<PipelineResult> run_pipeline(const std::uint8_t* input_data,
     bool is_fixed_buffer = amiga::is_atari(mode) || amiga::is_vga(mode) || amiga::is_ega(mode) ||
                            amiga::is_cga(mode) || amiga::is_cga_text(mode) ||
                            amiga::is_snes(mode) || amiga::is_genesis(mode) || amiga::is_gba(mode) ||
-                           amiga::is_thomson(mode) || amiga::is_ted(mode) ||
+                           (amiga::is_thomson(mode) || amiga::is_msx(mode) || amiga::is_retro_raster(mode)) || amiga::is_ted(mode) ||
                            amiga::is_sms(mode) || amiga::is_cpc(mode);
     // cga-text accepts arbitrary multiples of 8×2 in freeform (--width
     // / --height set). Don't center-pad freeform input up to the
@@ -2054,6 +2064,55 @@ Result<PipelineResult> run_pipeline(const std::uint8_t* input_data,
     // raw_frame holds pageA followed by pageB; the TO8 palette (if any) is
     // carried in result.palette and written as a companion .pal by
     // convert_raw / emitted as 4-bit channels in the .h.
+    if (amiga::is_retro_raster(mode)) {
+        if (has_transparency)
+            for (std::size_t i = 0; i < tmask.size(); ++i)
+                if (tmask[i]) image->pixels()[i] = Color3f{0, 0, 0};
+        dither::Settings dith;
+        dith.method = parse_dither(options.dither);
+        dith.strength = options.dither_strength;
+        dith.error_clamp = options.error_clamp;
+        dith.serpentine = true;
+        auto enc = retro::encode(*image, mode, dith);
+        if (!enc) return std::unexpected{enc.error()};
+        PipelineResult result;
+        result.rendered = std::move(enc->rendered);
+        result.palette = std::move(enc->palette);
+        result.raw_frame = std::move(enc->bytes);
+        result.planes.depth = amiga::get_mode_params(mode).bitplane_depth;
+        result.mode = mode;
+        result.hires = false;
+        result.interlace = false;
+        result.has_transparency = has_transparency;
+        result.transparency_mask = tmask;
+        result.finalize_psnr(*image, enc->total_error);
+        return result;
+    }
+    if (amiga::is_msx(mode)) {
+        if (has_transparency)
+            for (std::size_t i = 0; i < tmask.size(); ++i)
+                if (tmask[i]) image->pixels()[i] = Color3f{0, 0, 0};
+        dither::Settings dith;
+        dith.method = parse_dither(options.dither);
+        dith.strength = options.dither_strength;
+        dith.error_clamp = options.error_clamp;
+        dith.serpentine = true;
+        auto enc = msx::encode(*image, mode, dith, options.cell_refine);
+        if (!enc) return std::unexpected{enc.error()};
+        PipelineResult result;
+        result.rendered = std::move(enc->rendered);
+        result.palette = std::move(enc->palette);
+        result.raw_frame = std::move(enc->vram);
+        result.planes.depth = amiga::get_mode_params(mode).bitplane_depth;
+        result.mode = mode;
+        result.hires = false;
+        result.interlace = false;
+        result.has_transparency = has_transparency;
+        result.transparency_mask = tmask;
+        result.finalize_psnr(*image, enc->total_error);
+        return result;
+    }
+
     if (amiga::is_thomson(mode)) {
         if (has_transparency) {
             for (std::size_t i = 0; i < tmask.size(); ++i)
@@ -5846,6 +5905,17 @@ ConvertResult convert_cheader(const std::uint8_t* input_data,
     }
 
     // Thomson + Commodore TED: generic byte-array headers.
+    if (amiga::is_retro_raster(result->mode)) {
+        auto txt = std::string("// Native ZX SCR / Atari SPU bytes.\n#pragma once\n") +
+                   emit_gba_u8_array(std::string(sym) + "Screen", result->raw_frame);
+        return make_result(std::vector<std::uint8_t>(txt.begin(), txt.end()), *result);
+    }
+    if (amiga::is_msx(result->mode)) {
+        std::string txt = "// MSX CPU-visible VRAM at address 0. Palette mirror included.\n#pragma once\n";
+        txt += std::format("#define {}Screen {}\n", sym, msx::screen_number(result->mode));
+        txt += emit_gba_u8_array(std::string(sym) + "VRAM", result->raw_frame);
+        return make_result(std::vector<std::uint8_t>(txt.begin(), txt.end()), *result);
+    }
     if (amiga::is_thomson(result->mode)) {
         auto txt = thomson_header(*result, sym);
         std::vector<std::uint8_t> bytes(txt.begin(), txt.end());
@@ -5907,6 +5977,13 @@ ConvertResult convert_viewer(const std::uint8_t* input_data,
                              const Options& options) {
     auto result = run_pipeline(input_data, input_size, options);
     if (!result) return make_error(result.error().message);
+
+    if (amiga::is_atari_spectrum(result->mode)) {
+        auto txt = retro::viewer_source(result->mode, result->raw_frame);
+        if (!txt) return make_error(txt.error().message);
+        return make_result(std::vector<std::uint8_t>(txt->begin(), txt->end()), *result);
+    }
+    if (result->mode == amiga::Mode::zx_spectrum) return make_error("ZX Spectrum exports .scr, .h and .png");
 
     // DOS modes: 16-bit C viewer via cheader_dos_c, targeting
     // ia16-elf-gcc (real-mode 8088+; no DPMI, no 32-bit code).
@@ -6061,7 +6138,7 @@ ConvertResult convert_raw(const std::uint8_t* input_data,
     // genesis: tile_bytes + u16-BE tilemap + u16-BE palette). Hand
     // them straight back.
     if (amiga::is_c64(result->mode) || amiga::is_genesis(result->mode) ||
-        amiga::is_thomson(result->mode) || amiga::is_ted(result->mode) ||
+        (amiga::is_msx(result->mode) || amiga::is_retro_raster(result->mode)) || amiga::is_thomson(result->mode) || amiga::is_ted(result->mode) ||
         amiga::is_sms(result->mode) || amiga::is_cpc(result->mode)) {
         std::vector<std::uint8_t> raw = std::move(result->raw_frame);
         return make_result(std::move(raw), *result);
@@ -6204,7 +6281,8 @@ ConvertResult convert_scr(const std::uint8_t* input_data,
                           const Options& options) {
     auto result = run_pipeline(input_data, input_size, options);
     if (!result) return make_error(result.error().message);
-    if (!amiga::is_cpc(result->mode)) return make_error(".scr export requires a cpc-* mode");
+    if (result->mode == amiga::Mode::zx_spectrum) return make_result(result->raw_frame, *result);
+    if (!amiga::is_cpc(result->mode)) return make_error(".scr export requires ZX Spectrum or CPC mode");
     std::string name = options.symbol_name.empty() ? std::string{"image"} : options.symbol_name;
     auto bytes = cpc_scr_bytes(result->raw_frame, name + ".scr");
     return make_result(std::move(bytes), *result);
@@ -6234,6 +6312,17 @@ ConvertResult c64_export(
 }
 
 }  // namespace
+
+ConvertResult convert_msx(const std::uint8_t* input_data, std::size_t input_size,
+                          const Options& options) {
+    auto mode = parse_mode(options.mode);
+    if (!amiga::is_msx(mode)) return make_error("MSX screen export requires an MSX mode");
+    auto result = run_pipeline(input_data, input_size, options);
+    if (!result) return make_error(result.error().message);
+    auto bytes = msx::screen_file(result->mode, result->raw_frame);
+    if (!bytes) return make_error(bytes.error().message);
+    return make_result(std::move(*bytes), *result);
+}
 
 ConvertResult convert_k7(const std::uint8_t* input_data,
                          std::size_t input_size, const Options& options) {
@@ -6267,6 +6356,13 @@ std::vector<std::uint8_t> thomson_pal_bytes(std::span<const Color3f> palette) {
 ConvertResult convert_prg(const std::uint8_t* input_data,
                           std::size_t input_size,
                           const Options& options) {
+    if (amiga::is_atari_spectrum(parse_mode(options.mode))) {
+        auto result = run_pipeline(input_data, input_size, options);
+        if (!result) return make_error(result.error().message);
+        auto bytes = retro::executable(result->mode, result->raw_frame);
+        if (!bytes) return make_error(bytes.error().message);
+        return make_result(std::move(*bytes), *result);
+    }
     return c64_export(
         input_data,
         input_size,
