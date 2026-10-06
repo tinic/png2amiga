@@ -174,7 +174,7 @@ EncodeResult spectrum(const Image& image, bool ste, const dither::Settings& sett
         // Blank physical row 0; four interleaved big-endian plane words.
         auto base = (y + 1) * 160 + (x / 16) * 8 + (x % 16) / 8;
         for (std::size_t p = 0; p < 4; ++p)
-            if (q & (1u << p))
+            if (q & (std::size_t{1} << p))
                 out.bytes[base + p * 2] |= static_cast<std::uint8_t>(0x80 >> (x % 8));
         return {chosen, thr};
     };
