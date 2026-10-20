@@ -90,13 +90,15 @@ k-means over all 4096 OCS colors), PNN agglomerative (Ward's
 linkage in OKLab — default for HAM AGA), and median-cut + k-means
 refinement in OKLab (CPU fallback when Metal isn't available).
 
-**Dithering**: 64 methods.
+**Dithering**: 70 methods.
 
-- **Error Diffusion** (19) — Floyd–Steinberg, Sierra-Lite, Atkinson,
+- **Error Diffusion** (22) — Floyd–Steinberg, Sierra-Lite, Atkinson,
   Jarvis, Stucki, Gilbert, Riemersma, DBS (slow); palette-aware
   planning: Optimal Checker, Optimal Line, Optimal Line-Checker,
-  Tri-tone, Knoll, Yliluoma 1 (exhaustive) and Yliluoma 2 (greedy +
-  luma-weighted variant); structure-aware: Structure-FS,
+  Optimal Row-Dot / Row-Dot Aligned / Row-Dot Checker (two colours at
+  five fixed levels), Tri-tone, Knoll, Yliluoma 1 (exhaustive) and
+  Yliluoma 2 (greedy + luma-weighted variant); structure-aware:
+  Structure-FS,
   Contrast-FS, Zhou–Fang.
 - **Bayer** (14) — Bayer 2×2 / 4×4 / 8×8 / 3×3 / 5×5 / 6×6 / 7×7,
   non-square Bayer 4×2 and 2×4, plus the matrices Aseprite (old
@@ -104,8 +106,11 @@ refinement in OKLab (CPU fallback when Metal isn't available).
   Cranley–Patterson rotated Bayer.
 - **Halftone** (4) — Halftone 8×8, Diagonal Newspaper, Spiral 5×5,
   Clustered Dot.
-- **Hatching** (9) — horizontal Lines 2 / 4 / 8 + Line Checker,
-  vertical VLines 2 / 4 / 8 + VLine Checker, Crosshatch.
+- **Hatching** (12) — horizontal Lines 2 / 4 / 8 + Line Checker,
+  vertical VLines 2 / 4 / 8 + VLine Checker, Crosshatch, and Row-Dot
+  (staggered), Row-Dot Aligned and Row-Dot Checker: five levels with
+  25% and 75% as dotted alternating rows and 50% as alternating rows
+  or a checkerboard.
 - **Pattern** (8) — Checker, Wide 2×4, Tall 4×2, Hexagonal 8×8 and
   5×5, Radial, Quasicrystal, Truchet.
 - **Noise** (10) — Blue Noise, Void & Cluster, Cluster Noise,
