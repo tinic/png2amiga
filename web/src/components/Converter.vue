@@ -2414,6 +2414,12 @@ async function compileAndDownload(format: string) {
   converting.value = false
 }
 
+const adjustmentsAtDefault = computed(() => SLIDERS.every(s => options[s.key] === s.default))
+
+function resetAdjustments() {
+  for (const s of SLIDERS) options[s.key] = s.default
+}
+
 function resetOptions() {
   Object.assign(options, defaultOptions())
   clearPalette()
@@ -2912,6 +2918,11 @@ async function loadExample(example: typeof EXAMPLES[number]) {
 
           <!-- Adjustments -->
           <Panel header="Adjustments">
+            <template #icons>
+              <Button icon="pi pi-refresh" severity="secondary" text rounded size="small"
+                :disabled="adjustmentsAtDefault" @click="resetAdjustments"
+                title="Reset adjustments to their defaults" aria-label="Reset adjustments" />
+            </template>
             <div class="flex flex-column gap-2">
               <div v-for="s in SLIDERS" :key="s.key" class="grid align-items-center">
                 <label class="col-3 text-xs text-color-secondary font-semibold white-space-nowrap" :title="s.tip">{{ s.label }}</label>
