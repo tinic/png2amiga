@@ -318,6 +318,9 @@ inline std::uint8_t dispatch_palette_aware_pick(dither::Method method,
     case M::opt_line_checker:  return dither::pick_opt_line_checker_index(target, cand_lab, x, y, strength);
     case M::opt_vline:         return dither::pick_opt_vline_index(target, cand_lab, x, y, strength);
     case M::opt_vline_checker: return dither::pick_opt_vline_checker_index(target, cand_lab, x, y, strength);
+    case M::opt_rowdot:        return dither::pick_opt_rowdot_index(target, cand_lab, x, y, strength);
+    case M::opt_rowdot_aligned: return dither::pick_opt_rowdot_aligned_index(target, cand_lab, x, y, strength);
+    case M::opt_rowdot_checker: return dither::pick_opt_rowdot_checker_index(target, cand_lab, x, y, strength);
     case M::yliluoma:          return dither::pick_yliluoma_index(target, cand_lab, x, y, /*mode2=*/false, strength);
     case M::yliluoma2:         return dither::pick_yliluoma_index(target, cand_lab, x, y, /*mode2=*/true,  strength);
     case M::yliluoma1:         return dither::pick_yliluoma_index(target, cand_lab, x, y, /*mode2=*/false, strength);

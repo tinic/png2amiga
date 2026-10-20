@@ -5898,7 +5898,8 @@ int run_main(int argc, char* argv[]) {
         cli_status("             stucki, jarvis, gilbert, riemersma,");
         cli_status("             floyd-steinberg-oklab");
         cli_status("  Palette-aware: opt-checker, opt-line, opt-line-checker,");
-        cli_status("             opt-vline, opt-vline-checker, tri-tone,");
+        cli_status("             opt-vline, opt-vline-checker, opt-rowdot,");
+        cli_status("             opt-rowdot-aligned, opt-rowdot-checker, tri-tone,");
         cli_status("             knoll, yliluoma1, yliluoma, yliluoma2");
         cli_status("  DBS:       dbs (perceptual optimum, slow)");
         cli_status("  Structure: structure-fs, contrast-fs, zhoufang");
@@ -5908,6 +5909,7 @@ int run_main(int argc, char* argv[]) {
         cli_status("  Halftone:  checker, clustered-dot, halftone8x8, diagonal8x8,");
         cli_status("             spiral5x5, pegasus, h2x4, v4x2");
         cli_status("  Lines:     line2, line4, line8, line-checker,");
+        cli_status("             rowdot, rowdot-aligned, rowdot-checker,");
         cli_status("             vline2, vline4, vline8, vline-checker, crosshatch");
         cli_status("  Pattern:   hex8x8, hex5x5, radial, quasicrystal, truchet");
         cli_status("  Noise:     blue-noise, void-cluster, cluster-noise,");

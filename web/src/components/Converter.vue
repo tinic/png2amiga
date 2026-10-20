@@ -728,7 +728,8 @@ let exportCount = 0
 const YLIL_FAMILY = new Set([
   'yliluoma', 'yliluoma2', 'opt-checker', 'knoll', 'tri-tone',
   'yliluoma1', 'opt-line', 'opt-line-checker',
-  'opt-vline', 'opt-vline-checker',
+  'opt-vline', 'opt-vline-checker', 'opt-rowdot', 'opt-rowdot-aligned',
+  'opt-rowdot-checker',
 ])
 // SNES Mode 7 Direct quantises every pixel directly to the RGB443 grid
 // — there is no palette table, so the yliluoma family (palette-aware

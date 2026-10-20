@@ -46,6 +46,9 @@ enum class Method : unsigned char {
     line_checker,  // 2x2 line-biased
     line4,         // 1x4 horizontal gradient
     line8,         // 1x8 horizontal gradient
+    rowdot,          // 2x4 five-level row-dot, dots staggered (hand-pixelled C64 style)
+    rowdot_aligned,  // 2x4 five-level row-dot, dots aligned column-wise
+    rowdot_checker,  // row-dot with a 1x1 checkerboard at 50% (aligned dots, 2x2 tile)
 
     // Vertical lines
     vline2,         // 2x1 alternating columns
@@ -101,6 +104,9 @@ enum class Method : unsigned char {
     opt_line_checker,   // Optimal Line-Checker — 4-color plan, line_checker 2×2 phase
     opt_vline,          // Optimal VLine — 2-color pair, x&1 phase (vertical-stripe variant)
     opt_vline_checker,  // Optimal VLine-Checker — 4-color plan, vline_checker 2×2 phase
+    opt_rowdot,          // Optimal Row-Dot — 2-color pair at 0/25/50/75/100%, rowdot 2×4
+    opt_rowdot_aligned,  // Optimal Row-Dot with aligned dots — rowdot_aligned 2×4
+    opt_rowdot_checker,  // Optimal Row-Dot, checkerboard at 50% — rowdot_checker 2×2
     knoll,              // Knoll pattern dither — N=16 plan on 4×4 Bayer (US 6,606,166 expired 2019)
     tri_tone,           // Yliluoma tri-tone — 2×2 cell, 3 colors (one 50%, two 25%)
     yliluoma1,          // Yliluoma Algorithm 1 — exhaustive pair × ratio search w/ luma threshold
@@ -194,6 +200,9 @@ constexpr bool is_ordered(Method m) noexcept {
     case Method::line_checker:
     case Method::line4:
     case Method::line8:
+    case Method::rowdot:
+    case Method::rowdot_aligned:
+    case Method::rowdot_checker:
     case Method::vline2:
     case Method::vline_checker:
     case Method::vline4:
@@ -325,6 +334,35 @@ std::uint8_t pick_opt_line_checker_index(const png2amiga::color_space::OKLab& ta
                                          std::size_t x,
                                          std::size_t y,
                                          float strength);
+
+// Two-color pair at one of five levels (0, 25, 50, 75, 100% of the
+// partner), laid out on the rowdot 2×4 rank matrix: 25% = dotted rows
+// between solid rows, 50% = alternating solid rows, 75% = the 25%
+// pattern with the colors swapped. The pair is anchored on the nearest
+// color; strength penalizes partner distance as in opt_line.
+std::uint8_t pick_opt_rowdot_index(const png2amiga::color_space::OKLab& target,
+                                   std::span<const png2amiga::color_space::OKLab> palette_lab,
+                                   std::size_t x,
+                                   std::size_t y,
+                                   float strength);
+
+// Same as pick_opt_rowdot_index with the dots aligned column-wise
+// (rows 2-3 of the rank matrix equal rows 0-1).
+std::uint8_t pick_opt_rowdot_aligned_index(
+    const png2amiga::color_space::OKLab& target,
+    std::span<const png2amiga::color_space::OKLab> palette_lab,
+    std::size_t x,
+    std::size_t y,
+    float strength);
+
+// Same as pick_opt_rowdot_index with a 1x1 checkerboard at 50% (aligned
+// dots at 25/75%, so the levels nest; a 2×2 tile).
+std::uint8_t pick_opt_rowdot_checker_index(
+    const png2amiga::color_space::OKLab& target,
+    std::span<const png2amiga::color_space::OKLab> palette_lab,
+    std::size_t x,
+    std::size_t y,
+    float strength);
 
 // Same as pick_opt_line_index but phase = (x & 1) instead of (y & 1).
 // Produces a vertical-stripe pattern (column-dominant) — visually

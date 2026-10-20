@@ -255,6 +255,42 @@ constexpr auto make_line_checker() noexcept {
     }};
 }
 
+// Row-dot, 2 wide x 4 tall, five levels (turo's spec, from a hand-pixelled
+// C64 multicolor picture). Tied ranks 0..3; level k (0..4) covers every
+// cell with rank < k: 25% = dots on alternating columns in every other
+// row, 50% = alternating solid rows, 75% = the 25% pattern inverted.
+// The ties are deliberate: a flat area mixes two colors at exactly these
+// five levels. Staggered: successive dotted rows put their dots in
+// different columns. Aligned: rows 2-3 repeat rows 0-1.
+constexpr std::array<std::array<int, 2>, 4> kRowdotRank = {{
+    {{0, 1}},
+    {{2, 3}},
+    {{1, 0}},
+    {{3, 2}},
+}};
+constexpr std::array<std::array<int, 2>, 4> kRowdotAlignedRank = {{
+    {{0, 1}},
+    {{2, 3}},
+    {{0, 1}},
+    {{2, 3}},
+}};
+// Checker variant: 50% is a 1x1 checkerboard, 25%/75% stay dotted rows.
+// Nests only with aligned dots, so it is a 2x2 tile.
+constexpr std::array<std::array<int, 2>, 4> kRowdotCheckerRank = {{
+    {{0, 2}},
+    {{3, 1}},
+    {{0, 2}},
+    {{3, 1}},
+}};
+
+constexpr auto make_rowdot(const std::array<std::array<int, 2>, 4>& raw) noexcept {
+    std::array<std::array<float, 2>, 4> m{};
+    for (std::size_t y = 0; y < 4; ++y)
+        for (std::size_t x = 0; x < 2; ++x)
+            m[y][x] = (static_cast<float>(raw[y][x]) + 0.5f) / 4.0f - 0.5f;
+    return m;
+}
+
 constexpr auto make_line4() noexcept {
     // 1x4 smooth gradient
     return std::array<std::array<float, 1>, 4>{{
@@ -444,6 +480,9 @@ constexpr auto vline8_mat = make_vline8();
 constexpr auto line_checker_mat = make_line_checker();
 constexpr auto line4_mat = make_line4();
 constexpr auto line8_mat = make_line8();
+constexpr auto rowdot_mat = make_rowdot(kRowdotRank);
+constexpr auto rowdot_aligned_mat = make_rowdot(kRowdotAlignedRank);
+constexpr auto rowdot_checker_mat = make_rowdot(kRowdotCheckerRank);
 
 // 45-degree halftone 8x8 (newspaper/print look, 32 gray levels)
 constexpr auto make_halftone8x8() noexcept {
@@ -1565,6 +1604,12 @@ std::uint8_t pick_yliluoma_family_index(Method method,
         return pick_opt_vline_index(target, palette_lab, x, y, strength);
     case Method::opt_vline_checker:
         return pick_opt_vline_checker_index(target, palette_lab, x, y, strength);
+    case Method::opt_rowdot:
+        return pick_opt_rowdot_index(target, palette_lab, x, y, strength);
+    case Method::opt_rowdot_aligned:
+        return pick_opt_rowdot_aligned_index(target, palette_lab, x, y, strength);
+    case Method::opt_rowdot_checker:
+        return pick_opt_rowdot_checker_index(target, palette_lab, x, y, strength);
     case Method::knoll:
         return pick_knoll_index(target, palette_lab, x, y, strength);
     case Method::tri_tone:
@@ -1855,7 +1900,8 @@ bool is_yliluoma(Method method) {
            method == Method::opt_checker || method == Method::knoll || method == Method::tri_tone ||
            method == Method::yliluoma1 || method == Method::opt_line ||
            method == Method::opt_line_checker || method == Method::opt_vline ||
-           method == Method::opt_vline_checker;
+           method == Method::opt_vline_checker || method == Method::opt_rowdot ||
+           method == Method::opt_rowdot_aligned || method == Method::opt_rowdot_checker;
 }
 
 bool needs_discrete_palette(Method method) {
@@ -2068,6 +2114,95 @@ std::uint8_t pick_opt_vline_checker_index(const color_space::OKLab& target,
     // (column-dominant). Visually preferred on tall pixels / hires modes.
     return opt_plan4_pick_by_threshold(
         target, palette_lab, vline_checker_mat[y % 2][x % 2], strength);
+}
+
+// Two-color, five-level pick on a 2×4 rank matrix (opt_rowdot family).
+// A = nearest color; partner B and count n (1..3 of 4 cells) minimize
+// the mix error plus a separation penalty scaled by the pattern variance
+// n(4-n)/4 (1 at 50%, 0.75 at 25/75%). Solid A is the baseline. The
+// darker member takes the cells with rank < its count, so the patterns
+// nest the same way across a gradient whichever member is nearest.
+static std::uint8_t opt_pair5_pick(const color_space::OKLab& target,
+                                   std::span<const color_space::OKLab> palette_lab,
+                                   int rank,
+                                   float strength) {
+    const std::size_t P = palette_lab.size();
+    if (P <= 1) return 0;
+    float s = std::clamp(strength, 0.0f, 1.0f);
+
+    std::size_t A = 0;
+    float best_a = std::numeric_limits<float>::max();
+    for (std::size_t k = 0; k < P; ++k) {
+        float d = color_space::fma_dist_sq(palette_lab[k].L - target.L,
+                                           palette_lab[k].a - target.a,
+                                           palette_lab[k].b - target.b);
+        if (d < best_a) {
+            best_a = d;
+            A = k;
+        }
+    }
+    if (s == 0.0f) return static_cast<std::uint8_t>(A);
+
+    constexpr float MIN_W = 0.005f;  // same curve as opt_pair_pick
+    constexpr float MAX_W = 5.0f;
+    float sep_w = MIN_W * std::pow(MAX_W / MIN_W, 1.0f - s);
+
+    const auto& pa = palette_lab[A];
+    std::size_t B = A;
+    int n_b = 0;
+    float best = best_a;
+    for (std::size_t k = 0; k < P; ++k) {
+        if (k == A) continue;
+        const auto& pk = palette_lab[k];
+        float sep = color_space::fma_dist_sq(pa.L - pk.L, pa.a - pk.a, pa.b - pk.b);
+        for (int n = 1; n <= 3; ++n) {
+            float t = static_cast<float>(n) * 0.25f;
+            float dL = pa.L + (pk.L - pa.L) * t - target.L;
+            float da = pa.a + (pk.a - pa.a) * t - target.a;
+            float db = pa.b + (pk.b - pa.b) * t - target.b;
+            float var = static_cast<float>(n * (4 - n)) * 0.25f;
+            float err = color_space::fma_dist_sq(dL, da, db) + sep_w * var * sep;
+            if (err < best) {
+                best = err;
+                B = k;
+                n_b = n;
+            }
+        }
+    }
+    if (B == A) return static_cast<std::uint8_t>(A);
+
+    std::size_t lo = A, hi = B;
+    int n_lo = 4 - n_b;
+    if (palette_lab[B].L < pa.L) {
+        lo = B;
+        hi = A;
+        n_lo = n_b;
+    }
+    return static_cast<std::uint8_t>(rank < n_lo ? lo : hi);
+}
+
+std::uint8_t pick_opt_rowdot_index(const color_space::OKLab& target,
+                                   std::span<const color_space::OKLab> palette_lab,
+                                   std::size_t x,
+                                   std::size_t y,
+                                   float strength) {
+    return opt_pair5_pick(target, palette_lab, kRowdotRank[y % 4][x % 2], strength);
+}
+
+std::uint8_t pick_opt_rowdot_aligned_index(const color_space::OKLab& target,
+                                           std::span<const color_space::OKLab> palette_lab,
+                                           std::size_t x,
+                                           std::size_t y,
+                                           float strength) {
+    return opt_pair5_pick(target, palette_lab, kRowdotAlignedRank[y % 4][x % 2], strength);
+}
+
+std::uint8_t pick_opt_rowdot_checker_index(const color_space::OKLab& target,
+                                           std::span<const color_space::OKLab> palette_lab,
+                                           std::size_t x,
+                                           std::size_t y,
+                                           float strength) {
+    return opt_pair5_pick(target, palette_lab, kRowdotCheckerRank[y % 4][x % 2], strength);
 }
 
 namespace {  // reopen anon namespace for the apply_* helpers below
@@ -2954,6 +3089,12 @@ DitherResult apply(const Image& image,
         return apply_ordered(image, line4_mat, pal_span, settings.strength);
     case Method::line8:
         return apply_ordered(image, line8_mat, pal_span, settings.strength);
+    case Method::rowdot:
+        return apply_ordered(image, rowdot_mat, pal_span, settings.strength);
+    case Method::rowdot_aligned:
+        return apply_ordered(image, rowdot_aligned_mat, pal_span, settings.strength);
+    case Method::rowdot_checker:
+        return apply_ordered(image, rowdot_checker_mat, pal_span, settings.strength);
     case Method::halftone8x8:
         return apply_ordered(image, halftone8x8_mat, pal_span, settings.strength);
     case Method::diagonal8x8:
@@ -3245,6 +3386,28 @@ DitherResult apply(const Image& image,
             for (std::size_t x = 0; x < w; ++x) {
                 auto t = color_space::linear_to_oklab(image[x, y]);
                 auto idx = pick_opt_vline_checker_index(t, pal_span, x, y, settings.strength);
+                r.indices[y * w + x] = idx;
+                float dL = t.L - pal_span[idx].L;
+                float da = t.a - pal_span[idx].a;
+                float db = t.b - pal_span[idx].b;
+                r.total_error += color_space::fma_dist_sq(dL, da, db);
+            }
+        }
+        return r;
+    }
+    case Method::opt_rowdot:
+    case Method::opt_rowdot_aligned:
+    case Method::opt_rowdot_checker: {
+        auto w = image.width();
+        auto h = image.height();
+        DitherResult r;
+        r.indices.resize(w * h);
+        r.total_error = 0.0f;
+        for (std::size_t y = 0; y < h; ++y) {
+            for (std::size_t x = 0; x < w; ++x) {
+                auto t = color_space::linear_to_oklab(image[x, y]);
+                auto idx = pick_yliluoma_family_index(
+                    settings.method, t, pal_span, x, y, settings.strength);
                 r.indices[y * w + x] = idx;
                 float dL = t.L - pal_span[idx].L;
                 float da = t.a - pal_span[idx].a;
@@ -3945,6 +4108,12 @@ float ordered_threshold(Method method, std::size_t x, std::size_t y) {
         return line4_mat[y % 4][0];
     case Method::line8:
         return line8_mat[y % 8][0];
+    case Method::rowdot:
+        return rowdot_mat[y % 4][x % 2];
+    case Method::rowdot_aligned:
+        return rowdot_aligned_mat[y % 4][x % 2];
+    case Method::rowdot_checker:
+        return rowdot_checker_mat[y % 4][x % 2];
     case Method::halftone8x8:
         return halftone8x8_mat[y % 8][x % 8];
     case Method::diagonal8x8:
@@ -4178,6 +4347,9 @@ constexpr MethodNameRow kMethodNames[] = {
     {"line-checker", Method::line_checker},
     {"line4", Method::line4},
     {"line8", Method::line8},
+    {"rowdot", Method::rowdot},
+    {"rowdot-aligned", Method::rowdot_aligned},
+    {"rowdot-checker", Method::rowdot_checker},
     {"v4x2", Method::v4x2},
     {"bayer4x2", Method::bayer4x2},
     {"bayer2x4", Method::bayer2x4},
@@ -4216,6 +4388,9 @@ constexpr MethodNameRow kMethodNames[] = {
     {"opt-line-checker", Method::opt_line_checker},
     {"opt-vline", Method::opt_vline},
     {"opt-vline-checker", Method::opt_vline_checker},
+    {"opt-rowdot", Method::opt_rowdot},
+    {"opt-rowdot-aligned", Method::opt_rowdot_aligned},
+    {"opt-rowdot-checker", Method::opt_rowdot_checker},
     {"aseprite-old", Method::aseprite_old},
     {"libcaca3", Method::libcaca_3x3},
     {"libcaca6", Method::libcaca_6x6},
