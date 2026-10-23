@@ -801,6 +801,7 @@ static std::vector<bool> tile_crop_centre_mask(const std::vector<bool>& tiled,
 static Result<void> tile_crop_result(
     PipelineResult& r, std::size_t w, std::size_t h, std::size_t depth, bitplane::Layout layout) {
     r.indices = tile_crop_centre_indices(r.indices, w, h);
+    r.pixel_deviation = tile_crop_centre_indices(r.pixel_deviation, w, h);
     r.rendered = tile_crop_centre_image(r.rendered, w, h);
     if (!r.transparency_mask.empty())
         r.transparency_mask = tile_crop_centre_mask(r.transparency_mask, w, h);
@@ -1107,7 +1108,7 @@ Result<void> check_best_supported(const Options& options, amiga::Mode mode, bool
                                  "or change one of those options."}};
 }
 
-Result<PipelineResult> run_pipeline(const std::uint8_t* input_data,
+static Result<PipelineResult> run_pipeline_core(const std::uint8_t* input_data,
                                     std::size_t input_size,
                                     const Options& orig_options,
                                     // When set, bypass decode + scale +
@@ -5537,6 +5538,24 @@ Result<PipelineResult> run_pipeline(const std::uint8_t* input_data,
     return result;
 }
 
+Result<PipelineResult> run_pipeline(const std::uint8_t* input_data,
+                                    std::size_t input_size,
+                                    const Options& orig_options,
+                                    const Image* prepared_image = nullptr) {
+    auto result = run_pipeline_core(input_data, input_size, orig_options, prepared_image);
+    if (!result) return result;
+    if (amiga::is_amiga(result->mode)) {
+        auto chipset =
+            resolve_chipset(decompose_mode_options(orig_options).chipset, result->mode);
+        result->row_mismatch = pipeline::count_row_mismatch(result->pixel_deviation,
+                                                            result->rendered.width(),
+                                                            result->rendered.height(),
+                                                            chipset == amiga::Chipset::aga);
+    }
+    result->pixel_deviation = {};
+    return result;
+}
+
 namespace {  // reopen anon for the trailing helpers
 
 ConvertResult make_error(const std::string& msg) {
@@ -5631,6 +5650,7 @@ ConvertResult make_result(std::vector<std::uint8_t> data, const PipelineResult& 
             }
         }
     }
+    r.rowMismatch.assign(p.row_mismatch.begin(), p.row_mismatch.end());
     r.copperChanges = p.copper_changes;
     r.avgPaletteUsedPerLine = pipeline::compute_avg_palette_used_per_line(p.rendered,
                                                                           p.scanline_palettes);
@@ -6835,6 +6855,7 @@ void state_from_pipeline_result(EncodeStateOrError& out, pipeline::PipelineResul
     s.quant_error = p.quant_error;
     s.psnr = p.psnr;
     s.ssimulacra2_score = p.ssimulacra2_score;
+    s.row_mismatch = std::move(p.row_mismatch);
     s.raw_frame = std::move(p.raw_frame);
     s.c64_bg_color = p.c64_bg_color;
     s.c64_cols = p.c64_cols;

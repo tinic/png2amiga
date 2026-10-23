@@ -136,6 +136,16 @@ struct PipelineResult {
     // Reported as "S2" alongside PSNR in CLI / web UI.
     float ssimulacra2_score{};
 
+    // Per-pixel max |rendered - source| over R/G/B in sRGB bytes, filled by
+    // finalize_psnr (0 for transparent pixels). run_pipeline folds it into
+    // row_mismatch and clears it.
+    std::vector<std::uint8_t> pixel_deviation;
+    // Amiga modes only: per scanline, the number of pixels that differ from
+    // the source snapped to the chipset's colour precision (OCS 4 bits,
+    // AGA 8 bits per channel). All zero = the row converted 1:1. Empty for
+    // other platforms.
+    std::vector<std::uint32_t> row_mismatch;
+
     // Mode-specific raw hardware bytes — used by DOS modes that don't flow
     // through the bitplane encoder (chunky VGA indices, CGA-banked planar
     // frame, composite pair-packed frame, text-mode char+attr pairs).
@@ -181,6 +191,19 @@ struct PipelineResult {
     // preview. Replaces the same 4 lines repeated at every mode branch.
     void finalize_psnr(const Image& src, float total_error);
 };
+
+// Per-pixel max |src - rendered| over R/G/B in sRGB bytes; 0 where the
+// transparency mask is set. Empty when the images differ in size.
+std::vector<std::uint8_t> compute_pixel_deviation(const Image& src,
+                                                  const Image& rendered,
+                                                  const std::vector<bool>& transparency_mask);
+
+// Per-row count of pixels whose deviation exceeds the chipset's colour
+// precision (see PipelineResult::row_mismatch). Empty on a size mismatch.
+std::vector<std::uint32_t> count_row_mismatch(std::span<const std::uint8_t> pixel_deviation,
+                                              std::size_t width,
+                                              std::size_t height,
+                                              bool aga);
 
 // Average # of distinct palette indices a row's pixels reference, over
 // all rows that have a non-empty per-line palette. Pixels are matched

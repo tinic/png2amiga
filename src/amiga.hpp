@@ -498,6 +498,11 @@ constexpr std::size_t default_width(Mode mode) noexcept {
     return get_mode_params(mode).screen_width;
 }
 
+// Amiga bitplane modes (lores/hires/HAM/EHB); the enum lists them first.
+constexpr bool is_amiga(Mode mode) noexcept {
+    return mode <= Mode::ehb;
+}
+
 // Check if a mode is any HAM variant
 constexpr bool is_ham(Mode mode) noexcept {
     return get_mode_params(mode).is_ham;

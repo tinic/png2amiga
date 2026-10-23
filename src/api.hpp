@@ -458,6 +458,11 @@ struct ConvertResult {
     std::vector<std::uint8_t> scanlinePaletteBytes;
     int scanlinePaletteSize{};
 
+    // Amiga modes: per scanline, the number of pixels that differ from the
+    // source at the chipset's colour precision (0 = the row is 1:1). Empty
+    // for other platforms.
+    std::vector<std::uint32_t> rowMismatch;
+
     // Per-pixel palette index map for non-HAM, non-sliced/strips modes.
     // Layout: width × height bytes, idx = pixel's slot in paletteBytes.
     // Empty when the encoder doesn't emit a single 1:1 index grid
@@ -654,6 +659,7 @@ struct EncodeState {
     float quant_error{};
     float psnr{};
     float ssimulacra2_score{};
+    std::vector<std::uint32_t> row_mismatch;  // see PipelineResult::row_mismatch
 
     // Raw byte stream for chunky modes (VGA 13h, SNES Mode 7). Empty for
     // bitplane modes (use `planes` instead). For SNES 256 it's the 8bpp

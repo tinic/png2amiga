@@ -112,6 +112,14 @@ const smsTilesCanvasRef = useTemplateRef<HTMLCanvasElement>('smsTilesCanvasRef')
 // preview: backing is N×H pixels (one column per slot, one row per
 // scanline) and CSS-scaled to align with the preview canvas vertically.
 const scanlinePaletteCanvasRef = useTemplateRef<HTMLCanvasElement>('scanlinePaletteCanvasRef')
+const rowMarkCanvasRef = useTemplateRef<HTMLCanvasElement>('rowMarkCanvasRef')
+// Advanced → "Mark rows that are not 1:1": red ticks right of the preview on
+// every scanline whose pixels differ from the source at the chipset's colour
+// precision. Display-only, so toggling it repaints without re-encoding.
+const markRows = ref(false)
+const lastRowMismatch = ref<Uint32Array | null>(null)
+const lastRowMarkCssH = ref(0)
+const rowMismatchCount = computed(() => lastRowMismatch.value?.filter(n => n > 0).length ?? 0)
 const hasScanlinePalette = ref(false)
 const crtEnabled = ref(false)
 
@@ -391,6 +399,28 @@ function paintScanlinePaletteStrip(result: ConvertResult, cssH: number) {
   fillRgbaFromRgb(img.data, bytes, rows * n)
   ctx.putImageData(img, 0, 0)
 }
+
+function paintRowMarks() {
+  const canvas = rowMarkCanvasRef.value
+  const rows = lastRowMismatch.value
+  if (!canvas || !rows?.length) return
+  canvas.width = 1
+  canvas.height = rows.length
+  canvas.style.height = `${lastRowMarkCssH.value}px`
+  const ctx = canvas.getContext('2d')
+  if (!ctx) return
+  const img = ctx.createImageData(1, rows.length)
+  for (const [y, n] of rows.entries()) {
+    if (n > 0) img.data.set([255, 40, 40, 255], y * 4)
+  }
+  ctx.putImageData(img, 0, 0)
+}
+function updateRowMarks(result: ConvertResult, cssH: number) {
+  lastRowMismatch.value = result.rowMismatch ?? null
+  lastRowMarkCssH.value = cssH
+  if (markRows.value) paintRowMarks()
+}
+watch(markRows, on => { if (on) void nextTick(paintRowMarks) })
 
 // Custom floating tooltip that tracks the cursor while it's over a
 // palette swatch. Native `title=` would only fire after a long pause,
@@ -2034,6 +2064,7 @@ async function paintAndCacheResult(result: ConvertResult): Promise<boolean> {
   paintSmsTilesCanvas(result)
   paintSnesTilesCanvas(result)
   paintScanlinePaletteStrip(result, cssH)
+  updateRowMarks(result, cssH)
   return true
 }
 
@@ -3148,6 +3179,14 @@ async function loadExample(example: typeof EXAMPLES[number]) {
                 </div>
               </div>
 
+              <!-- Mark rows that are not 1:1 -->
+              <div v-if="isAmigaMode(options.mode)" class="pt-3 mt-3 border-top-1 surface-border">
+                <div class="flex align-items-center gap-2">
+                  <input type="checkbox" v-model="markRows" id="markRows" />
+                  <label for="markRows" class="text-xs text-color-secondary" title="Draw a red mark right of the preview on every scanline whose pixels differ from the source at the chipset's colour precision (OCS 12-bit, AGA 24-bit). Meant for hardware-ready pixel art: turn off Resize and use no dither or an error-diffusion dither.">Mark rows that are not 1:1</label>
+                </div>
+              </div>
+
               <!-- Reserve palette: 16xN grid; click to reserve/unreserve
                    individual slots. Reserved slots are removed from the
                    dither candidate set — the encoder never routes image
@@ -3283,6 +3322,9 @@ async function loadExample(example: typeof EXAMPLES[number]) {
                 </div>
               </div>
               </div>
+              <canvas v-show="markRows && lastRowMismatch" ref="rowMarkCanvasRef"
+                      class="row-mark-strip"
+                      title="Red: this scanline is not 1:1 with the source at the chipset's colour precision." />
             </div>
             <button class="loupe-btn" :class="{ active: loupeActive }" @click.stop="loupeToggle" title="Toggle 4x zoom">
               <i class="pi pi-search"></i>
@@ -3304,6 +3346,10 @@ async function loadExample(example: typeof EXAMPLES[number]) {
           <div class="flex justify-content-between align-items-center px-1">
             <span class="text-xs text-color-secondary">{{ resultInfo }}</span>
             <div class="flex align-items-center gap-2">
+              <span v-if="markRows && lastRowMismatch" class="text-xs"
+                    :class="rowMismatchCount ? 'text-red-400' : 'text-green-400'">
+                {{ rowMismatchCount ? `${rowMismatchCount} of ${lastRowMismatch.length} rows not 1:1` : 'all rows 1:1' }}
+              </span>
               <span v-if="errorMsg" class="text-xs text-red-400">{{ errorMsg }}</span>
             </div>
           </div>
@@ -3739,6 +3785,14 @@ async function loadExample(example: typeof EXAMPLES[number]) {
   background-color: #c0c0c0;
 }
 
+.row-mark-strip {
+  display: block;
+  width: 6px;
+  margin-left: 4px;
+  image-rendering: pixelated;
+  image-rendering: crisp-edges;
+  flex: 0 0 auto;
+}
 .scanline-palette-strip {
   display: block;
   image-rendering: pixelated;

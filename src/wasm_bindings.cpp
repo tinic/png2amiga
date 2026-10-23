@@ -272,6 +272,14 @@ val js_convert_rgba(val input_array, val js_opts) {
     if (!result.indices.empty()) {
         obj.set("indices", make_uint8_array(result.indices));
     }
+    // Per-scanline count of pixels that are not 1:1 with the source (Amiga).
+    if (!result.rowMismatch.empty()) {
+        val arr = val::global("Uint32Array").new_(result.rowMismatch.size());
+        arr.call<void>("set",
+                       val(typed_memory_view(result.rowMismatch.size(),
+                                             result.rowMismatch.data())));
+        obj.set("rowMismatch", arr);
+    }
     obj.set("error", result.error);
 
     if (!result.data.empty()) obj.set("rgba", make_uint8_array(result.data));
