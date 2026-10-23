@@ -518,6 +518,17 @@ change) and 3 on AGA (4 MOVEs per change worst-case under banked LOCT).
 Auto-mode tries K+3, K+2, K+1 and picks the highest K whose worst-case
 cost fits the budget — typically 6 swaps/line at depths 3–5 on AGA.
 
+Hardware-ready pixel art (colour splits drawn in the paint program) is
+planned exactly: when each row's colours fit the palette at chipset
+precision, the planner loads exactly those colours, preloading upcoming
+colours into idle slots when a row needs more changes than the line
+budget allows. Rows that cannot fit keep the nearest colours. This
+applies to lores and hires with the planner's own palette; EHB, a
+`--palette` file and `--sliced-vertical-dither` use the error-minimising
+planner. `--report-rows` lists the scanlines that are not 1:1 with the
+source; the web tool marks them in red (Advanced → "Mark rows that are
+not 1:1").
+
 `--slice-changes N` overrides the budget; use if you want to experiment
 with configurations that may exceed real hardware limits but still
 display correctly on emulators.
@@ -864,6 +875,8 @@ Modes:
     C64:    c64-multicolor | c64-hires | c64-fli | c64-afli |
             c64-petscii | c64-charset-hires | c64-charset-multicolor
     GBA:    gba-mode3 | gba-mode4 | gba-mode5
+    ZX/Atari: zx-spectrum | stf-spectrum512 | ste-spectrum4096
+    MSX: msx1-screen2 | msx2-screen5 | msx2-screen6 | msx2-screen7 | msx2-screen8
     Thomson: thomson-to7-320x16 | thomson-to8-320x16 |
             thomson-to8-160x16 | thomson-to8-320x4 | thomson-to8-640x2
     TED:    ted-hires | ted-multicolor
@@ -980,6 +993,7 @@ Platform-specific:
   --tile-reserve <N>              Reserve N tile slots from the budget
   --cga-palette <p>               p0-low | p0-high | p1-low | p1-high
   --cga-bg <0..15>                CGA background color
+  --cell-refine                  Refine supported cell modes across boundaries (slower)
   --cga-text-metric <m>           blur (default) | mse
   --cga-text-kernel <k>           Blur kernel: auto | binomial | aniso53 |
                                   aniso73 | aniso35 | aniso37 | wide55 | wide77
@@ -1014,6 +1028,7 @@ Output:
       .idx                          Raw chunky indices (1 byte/pixel, scan order);
                                     also via --output-indexed / --output-each .idx
       .pi1 / .pi2 / .pi3            Atari Degas (STF/STE low / med / hi)
+      .k7                           TO7/70 tape picture viewer (LOADM"",,R)
       .prg                          C64 PRG (autostart)
       .koa                          C64 Koala paint
       .hir                          C64 hires bitmap
@@ -1029,6 +1044,8 @@ Build integration:
   --depfile <path>                Write a Make-format depfile
   --list-modes                    Print supported modes and exit
   --list-dithers                  Print supported dither methods and exit
+  --report-rows                   List scanlines that are not 1:1 with the
+                                  source (Amiga modes)
   --profile <N>                   Run encode N times for sampling profilers
   --score-vs <ref>                Score input against reference (no encoding).
                                   Input may be a .png OR a .idx (raw chunky
@@ -1037,6 +1054,7 @@ Build integration:
 
 Exit codes (sysexits.h):
   0 ok    1 internal    64 usage    66 no input    73 cannot create
+
 ```
 
 ## License

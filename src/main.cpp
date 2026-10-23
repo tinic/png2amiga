@@ -634,6 +634,39 @@ void cli_print_encoded(int depth,
     }
 }
 
+// --report-rows: scanlines whose pixels differ from the source at the
+// chipset's colour precision, printed as ranges ("12, 40-52").
+void cli_print_row_mismatch(const std::vector<std::uint32_t>& rows) {
+    if (rows.empty()) return;
+    std::string list;
+    std::size_t bad = 0;
+    for (std::size_t y = 0; y < rows.size(); ++y) {
+        if (!rows[y]) continue;
+        auto end = y;
+        while (end + 1 < rows.size() && rows[end + 1]) ++end;
+        bad += end - y + 1;
+        if (!list.empty()) list += ", ";
+        list += end == y ? std::format("{}", y) : std::format("{}-{}", y, end);
+        y = end;
+    }
+    if (!bad) {
+        cli_status("Rows:     all {} rows 1:1", rows.size());
+        return;
+    }
+    cli_status("Rows:     {} of {} rows not 1:1: {}", bad, rows.size(), list);
+}
+
+void cli_print_row_mismatch(const Image& src,
+                            const Image& rendered,
+                            const std::vector<bool>& tmask,
+                            bool aga) {
+    cli_print_row_mismatch(
+        pipeline::count_row_mismatch(pipeline::compute_pixel_deviation(src, rendered, tmask),
+                                     rendered.width(),
+                                     rendered.height(),
+                                     aga));
+}
+
 // Emit a Make-format depfile so CMake's add_custom_command(... DEPFILE)
 // triggers a rebuild when --palette / external inputs change. Format:
 //   <output>: <input1> <input2> ...
@@ -886,6 +919,7 @@ struct Config {
     std::string input_path;
     std::string output_path;    // .png for preview, .iff for ILBM, .h for C header
     bool quiet = false;         // suppress all stdout status (errors → stderr)
+    bool report_rows = false;   // list scanlines that are not 1:1 with the source
     bool json = false;          // emit JSON status object instead of human text
     int profile_repeats = 1;    // run main encoding loop N times for profilers (--profile N)
     std::string depfile;        // Make-format depfile path (empty = disabled)
@@ -1364,6 +1398,8 @@ void print_usage() {
         "  --depfile <path>                Write a Make-format depfile\n"
         "  --list-modes                    Print supported modes and exit\n"
         "  --list-dithers                  Print supported dither methods and exit\n"
+        "  --report-rows                   List scanlines that are not 1:1 with the\n"
+        "                                  source (Amiga modes)\n"
         "  --profile <N>                   Run encode N times for sampling profilers\n"
         "  --score-vs <ref>                Score input against reference (no encoding).\n"
         "                                  Input may be a .png OR a .idx (raw chunky\n"
@@ -1562,6 +1598,11 @@ Result<Config> parse_args(int argc, char* argv[]) {
 
         if (arg == "--quiet" || arg == "-q") {
             config.quiet = true;
+            continue;
+        }
+
+        if (arg == "--report-rows") {
+            config.report_rows = true;
             continue;
         }
 
@@ -8716,6 +8757,7 @@ int run_main(int argc, char* argv[]) {
                               st.psnr,
                               st.ssimulacra2_score);
         }
+        if (config->report_rows) cli_print_row_mismatch(st.row_mismatch);
 
         // HAM: dump the (resolved) base palette only after encode finishes
         // — cli_print_palette above prints the base-color count BEFORE
@@ -8936,6 +8978,9 @@ int run_main(int argc, char* argv[]) {
                               static_cast<double>(total_error),
                               ehb_psnr,
                               ehb_s2);
+            if (config->report_rows)
+                cli_print_row_mismatch(
+                    *image, rendered, transparency_mask, chipset == amiga::Chipset::aga);
 
             if (config->preview)
                 show_terminal_preview(rendered,
@@ -9079,6 +9124,7 @@ int run_main(int argc, char* argv[]) {
                           static_cast<double>(st.quant_error),
                           st.psnr,
                           st.ssimulacra2_score);
+        if (config->report_rows) cli_print_row_mismatch(st.row_mismatch);
 
         // EHB only writes the 32 base entries per frame; halve is hw.
         if (!fade_sequence.empty()) {
@@ -9590,6 +9636,9 @@ int run_main(int argc, char* argv[]) {
                           static_cast<double>(copper_result->total_error),
                           cop_psnr,
                           cop_s2);
+        if (config->report_rows)
+            cli_print_row_mismatch(
+                *image, *preview, transparency_mask, chipset == amiga::Chipset::aga);
 
         if (config->preview)
             show_terminal_preview(*preview,
@@ -9764,6 +9813,7 @@ int run_main(int argc, char* argv[]) {
                           static_cast<double>(st.quant_error),
                           st.psnr,
                           st.ssimulacra2_score);
+        if (config->report_rows) cli_print_row_mismatch(st.row_mismatch);
 
         if (config->preview)
             show_terminal_preview(st.rendered,
@@ -10755,6 +10805,9 @@ int run_main(int argc, char* argv[]) {
                       static_cast<double>(dither_result.total_error),
                       std_psnr,
                       std_s2);
+    if (config->report_rows)
+        cli_print_row_mismatch(
+            *image, *preview, transparency_mask, chipset == amiga::Chipset::aga);
 
     // --fade-to: joint k-means clusters (source ⊕ targets) and replaces
     // the bitmap's indices / palette / planes / rendered preview with
