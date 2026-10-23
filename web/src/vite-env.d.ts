@@ -86,6 +86,10 @@ declare module '@wasm/png2amiga.js' {
     // Amiga modes: per scanline, the number of pixels that differ from the
     // source at the chipset's colour precision (0 = the row is 1:1).
     rowMismatch?: Uint32Array
+    // Sliced depth zones: zone i starts at zoneRows[i] with zoneDepths[i]
+    // planes. Missing without zones.
+    zoneRows?: number[]
+    zoneDepths?: number[]
     // Per-pixel palette index map (non-HAM modes that emit a 1:1 index
     // grid). Used by the web swatch's hover-isolate feature so two
     // palette slots with the same rendered RGB (e.g. EHB slot 0
@@ -162,6 +166,7 @@ declare module '@wasm/png2amiga.js' {
     slicedVerticalDither?: boolean
     dualPlayfield?: boolean
     scap?: boolean
+    depthAuto?: boolean
     scapDebug?: boolean
     lockColor0?: boolean
     // Per-slot palette reserves. Each entry removes the slot from the

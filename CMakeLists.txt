@@ -3118,6 +3118,12 @@ sys.exit(0 if ok else 1)")
                 --case ${_case})
     endforeach()
 
+    # Exact sliced planner and depth zones (--depth auto --sliced,
+    # --output-zones) on generated OCS-exact pixel art.
+    add_test(NAME "sliced-exact-depth-zones"
+        COMMAND ${Python3_EXECUTABLE} ${CMAKE_SOURCE_DIR}/tools/check_depth_zones.py
+            --cli $<TARGET_FILE:png2amiga>)
+
 endif() # NOT EMSCRIPTEN
 
 # Mac-only convenience target: clang-tidy + cppcheck over src/ via tools/lint.sh.

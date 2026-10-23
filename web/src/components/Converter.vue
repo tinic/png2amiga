@@ -120,6 +120,17 @@ const markRows = ref(false)
 const lastRowMismatch = ref<Uint32Array | null>(null)
 const lastRowMarkCssH = ref(0)
 const rowMismatchCount = computed(() => lastRowMismatch.value?.filter(n => n > 0).length ?? 0)
+// Sliced depth zones of the last result, drawn as alternating grey bands in
+// the same strip (red row marks go on top).
+const lastZones = ref<{ start: number; end: number; depth: number }[]>([])
+const zonesText = computed(() =>
+  lastZones.value.map(z => `${z.start}-${z.end - 1}: ${z.depth}bpl`).join(', '))
+const rowStripTitle = computed(() => [
+  zonesText.value ? `Depth zones (grey bands): ${zonesText.value}.` : '',
+  markRows.value ? "Red: this scanline is not 1:1 with the source at the chipset's colour precision." : '',
+].filter(Boolean).join(' '))
+const rowStripVisible = computed(() =>
+  lastZones.value.length > 0 || (markRows.value && lastRowMismatch.value !== null))
 const hasScanlinePalette = ref(false)
 const crtEnabled = ref(false)
 
@@ -400,27 +411,47 @@ function paintScanlinePaletteStrip(result: ConvertResult, cssH: number) {
   ctx.putImageData(img, 0, 0)
 }
 
+function paintZoneBands(data: Uint8ClampedArray) {
+  for (const [i, z] of lastZones.value.entries()) {
+    const shade = i % 2 ? 150 : 90
+    for (let y = z.start; y < z.end; ++y) data.set([shade, shade, shade, 255], y * 4)
+  }
+}
+function paintMismatchedRows(data: Uint8ClampedArray, rows: Uint32Array) {
+  for (const [y, n] of rows.entries()) {
+    if (n > 0) data.set([255, 40, 40, 255], y * 4)
+  }
+}
+// Rows the strip covers: the result height, from either source.
+const rowStripHeight = computed(() =>
+  lastRowMismatch.value?.length ?? lastZones.value.at(-1)?.end ?? 0)
 function paintRowMarks() {
   const canvas = rowMarkCanvasRef.value
   const rows = lastRowMismatch.value
-  if (!canvas || !rows?.length) return
+  const height = rowStripHeight.value
+  const ctx = canvas?.getContext('2d')
+  if (!canvas || !ctx || !height) return
   canvas.width = 1
-  canvas.height = rows.length
+  canvas.height = height
   canvas.style.height = `${lastRowMarkCssH.value}px`
-  const ctx = canvas.getContext('2d')
-  if (!ctx) return
-  const img = ctx.createImageData(1, rows.length)
-  for (const [y, n] of rows.entries()) {
-    if (n > 0) img.data.set([255, 40, 40, 255], y * 4)
-  }
+  const img = ctx.createImageData(1, height)
+  paintZoneBands(img.data)
+  if (markRows.value) paintMismatchedRows(img.data, rows ?? new Uint32Array())
   ctx.putImageData(img, 0, 0)
 }
 function updateRowMarks(result: ConvertResult, cssH: number) {
   lastRowMismatch.value = result.rowMismatch ?? null
   lastRowMarkCssH.value = cssH
-  if (markRows.value) paintRowMarks()
+  const starts = result.zoneRows ?? []
+  const depths = result.zoneDepths ?? []
+  lastZones.value = starts.map((start, i) => ({
+    start,
+    end: starts[i + 1] ?? result.height,
+    depth: depths[i] ?? 0,
+  }))
+  if (rowStripVisible.value) void nextTick(paintRowMarks)
 }
-watch(markRows, on => { if (on) void nextTick(paintRowMarks) })
+watch(markRows, () => { void nextTick(paintRowMarks) })
 
 // Custom floating tooltip that tracks the cursor while it's over a
 // palette swatch. Native `title=` would only fire after a long pause,
@@ -944,7 +975,17 @@ const PLAIN_INDEXED_MODES = new Set([
 const FORMECOULEUR_MODES = new Set([
   'thomson-to7-320x16', 'thomson-to8-320x16',
 ])
-const bestEligible = computed(() => {
+// Depth "Auto" (lores/hires): fewest planes that keep the image 1:1, per
+// horizontal zone with Sliced. Zones are progressive only and plan exactly,
+// so Best has nothing to search there.
+const depthAutoAvailable = computed(() =>
+  ['lores', 'hires', 'lores-lace', 'hires-lace'].includes(options.mode) &&
+  !options.dualPlayfield && !options.scap && !(options.copper && isInterlaceMode(options.mode)))
+const depthAutoActive = computed(() => options.depthAuto && depthAutoAvailable.value)
+const depthZonesActive = computed(() => depthAutoActive.value && options.copper)
+
+const bestEligible = computed(() => !depthZonesActive.value && bestEligibleForMode())
+function bestEligibleForMode(): boolean {
   const m = options.mode
   if (options.copper || options.scap) return true
   const t = hamType(m)
@@ -953,7 +994,7 @@ const bestEligible = computed(() => {
   if (isEhbMode(m)) return true
   if (FORMECOULEUR_MODES.has(m)) return true
   return PLAIN_INDEXED_MODES.has(m)
-})
+}
 
 // Available modes for current chipset
 const availableModes = computed(() => modesForChipset(options.chipset))
@@ -1260,6 +1301,7 @@ function buildWasmOptions(): WasmOptions {
     dither: requiresCellRefineDiffusion(options) && !isErrorDiffusion(options.dither)
       ? 'floyd-steinberg' : options.dither,
     alphaDither: alphaDither === 'none' ? '' : alphaDither,
+    depthAuto: depthAutoActive.value,
     reserves: cleanReserves.map(r => ({
       index: r.index, r: r.r, g: r.g, b: r.b,
     })),
@@ -2702,13 +2744,12 @@ async function loadExample(example: typeof EXAMPLES[number]) {
               <div v-if="showDepthSlider" class="grid align-items-center">
                 <label class="col-4 text-xs text-color-secondary font-semibold" title="Number of bitplanes (1-8). More planes = more colors but more chip RAM.">Depth<i v-if="paletteMismatchDepth" class="pi pi-exclamation-triangle ml-1" style="color:#f59e0b;font-size:0.7rem" :title="paletteMismatchDepth" /></label>
                 <div class="col-5">
-                  <Slider v-model="options.depth" :min="1" :max="depthMax || 6" :step="1" class="w-full" />
+                  <Slider v-model="options.depth" :min="1" :max="depthMax || 6" :step="1" class="w-full" :disabled="depthAutoActive" />
                 </div>
                 <div class="col-3">
-                  <InputNumber v-model="options.depth" :min="1" :max="depthMax || 6" :step="1" class="w-full input-sm" />
+                  <InputNumber v-model="options.depth" :min="1" :max="depthMax || 6" :step="1" class="w-full input-sm" :disabled="depthAutoActive" />
                 </div>
               </div>
-
               <!-- CGA text mode only: per-cell error metric. When blur is
                    selected the dither selector below is hidden, since blur
                    needs the continuous source. -->
@@ -3187,6 +3228,15 @@ async function loadExample(example: typeof EXAMPLES[number]) {
                 </div>
               </div>
 
+              <!-- Automatic depth: fewest planes for 1:1, zoned with Sliced -->
+              <div v-if="showDepthSlider && depthAutoAvailable" class="pt-3 mt-3 border-top-1 surface-border">
+                <div class="flex align-items-center gap-2">
+                  <input id="depthAuto" v-model="options.depthAuto" type="checkbox" />
+                  <label for="depthAuto" class="text-xs text-color-secondary"
+                    title="Use the fewest bitplanes that keep the image 1:1 at the chipset's colour precision; the Depth slider is ignored. With Sliced, the depth changes per horizontal zone: the copper switches BPLCON0 and the modulos at each zone boundary, and the viewer, .h and IFF exports carry the zones.">{{ options.copper ? 'Depth zones (fewest bitplanes per zone)' : 'Fewest bitplanes for 1:1' }}</label>
+                </div>
+              </div>
+
               <!-- Reserve palette: 16xN grid; click to reserve/unreserve
                    individual slots. Reserved slots are removed from the
                    dither candidate set — the encoder never routes image
@@ -3322,9 +3372,9 @@ async function loadExample(example: typeof EXAMPLES[number]) {
                 </div>
               </div>
               </div>
-              <canvas v-show="markRows && lastRowMismatch" ref="rowMarkCanvasRef"
+              <canvas v-show="rowStripVisible" ref="rowMarkCanvasRef"
                       class="row-mark-strip"
-                      title="Red: this scanline is not 1:1 with the source at the chipset's colour precision." />
+                      :title="rowStripTitle" />
             </div>
             <button class="loupe-btn" :class="{ active: loupeActive }" @click.stop="loupeToggle" title="Toggle 4x zoom">
               <i class="pi pi-search"></i>
@@ -3346,6 +3396,7 @@ async function loadExample(example: typeof EXAMPLES[number]) {
           <div class="flex justify-content-between align-items-center px-1">
             <span class="text-xs text-color-secondary">{{ resultInfo }}</span>
             <div class="flex align-items-center gap-2">
+              <span v-if="zonesText" class="text-xs text-color-secondary">zones {{ zonesText }}</span>
               <span v-if="markRows && lastRowMismatch" class="text-xs"
                     :class="rowMismatchCount ? 'text-red-400' : 'text-green-400'">
                 {{ rowMismatchCount ? `${rowMismatchCount} of ${lastRowMismatch.length} rows not 1:1` : 'all rows 1:1' }}

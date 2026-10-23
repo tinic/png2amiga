@@ -56,6 +56,7 @@
 #include <string>
 #include <string_view>
 #include <random>
+#include <ranges>
 #include <thread>
 #ifndef _WIN32
 #include <termios.h>
@@ -953,6 +954,10 @@ struct Config {
     bool interlace = false;  // LACE bit in CAMG
     std::size_t depth = 5;
     bool depth_explicit = false;  // true if user passed --depth on the CLI
+    // --depth auto: fewest planes that keep the image 1:1; with --sliced the
+    // depth may change down the frame (depth zones). --zones sets the zones.
+    bool depth_auto = false;
+    std::vector<copper::DepthZone> zones;
 
     // Benchmark/comparison mode: emit indexed PNG-8 (no Amiga encoding) so
     // we can compare our quantizer head-to-head against pngquant et al.
@@ -1185,6 +1190,7 @@ struct Config {
     bool print_palette = false;       // dump CMAP as idx=#rrggbb to stderr
     bool print_palette_json = false;  // dump CMAP as one-line JSON to stdout
     std::string output_indexed_path;  // --output-indexed <file>: raw chunky bytes
+    std::string output_zones;         // --output-zones <prefix>: per-zone .png + .iff
     // --transparent-color RRGGBB (repeatable): treat matching pixels as alpha=0
     std::vector<std::array<std::uint8_t, 3>> transparent_colors;
     bool preview = false;             // show terminal image preview (iTerm2)
@@ -1237,7 +1243,11 @@ void print_usage() {
         "    Sega:   sms-mode4 | gg-mode4\n"
         "    CPC:    cpc-mode0 | cpc-mode1 | cpc-mode2 |\n"
         "            cpc-plus-mode0 | cpc-plus-mode1 | cpc-plus-mode2\n"
-        "  --depth <1-8>                   Bitplane depth (default: 5)\n"
+        "  --depth <1-8|auto>              Bitplane depth (default: 5); auto = fewest\n"
+        "                                  planes that keep the image 1:1, with\n"
+        "                                  --sliced per horizontal zone\n"
+        "  --zones <row:depth,...>         Depth zones for --sliced (lores/hires),\n"
+        "                                  e.g. 0:3,64:5,180:2\n"
         "  --chipset ocs|aga               Amiga chipset (default: auto)\n"
         "  --dual-playfield, --dpf         Encode into PF2 (depth 3 OCS / 4 AGA)\n"
         "  --width <int>                   Override output width\n"
@@ -1366,6 +1376,8 @@ void print_usage() {
         "  --interleaved                   Alias for --layout interleaved\n"
         "  --output-indexed <file>         Raw chunky indices: 1 byte/pixel,\n"
         "                                  scan order, no header (post-pin)\n"
+        "  --output-zones <prefix>         Depth zones: <prefix>_zoneN.png and .iff\n"
+        "                                  per zone (its rows, planes and palettes)\n"
         "  --preview                       Inline preview (iTerm2, kitty, sixel)\n"
         "  --preview-scale <1-8>           Preview display scale\n"
         "  --preview-video                 Batch only: loop frames inline\n"
@@ -1455,6 +1467,10 @@ Result<Config> parse_args(int argc, char* argv[]) {
         }
         if (arg == "--output-indexed" && i + 1 < argc) {
             config.output_indexed_path = argv[++i];
+            continue;
+        }
+        if (arg == "--output-zones" && i + 1 < argc) {
+            config.output_zones = argv[++i];
             continue;
         }
         if ((arg == "--transparent-color" || arg == "--tc") && i + 1 < argc) {
@@ -2237,6 +2253,27 @@ Result<Config> parse_args(int argc, char* argv[]) {
                 if (!dos_mode) config.hires = config.hires || mp.is_hires;
             } else if (arg == "--score-vs") {
                 config.score_vs = std::string(val);
+            } else if (arg == "--depth" && val == "auto") {
+                config.depth_auto = true;
+                config.depth_explicit = true;
+            } else if (arg == "--zones") {
+                config.zones.clear();
+                for (auto part : std::views::split(val, ',')) {
+                    std::string item(part.begin(), part.end());
+                    auto colon = item.find(':');
+                    int row = colon == std::string::npos ? -1 : std::atoi(item.c_str());
+                    int d = colon == std::string::npos ? 0 : std::atoi(item.c_str() + colon + 1);
+                    bool ascending = config.zones.empty() ? row == 0
+                                                          : row > static_cast<int>(
+                                                                      config.zones.back().start_row);
+                    if (row < 0 || d < 1 || d > 8 || !ascending) {
+                        return std::unexpected{Error{
+                            ErrorCode::invalid_depth,
+                            "--zones takes row:depth pairs from row 0 down, e.g. 0:3,64:5"}};
+                    }
+                    config.zones.push_back(
+                        {static_cast<std::size_t>(row), static_cast<std::size_t>(d)});
+                }
             } else if (arg == "--depth") {
                 int d = std::atoi(std::string(val).c_str());
                 if (d < 1 || d > 8) {
@@ -4048,6 +4085,7 @@ struct AmigaOutputBundle {
     const std::vector<std::vector<Color3f>>* scanline_palettes = nullptr;
     const std::vector<std::vector<strips::ScapMove>>* strips_line_moves = nullptr;
     std::size_t changes_per_line = 0;
+    const std::vector<copper::DepthZone>* zones = nullptr;  // sliced depth zones
     std::string strips_label;
     int strips_anchor_hpos = 0;
     int strips_total_planes = 0;
@@ -4076,6 +4114,63 @@ struct AmigaOutputBundle {
     std::string mask_layout;
     bool mask_invert = false;
 };
+
+// --output-zones: each depth zone as <prefix>_zoneN.png (its rows of the
+// preview) and <prefix>_zoneN.iff (its rows with only its planes, the
+// palette at its first row, and a PCHG of its per-line palettes).
+int write_zone_outputs(const std::string& prefix,
+                       const copper::CopperResult& cr,
+                       const Image& preview,
+                       amiga::Mode mode,
+                       bool hires) {
+    const auto& planes = cr.planes;
+    for (std::size_t z = 0; z < cr.zones.size(); ++z) {
+        const auto start = cr.zones[z].start_row;
+        const auto end = z + 1 < cr.zones.size() ? cr.zones[z + 1].start_row : planes.height;
+        const auto depth = cr.zones[z].depth;
+        const auto colors = std::size_t{1} << depth;
+        const auto rows = end - start;
+
+        bitplane::BitplaneData zp;
+        zp.width = planes.width;
+        zp.height = rows;
+        zp.depth = depth;
+        zp.bytes_per_row = planes.bytes_per_row;
+        zp.layout = bitplane::Layout::interleaved;
+        zp.data.resize(zp.total_bytes());
+        for (std::size_t y = 0; y < rows; ++y)
+            for (std::size_t p = 0; p < depth; ++p)
+                std::copy_n(planes.data.begin() +
+                                static_cast<std::ptrdiff_t>(planes.plane_row_offset(p, start + y)),
+                            planes.bytes_per_row,
+                            zp.data.begin() + static_cast<std::ptrdiff_t>(zp.plane_row_offset(p, y)));
+        std::vector<std::vector<Color3f>> pals;
+        for (auto y = start; y < end; ++y) {
+            const auto& row = cr.scanline_palettes[y];
+            pals.emplace_back(row.begin(),
+                              row.begin() + static_cast<std::ptrdiff_t>(std::min(colors, row.size())));
+        }
+        Image crop(preview.width(), rows);
+        for (std::size_t y = 0; y < rows; ++y)
+            for (std::size_t x = 0; x < preview.width(); ++x)
+                crop[x, y] = preview[x, start + y];
+
+        auto stem = std::format("{}_zone{}", prefix, z);
+        if (auto r = png_io::save(stem + ".png", crop); !r) {
+            std::println(stderr, "Zone PNG write error: {}", r.error().message);
+            return exit_code::cant_create;
+        }
+        iff::IffOptions iff_opts;
+        iff_opts.hires = hires;
+        iff_opts.scanline_palettes = &pals;
+        if (auto r = iff::save_ilbm(stem + ".iff", zp, pals.front(), mode, iff_opts); !r) {
+            std::println(stderr, "Zone IFF write error: {}", r.error().message);
+            return exit_code::cant_create;
+        }
+        cli_status("Zone {}:   {}.png / .iff (rows {}-{}, {} planes)", z, stem, start, end - 1, depth);
+    }
+    return 0;
+}
 
 // Returns 0 on success, exit_code::* on failure (cant_create / usage).
 int write_amiga_output(AmigaOutputBundle& out) {
@@ -4119,6 +4214,7 @@ int write_amiga_output(AmigaOutputBundle& out) {
             ch.copper_changes_per_line = out.changes_per_line;
             if (out.scanline_palettes && !out.scanline_palettes->empty())
                 ch.copper_scanline_palettes = out.scanline_palettes;
+            if (out.zones) ch.depth_zones = *out.zones;
         }
         if (out.strips_line_moves && !out.strips_line_moves->empty()) {
             ch.strips_line_moves = out.strips_line_moves;
@@ -6368,6 +6464,8 @@ int run_main(int argc, char* argv[]) {
             !(amiga::is_thomson(config->mode) || amiga::is_msx(config->mode) || amiga::is_retro_raster(config->mode)) && !amiga::is_ted(config->mode) &&
             !amiga::is_sms(config->mode) && !amiga::is_cpc(config->mode)) {
             auto max_d = amiga::max_user_depth(config->mode, cs);
+            // --depth auto / --zones resolve the depth from the image later.
+            if (config->depth_auto || !config->zones.empty()) config->depth = max_d;
             if (config->depth > max_d) {
                 auto mp = amiga::get_mode_params(config->mode);
                 const char* mode_name = mp.is_hires ? "hires" : "lores";
@@ -7152,6 +7250,45 @@ int run_main(int argc, char* argv[]) {
                        static_cast<double>(target_h));
         }
         image = *std::move(cropped);
+    }
+
+    // --depth auto / --zones: depth from the image's colours at chipset
+    // precision. Without --sliced one depth holds every colour; with it the
+    // sliced encoder picks (or takes) depth zones up to the mode's maximum.
+    if (config->depth_auto || !config->zones.empty()) {
+        bool plain = (config->mode == amiga::Mode::lores || config->mode == amiga::Mode::hires ||
+                      config->mode == amiga::Mode::lores_interlace ||
+                      config->mode == amiga::Mode::hires_interlace) &&
+                     !config->dual_playfield && !config->scap;
+        if (!plain) {
+            std::println(stderr,
+                         "Error: --depth auto and --zones need lores or hires "
+                         "(no HAM, EHB, --dpf or --strips)");
+            return 1;
+        }
+        if (!config->zones.empty() && !config->copper) {
+            std::println(stderr, "Error: --zones needs --sliced");
+            return 1;
+        }
+        if (config->copper && (config->interlace || config->best)) {
+            std::println(stderr,
+                         "Error: depth zones (--sliced with --depth auto or --zones) are "
+                         "progressive only and plan exactly, so --best has nothing to search");
+            return 1;
+        }
+        auto zone_chipset = effective_chipset(*config);
+        auto max_d = amiga::max_user_depth(config->mode, zone_chipset);
+        for (auto& zone : config->zones) {
+            if (zone.depth > max_d) {
+                std::println(stderr, "Error: --zones depth {} exceeds this mode's {}", zone.depth,
+                             max_d);
+                return 1;
+            }
+        }
+        config->depth = config->copper
+                            ? max_d
+                            : copper::min_exact_depth(*image, max_d, zone_chipset,
+                                                      config->lock_color0);
     }
 
     // Display actual bitplane depth (HAM/EHB override user's --depth)
@@ -9398,6 +9535,9 @@ int run_main(int argc, char* argv[]) {
             copper_user_pal = std::move(user_pal.colors);
         }
 
+        std::optional<std::vector<copper::DepthZone>> sliced_zones;
+        if (config->depth_auto || !config->zones.empty()) sliced_zones = config->zones;
+
         // Single-pass encoder factored so best below can replay it
         // under a parallel jitter sweep without duplicating the args.
         auto encode_once = [&](const Image& img,
@@ -9426,7 +9566,9 @@ int run_main(int argc, char* argv[]) {
                 config->sliced_vertical_dither,
                 sliced_excluded,
                 parse_quantizer_override(config->quantizer),
-                beam_on);
+                beam_on,
+                /*dither_checked=*/true,
+                sliced_zones);
         };
 
         Result<copper::CopperResult> copper_result;
@@ -9623,8 +9765,24 @@ int run_main(int argc, char* argv[]) {
                            100.0f * used / float(row0));
             }
         }
+        auto cop_plane_bytes = copper_result->planes.total_bytes();
+        if (!copper_result->zones.empty()) {
+            std::string list;
+            for (std::size_t z = 0; z < copper_result->zones.size(); ++z) {
+                auto& zone = copper_result->zones[z];
+                auto end = z + 1 < copper_result->zones.size()
+                               ? copper_result->zones[z + 1].start_row
+                               : copper_result->planes.height;
+                if (!list.empty()) list += ", ";
+                list += std::format("{}-{} {}bpl", zone.start_row, end - 1, zone.depth);
+            }
+            cop_plane_bytes = copper::zoned_plane_bytes(copper_result->zones,
+                                                        copper_result->planes.height,
+                                                        copper_result->planes.bytes_per_row);
+            cli_status("Zones:    {}", list);
+        }
         cli_print_encoded(static_cast<int>(copper_result->planes.depth),
-                          static_cast<int>(copper_result->planes.total_bytes()),
+                          static_cast<int>(cop_plane_bytes),
                           static_cast<int>(copper_result->base_palette.size()),
                           chipset == amiga::Chipset::aga,
                           cop_cap_entries,
@@ -9671,7 +9829,18 @@ int run_main(int argc, char* argv[]) {
             out.scanline_changes = &copper_result->scanline_changes;
             out.scanline_palettes = &copper_result->scanline_palettes;
             out.changes_per_line = copper_result->changes_per_line;
+            out.zones = &copper_result->zones;
             int rc = write_amiga_output(out);
+            if (rc != 0) return rc;
+        }
+        if (!config->output_zones.empty()) {
+            if (copper_result->zones.empty()) {
+                std::println(stderr, "Error: --output-zones needs --sliced with --depth auto "
+                                     "or --zones");
+                return exit_code::usage;
+            }
+            int rc = write_zone_outputs(
+                config->output_zones, *copper_result, *preview, config->mode, config->hires);
             if (rc != 0) return rc;
         }
 

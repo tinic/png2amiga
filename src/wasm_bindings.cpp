@@ -38,6 +38,7 @@ Options parse_js_options(val js_opts) {
     if (js_opts.hasOwnProperty("mode")) opts.mode = js_opts["mode"].as<std::string>();
     if (js_opts.hasOwnProperty("chipset")) opts.chipset = js_opts["chipset"].as<std::string>();
     if (js_opts.hasOwnProperty("depth")) opts.depth = js_opts["depth"].as<int>();
+    if (js_opts.hasOwnProperty("depthAuto")) opts.depth_auto = js_opts["depthAuto"].as<bool>();
     if (js_opts.hasOwnProperty("interlace")) opts.interlace = js_opts["interlace"].as<bool>();
     if (js_opts.hasOwnProperty("dither")) opts.dither = js_opts["dither"].as<std::string>();
     if (js_opts.hasOwnProperty("ditherStrength"))
@@ -271,6 +272,16 @@ val js_convert_rgba(val input_array, val js_opts) {
     // slot 0 black-base vs slot 32 black-halfbrite).
     if (!result.indices.empty()) {
         obj.set("indices", make_uint8_array(result.indices));
+    }
+    if (!result.zoneRows.empty()) {
+        val rows = val::array();
+        val depths = val::array();
+        for (std::size_t i = 0; i < result.zoneRows.size(); ++i) {
+            rows.call<void>("push", result.zoneRows[i]);
+            depths.call<void>("push", result.zoneDepths[i]);
+        }
+        obj.set("zoneRows", rows);
+        obj.set("zoneDepths", depths);
     }
     // Per-scanline count of pixels that are not 1:1 with the source (Amiga).
     if (!result.rowMismatch.empty()) {

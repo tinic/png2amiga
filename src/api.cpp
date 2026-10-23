@@ -1461,6 +1461,34 @@ static Result<PipelineResult> run_pipeline_core(const std::uint8_t* input_data,
     auto chipset = resolve_chipset(options.chipset, mode);
     bool is_aga = (chipset == amiga::Chipset::aga);
 
+    // depth_auto: the fewest planes that keep the image 1:1 at chipset
+    // precision; with the sliced palette the encoder picks depth zones.
+    std::optional<std::vector<copper::DepthZone>> depth_zones;
+    if (options.depth_auto) {
+        bool plain = (mode == amiga::Mode::lores || mode == amiga::Mode::hires ||
+                      mode == amiga::Mode::lores_interlace ||
+                      mode == amiga::Mode::hires_interlace) &&
+                     !use_dpf && !options.scap && !tile_active;
+        if (!plain) {
+            return std::unexpected{Error{ErrorCode::unsupported_mode,
+                                         "Auto depth needs lores or hires (no HAM, EHB, dual "
+                                         "playfield, strips or tile)"}};
+        }
+        auto max_d = amiga::max_user_depth(mode, chipset);
+        if (options.copper) {
+            if (options.interlace || options.best) {
+                return std::unexpected{Error{
+                    ErrorCode::unsupported_mode,
+                    "Depth zones (sliced with auto depth) are progressive only and plan "
+                    "exactly, so best has nothing to search"}};
+            }
+            depth = max_d;
+            depth_zones.emplace();
+        } else {
+            depth = copper::min_exact_depth(*image, max_d, chipset, options.lock_color0);
+        }
+    }
+
     // ---- IBM PC DOS: glyph-matched text modes ----
     // Pre-dither to the 16-entry CGA master palette (so the glyph matcher
     // sees discrete candidate colors at sub-cell resolution), then call
@@ -4181,7 +4209,9 @@ static Result<PipelineResult> run_pipeline_core(const std::uint8_t* input_data,
                                          options.sliced_vertical_dither,
                                          sliced_excluded,
                                          /*quantizer_override=*/std::nullopt,
-                                         beam_on);
+                                         beam_on,
+                                         /*dither_checked=*/true,
+                                         depth_zones);
         };
 
         Result<copper::CopperResult> copper_result;
@@ -4328,6 +4358,7 @@ static Result<PipelineResult> run_pipeline_core(const std::uint8_t* input_data,
         result.indices = std::move(slot_indices);
         result.scanline_palettes = std::move(copper_result->scanline_palettes);
         result.scanline_changes = std::move(copper_result->scanline_changes);
+        result.zones = std::move(copper_result->zones);
         result.copper_num_colors = copper_result->num_colors;
         result.changes_per_line = copper_result->changes_per_line;
         result.max_moves_per_line = copper_result->max_moves_per_line;
@@ -5655,7 +5686,13 @@ ConvertResult make_result(std::vector<std::uint8_t> data, const PipelineResult& 
     r.avgPaletteUsedPerLine = pipeline::compute_avg_palette_used_per_line(p.rendered,
                                                                           p.scanline_palettes);
     r.totalColors = count_unique_colors(p.rendered);
-    r.planeBytes = static_cast<int>(p.planes.total_bytes());
+    r.planeBytes = static_cast<int>(
+        p.zones.empty() ? p.planes.total_bytes()
+                        : copper::zoned_plane_bytes(p.zones, p.planes.height, p.planes.bytes_per_row));
+    for (auto& zone : p.zones) {
+        r.zoneRows.push_back(static_cast<int>(zone.start_row));
+        r.zoneDepths.push_back(static_cast<int>(zone.depth));
+    }
     r.aga = p.aga;
     int sliced_grid_entries = 0;
     int strips_op_count = 0;
@@ -6214,6 +6251,7 @@ ConvertResult convert_cheader(const std::uint8_t* input_data,
     if (result->copper && !result->scanline_changes.empty()) {
         ch_opts.copper_changes = &result->scanline_changes;
         ch_opts.copper_changes_per_line = result->changes_per_line;
+        ch_opts.depth_zones = result->zones;
     }
     // strips mid-line MOVE list, when present. Mirrors convert_viewer's
     // wiring so the .h carries the same _strips_copper_list[] UWORD array
@@ -6364,6 +6402,7 @@ ConvertResult convert_viewer(const std::uint8_t* input_data,
     if (result->copper && !result->scanline_changes.empty()) {
         ch_opts.copper_changes = &result->scanline_changes;
         ch_opts.copper_changes_per_line = result->changes_per_line;
+        ch_opts.depth_zones = result->zones;
     }
     if (result->scap && !result->strips_line_moves.empty()) {
         ch_opts.strips_line_moves = &result->strips_line_moves;

@@ -123,6 +123,10 @@ struct Options {
     std::string mode = "lores";  // lores, hires, ham6, ham8, ehb
     std::string chipset;         // "ocs", "aga", or "" for auto
     int depth = 5;               // bitplane depth (1-8, mode-dependent)
+    // Lores/hires: the fewest planes that keep the image 1:1 at chipset
+    // precision. With `copper` (sliced) the depth may change down the frame:
+    // the encoder picks depth zones (copper::DepthZone).
+    bool depth_auto = false;
     bool interlace = false;      // set LACE bit in CAMG
     float gamma = 1.0f;
     float brightness = 0.0f;
@@ -462,6 +466,11 @@ struct ConvertResult {
     // source at the chipset's colour precision (0 = the row is 1:1). Empty
     // for other platforms.
     std::vector<std::uint32_t> rowMismatch;
+
+    // Depth zones (sliced with depth_auto): zone i starts at zoneRows[i] and
+    // shows zoneDepths[i] planes. Empty without zones.
+    std::vector<int> zoneRows;
+    std::vector<int> zoneDepths;
 
     // Per-pixel palette index map for non-HAM, non-sliced/strips modes.
     // Layout: width × height bytes, idx = pixel's slot in paletteBytes.

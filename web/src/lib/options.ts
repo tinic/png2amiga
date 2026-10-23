@@ -93,6 +93,7 @@ export interface Options {
   reserves: { index: number; r: number; g: number; b: number }[]
   dualPlayfield: boolean
   scap: boolean
+  depthAuto: boolean
   cgaTextMetric: string
   cgaTextKernel: string
   cgaCompositeNewCga: boolean
@@ -716,6 +717,9 @@ export function defaultOptions(): Options {
     // 16-31 AGA), with PF1 (foreground) bitplanes zeroed. Forces depth=3
     // (OCS) or 4 (AGA). CAMG DBLPF flag set.
     dualPlayfield: false,
+    // Depth "Auto": fewest planes that keep the image 1:1; with Sliced the
+    // depth changes per horizontal zone (lores/hires only).
+    depthAuto: false,
     // strips — Super Sliced palette: mid-line palette swaps
     // inside DPF's PF2. OCS lores only (Phase 1). Requires dpf + ocs.
     scap: false,

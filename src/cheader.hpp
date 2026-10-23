@@ -70,6 +70,11 @@ struct CHeaderOptions {
     // rebuild the diffs so each field sees transitions between the rows it
     // actually draws (row y ← row y-2) rather than the default row y-1.
     const std::vector<std::vector<Color3f>>* copper_scanline_palettes = nullptr;
+    // Depth zones (copper::DepthZone, sliced only). The bitplane data is
+    // emitted interleaved with each row holding only its zone's planes; the
+    // viewer switches BPLCON0 and the modulos at each boundary and the .h
+    // carries the zone table. `planes` stays at the deepest zone's depth.
+    std::span<const copper::DepthZone> depth_zones;
 
     // strips (Super Sliced palette): mid-line COLORxx writes at
     // fixed horizontal slot positions, anchored by a per-line WAIT.
