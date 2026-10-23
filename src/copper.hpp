@@ -11,6 +11,7 @@
 #include <cstdint>
 #include <functional>
 #include <optional>
+#include <span>
 #include <string_view>
 #include <vector>
 
@@ -54,6 +55,42 @@ struct CopperChange {
 };
 
 // ---------------------------------------------------------------------------
+// Depth zones: horizontal bands of the frame shown with their own bitplane
+// count. The copper switches BPLCON0 and the modulos in the horizontal
+// blank before a zone's first row. Bitplane data is stored interleaved with
+// each row holding only its zone's planes, so at a boundary the pointers of
+// planes active on both sides already sit on the next zone's data; a plane
+// that turns back on after a gap needs its pointer reloaded.
+// ---------------------------------------------------------------------------
+
+struct DepthZone {
+    std::size_t start_row{};
+    std::size_t depth{};
+    bool operator==(const DepthZone&) const = default;
+};
+
+// Copper MOVEs a zone boundary costs on its row: BPLCON0, BPL1MOD, BPL2MOD,
+// plus BPLxPTH/BPLxPTL for each plane that turns back on after a gap.
+std::size_t zone_switch_moves(std::span<const DepthZone> zones, std::size_t zone_index) noexcept;
+
+// Planes whose pointer must be reloaded at zone `zone_index`: active there,
+// inactive in the zone before, and active in some earlier zone.
+std::vector<std::size_t> zone_plane_reloads(std::span<const DepthZone> zones,
+                                            std::size_t zone_index);
+
+// Bitplane bytes with each row holding only its zone's planes.
+std::size_t zoned_plane_bytes(std::span<const DepthZone> zones,
+                              std::size_t height,
+                              std::size_t bytes_per_row) noexcept;
+
+// Fewest planes (at most max_depth) whose palette holds every colour of the
+// image at chipset precision, slot 0 kept for black when lock_color0.
+std::size_t min_exact_depth(const Image& image,
+                            std::size_t max_depth,
+                            amiga::Chipset chipset,
+                            bool lock_color0);
+
+// ---------------------------------------------------------------------------
 // CopperResult -- per-scanline palette changes + bitplane data
 // ---------------------------------------------------------------------------
 
@@ -83,6 +120,10 @@ struct CopperResult {
     // ocs-optimal / pnn / loaded-from-file etc.). Surfaces in the
     // CLI's "Palette: …" line; never duplicated from dispatch logic.
     std::string base_palette_quantizer;
+
+    // Depth zones the encode used (see DepthZone). Empty: one zone at the
+    // full depth, no BPLCON0 switches.
+    std::vector<DepthZone> zones;
 };
 
 // ---------------------------------------------------------------------------
@@ -294,7 +335,13 @@ Result<CopperResult> encode_copper(
     // swap only if the dithered rows around it improve (DitherWindow in
     // copper.cpp). The DPF strips encoder passes false: its mid-line planner
     // is tuned on the unchecked per-line palettes (ramps S2 41.6 -> 30.9).
-    bool dither_checked = true);
+    bool dither_checked = true,
+    // Depth zones (lores/hires, progressive). nullopt: off. Empty: pick the
+    // zones from the image (each row's colours at chipset precision, fewest
+    // plane rows, a zone deepened while any of its rows misses). Non-empty:
+    // use these, each at most `depth`. Zones always use the exact-colour
+    // planner; rows that cannot fit keep the nearest colours.
+    const std::optional<std::vector<DepthZone>>& depth_zones = std::nullopt);
 
 // ---------------------------------------------------------------------------
 // Render a copper-palette image back to an Image for preview.

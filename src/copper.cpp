@@ -941,14 +941,16 @@ private:
 };
 
 // Sliced pass 2: dither every row against its own palette, never picking an
-// excluded slot, then run the DBS post-pass when selected. Fills
-// `all_indices` (width x height) and returns the diffuser's total error.
+// excluded slot (nor, with depth zones, a slot at or past row_slots[y]), then
+// run the DBS post-pass when selected. Fills `all_indices` (width x height)
+// and returns the diffuser's total error.
 float dither_rows(const Image& image,
                   const dither::Settings& dither_settings,
                   const std::vector<std::vector<Color3f>>& scanline_palettes,
                   const std::vector<bool>& excluded_mask,
                   std::size_t num_colors,
-                  std::vector<std::uint8_t>& all_indices) {
+                  std::vector<std::uint8_t>& all_indices,
+                  std::span<const std::size_t> row_slots = {}) {
     const auto width = image.width();
     const auto height = image.height();
     // Pre-convert each row's sliced palette to OKLab once. excluded_mask
@@ -960,14 +962,15 @@ float dither_rows(const Image& image,
     if (!excluded_mask.empty()) cand_to_full_per_row.resize(height);
     for (std::size_t y = 0; y < height; ++y) {
         auto& pal = scanline_palettes[y];
+        const std::size_t n = row_slots.empty() ? num_colors : row_slots[y];
         if (excluded_mask.empty()) {
-            pal_lab_per_row[y].resize(num_colors);
-            for (std::size_t i = 0; i < num_colors; ++i)
+            pal_lab_per_row[y].resize(n);
+            for (std::size_t i = 0; i < n; ++i)
                 pal_lab_per_row[y][i] = color_space::linear_to_oklab(pal[i]);
         } else {
-            pal_lab_per_row[y].reserve(num_colors);
-            cand_to_full_per_row[y].reserve(num_colors);
-            for (std::size_t i = 0; i < num_colors; ++i) {
+            pal_lab_per_row[y].reserve(n);
+            cand_to_full_per_row[y].reserve(n);
+            for (std::size_t i = 0; i < n; ++i) {
                 if (excluded_mask[i]) continue;
                 pal_lab_per_row[y].push_back(color_space::linear_to_oklab(pal[i]));
                 cand_to_full_per_row[y].push_back(static_cast<std::uint8_t>(i));
@@ -1053,11 +1056,21 @@ float dither_rows(const Image& image,
 //
 // Interlace plans each field on its own (a row follows the row two above it
 // on the beam). Rows before `skip_initial_swap_rows` take no changes.
+// Depth zones pass `row_slots` (row y shows slots below row_slots[y]) and
+// `row_budget` (changes row y may take); a colour in a slot its row cannot
+// show is not resident there.
 struct ExactPlan {
     std::vector<Color3f> base_pal;
     std::vector<std::vector<Color3f>> scanline_palettes;
+    std::vector<bool> row_exact;
     std::size_t inexact_rows = 0;
     bool off_grid = false;  // some source pixel is not a chipset colour
+};
+
+struct ExactPlanLimits {
+    std::span<const std::size_t> row_slots;   // empty: every row shows all slots
+    std::span<const std::size_t> row_budget;  // empty: changes_per_line per row
+    bool force = false;                       // plan even rows with many colours
 };
 
 std::optional<ExactPlan> plan_exact_copper(
@@ -1069,7 +1082,8 @@ std::optional<ExactPlan> plan_exact_copper(
     const std::vector<std::pair<std::size_t, Color3f>>& locked,
     const std::vector<bool>& excluded_mask,
     std::size_t skip_initial_swap_rows,
-    bool is_lace) {
+    bool is_lace,
+    const ExactPlanLimits& limits = {}) {
     const auto width = image.width();
     const auto height = image.height();
     const bool aga = chipset == amiga::Chipset::aga;
@@ -1080,9 +1094,13 @@ std::optional<ExactPlan> plan_exact_copper(
         return aga ? palette::aga_to_linear(key)
                    : palette::ocs_to_linear(static_cast<std::uint16_t>(key));
     };
+    auto cap = [&](std::size_t y) {
+        return limits.row_slots.empty() ? num_colors : limits.row_slots[y];
+    };
 
     // Slot roles: fixed slots hold a colour for the whole frame (colour 0
-    // black, --lock-index); excluded slots are never shown; the rest are free.
+    // black, --lock-index); excluded slots are never shown; the rest are free
+    // (ascending, so a row's usable free slots are a prefix).
     std::vector<Color3f> fixed_color(num_colors, Color3f{0.0f, 0.0f, 0.0f});
     std::vector<bool> fixed(num_colors, false);
     if (lock_color0 && num_colors > 1) fixed[0] = true;
@@ -1093,13 +1111,17 @@ std::optional<ExactPlan> plan_exact_copper(
         }
     }
     std::vector<std::size_t> free_slots;
-    std::vector<std::uint32_t> fixed_keys;
+    std::vector<std::pair<std::size_t, std::uint32_t>> fixed_keys;  // slot, key
     for (std::size_t k = 0; k < num_colors; ++k) {
         bool excluded = k < excluded_mask.size() && excluded_mask[k];
-        if (fixed[k] && !excluded) fixed_keys.push_back(key_of(fixed_color[k]));
+        if (fixed[k] && !excluded) fixed_keys.emplace_back(k, key_of(fixed_color[k]));
         if (!fixed[k] && !excluded) free_slots.push_back(k);
     }
     const std::size_t free_count = free_slots.size();
+    auto usable_free = [&](std::size_t y) {
+        return static_cast<std::size_t>(std::ranges::lower_bound(free_slots, cap(y)) -
+                                        free_slots.begin());
+    };
 
     // Per row: the distinct snapped colours a free slot must hold, most
     // pixels first. Colours get dense ids.
@@ -1108,8 +1130,9 @@ std::optional<ExactPlan> plan_exact_copper(
     std::size_t rows_fit = 0;
     bool off_grid = false;
     {
-        std::vector<std::pair<std::uint32_t, std::uint32_t>> row_keys;  // key, count
-        std::vector<std::pair<std::uint32_t, std::uint32_t>> key_to_id;  // sorted
+        using KeyCount = std::pair<std::uint32_t, std::uint32_t>;
+        std::vector<KeyCount> row_keys;
+        std::vector<KeyCount> key_to_id;  // sorted by key
         for (std::size_t y = 0; y < height; ++y) {
             row_keys.clear();
             auto row = image.row(y);
@@ -1118,21 +1141,22 @@ std::optional<ExactPlan> plan_exact_copper(
                 if (!aga && !off_grid)
                     off_grid = palette::linear_to_aga(row[x]) !=
                                palette::linear_to_aga(color_of(key));
-                if (std::ranges::find(fixed_keys, key) != fixed_keys.end()) continue;
-                auto it = std::ranges::find(row_keys, key, &std::pair<std::uint32_t, std::uint32_t>::first);
+                bool shown_fixed = std::ranges::any_of(
+                    fixed_keys, [&](auto& f) { return f.first < cap(y) && f.second == key; });
+                if (shown_fixed) continue;
+                auto it = std::ranges::find(row_keys, key, &KeyCount::first);
                 if (it != row_keys.end()) {
                     ++it->second;
                     continue;
                 }
                 // A photo row has hundreds of colours: give up early.
-                if (row_keys.size() >= 4 * num_colors) return std::nullopt;
+                if (!limits.force && row_keys.size() >= 4 * num_colors) return std::nullopt;
                 row_keys.emplace_back(key, 1);
             }
-            std::ranges::stable_sort(row_keys, [](auto& a, auto& b) { return a.second > b.second; });
-            if (row_keys.size() <= free_count) ++rows_fit;
+            std::ranges::stable_sort(row_keys, [](auto& p, auto& q) { return p.second > q.second; });
+            if (row_keys.size() <= usable_free(y)) ++rows_fit;
             for (auto& [key, count] : row_keys) {
-                auto it = std::ranges::lower_bound(
-                    key_to_id, key, {}, &std::pair<std::uint32_t, std::uint32_t>::first);
+                auto it = std::ranges::lower_bound(key_to_id, key, {}, &KeyCount::first);
                 std::uint32_t id = 0;
                 if (it != key_to_id.end() && it->first == key) {
                     id = it->second;
@@ -1145,23 +1169,30 @@ std::optional<ExactPlan> plan_exact_copper(
             }
         }
     }
-    if (free_count == 0 || rows_fit * 2 < height) return std::nullopt;
+    if (free_count == 0) return std::nullopt;
+    if (!limits.force && rows_fit * 2 < height) return std::nullopt;
 
     constexpr std::uint32_t kEmpty = std::numeric_limits<std::uint32_t>::max();
     constexpr std::size_t kNever = std::numeric_limits<std::size_t>::max();
     const std::size_t n_ids = color_keys.size();
 
-    // Base palette: free slots take colours in order of first appearance.
+    // Base palette: colours in order of first appearance, each in the lowest
+    // empty slot its row shows.
     std::vector<std::uint32_t> base_ids(free_count, kEmpty);
     {
         std::vector<bool> placed(n_ids, false);
-        std::size_t filled = 0;
-        for (std::size_t y = 0; y < height && filled < free_count; ++y)
-            for (auto id : needs[y])
-                if (!placed[id] && filled < free_count) {
+        for (std::size_t y = 0; y < height; ++y) {
+            auto usable = usable_free(y);
+            for (auto id : needs[y]) {
+                if (placed[id]) continue;
+                for (std::size_t s = 0; s < usable; ++s) {
+                    if (base_ids[s] != kEmpty) continue;
+                    base_ids[s] = id;
                     placed[id] = true;
-                    base_ids[filled++] = id;
+                    break;
                 }
+            }
+        }
     }
 
     ExactPlan plan;
@@ -1171,6 +1202,7 @@ std::optional<ExactPlan> plan_exact_copper(
         plan.base_pal[free_slots[s]] =
             base_ids[s] == kEmpty ? Color3f{0.0f, 0.0f, 0.0f} : color_of(color_keys[base_ids[s]]);
     plan.scanline_palettes.assign(height, plan.base_pal);
+    plan.row_exact.assign(height, true);
 
     // Lookahead for preloads, in rows of the same field.
     constexpr std::size_t kLookahead = 64;
@@ -1194,14 +1226,17 @@ std::optional<ExactPlan> plan_exact_copper(
         std::vector<std::size_t> slot_of(n_ids, kNever);
         for (std::size_t s = 0; s < free_count; ++s)
             if (slots[s] != kEmpty) slot_of[slots[s]] = s;
+        auto resident = [&](std::uint32_t id, std::size_t usable) {
+            return slot_of[id] != kNever && slot_of[id] < usable;
+        };
 
         // Free slot to overwrite for a colour needed at position `need_at`:
-        // the one whose colour is next needed farthest ahead, and only after
-        // need_at. kNever when no slot qualifies.
+        // one that row shows, whose colour is next needed farthest ahead,
+        // and only after need_at. kNever when no slot qualifies.
         auto pick_victim = [&](std::size_t i, std::size_t need_at) {
             std::size_t best = kNever;
             std::size_t best_use = 0;
-            for (std::size_t s = 0; s < free_count; ++s) {
+            for (std::size_t s = 0, n = usable_free(seq[need_at]); s < n; ++s) {
                 auto use = next_use(slots[s], i);  // kNever sorts last
                 if (use <= need_at) continue;
                 if (best == kNever || use > best_use) {
@@ -1212,18 +1247,23 @@ std::optional<ExactPlan> plan_exact_copper(
             }
             return best;
         };
+        // A colour moving to a slot its row shows leaves its old slot free.
         auto load = [&](std::size_t s, std::uint32_t id) {
             if (slots[s] != kEmpty) slot_of[slots[s]] = kNever;
+            if (slot_of[id] != kNever) slots[slot_of[id]] = kEmpty;
             slots[s] = id;
             slot_of[id] = s;
         };
 
         for (std::size_t i = 0; i < seq.size(); ++i) {
             const auto y = seq[i];
-            std::size_t budget = y < skip_initial_swap_rows ? 0 : changes_per_line;
+            std::size_t budget = !limits.row_budget.empty() ? limits.row_budget[y]
+                                 : y < skip_initial_swap_rows ? 0
+                                                              : changes_per_line;
+            const auto usable = usable_free(y);
             bool exact = true;
             for (auto id : needs[y]) {
-                if (slot_of[id] != kNever) continue;
+                if (resident(id, usable)) continue;
                 auto s = budget > 0 ? pick_victim(i, i) : kNever;
                 if (s == kNever) {
                     exact = false;
@@ -1232,12 +1272,16 @@ std::optional<ExactPlan> plan_exact_copper(
                 load(s, id);
                 --budget;
             }
-            if (!exact) ++plan.inexact_rows;
+            if (!exact) {
+                plan.row_exact[y] = false;
+                ++plan.inexact_rows;
+            }
             // Spare changes preload the colours the next rows need soonest.
             for (std::size_t j = i + 1; budget > 0 && j < seq.size() && j <= i + kLookahead; ++j) {
+                const auto usable_j = usable_free(seq[j]);
                 for (auto id : needs[seq[j]]) {
                     if (budget == 0) break;
-                    if (slot_of[id] != kNever) continue;
+                    if (resident(id, usable_j)) continue;
                     auto s = pick_victim(i, j);
                     if (s == kNever) continue;
                     load(s, id);
@@ -1335,10 +1379,301 @@ Result<CopperResult> assemble_result(const std::vector<std::uint8_t>& all_indice
         total_error,
         max_moves,
         std::move(base_pal_name),
+        {},
     };
 }
 
+// Fewest planes whose slots hold row y's colours at chipset precision (fixed
+// slots count where the depth shows them); max_depth when none does.
+std::vector<std::size_t> row_min_depths(const Image& image,
+                                        std::size_t max_depth,
+                                        amiga::Chipset chipset,
+                                        bool lock_color0,
+                                        const std::vector<std::pair<std::size_t, Color3f>>& locked,
+                                        const std::vector<bool>& excluded_mask) {
+    const bool aga = chipset == amiga::Chipset::aga;
+    auto key_of = [aga](Color3f c) -> std::uint32_t {
+        return aga ? palette::linear_to_aga(c) : palette::linear_to_ocs(c);
+    };
+    const std::size_t num_colors = std::size_t{1} << max_depth;
+    std::vector<std::pair<std::size_t, std::uint32_t>> fixed_keys;  // slot, key
+    std::vector<bool> fixed(num_colors, false);
+    if (lock_color0 && num_colors > 1) {
+        fixed[0] = true;
+        fixed_keys.emplace_back(0, key_of(Color3f{0.0f, 0.0f, 0.0f}));
+    }
+    for (auto& [idx, color] : locked) {
+        if (idx >= num_colors) continue;
+        fixed[idx] = true;
+        if (!(idx < excluded_mask.size() && excluded_mask[idx]))
+            fixed_keys.emplace_back(idx, key_of(color));
+    }
+    std::vector<std::size_t> depths(image.height(), max_depth);
+    std::vector<std::uint32_t> keys;
+    for (std::size_t y = 0; y < image.height(); ++y) {
+        keys.clear();
+        for (auto c : image.row(y)) {
+            auto key = key_of(c);
+            if (std::ranges::find(keys, key) != keys.end()) continue;
+            keys.push_back(key);
+            if (keys.size() > num_colors) break;
+        }
+        for (std::size_t d = 1; d < max_depth; ++d) {
+            const std::size_t n = std::size_t{1} << d;
+            std::size_t free_slots = 0;
+            for (std::size_t k = 0; k < n; ++k)
+                if (!fixed[k] && !(k < excluded_mask.size() && excluded_mask[k])) ++free_slots;
+            std::size_t need = 0;
+            for (auto key : keys)
+                if (!std::ranges::any_of(fixed_keys,
+                                         [&](auto& f) { return f.first < n && f.second == key; }))
+                    ++need;
+            if (need <= free_slots) {
+                depths[y] = d;
+                break;
+            }
+        }
+    }
+    return depths;
+}
+
+// Zones from per-row minimum depths: fewest plane rows (rows x depth) plus
+// kZoneCost per zone, so a short band does not split off for one plane.
+std::vector<DepthZone> zones_from_row_depths(std::span<const std::size_t> row_depth) {
+    constexpr double kZoneCost = 8.0;
+    const std::size_t h = row_depth.size();
+    std::vector<double> cost(h + 1, std::numeric_limits<double>::infinity());
+    std::vector<std::size_t> from(h + 1, 0);
+    std::vector<std::size_t> zone_depth(h + 1, 0);
+    cost[0] = 0.0;
+    for (std::size_t e = 1; e <= h; ++e) {
+        std::size_t d = 0;
+        for (std::size_t s = e; s-- > 0;) {
+            d = std::max(d, row_depth[s]);
+            double c = cost[s] + static_cast<double>((e - s) * d) + kZoneCost;
+            if (c < cost[e]) {
+                cost[e] = c;
+                from[e] = s;
+                zone_depth[e] = d;
+            }
+        }
+    }
+    std::vector<DepthZone> zones;
+    for (std::size_t e = h; e > 0; e = from[e])
+        zones.push_back({from[e], zone_depth[e]});
+    std::ranges::reverse(zones);
+    return zones;
+}
+
+// Sliced encode with depth zones (see DepthZone). Always the exact-colour
+// planner: each zone shows only its first 2^depth slots, a boundary row's
+// change budget gives way to the zone switch, and with picked zones a zone
+// whose rows miss is deepened by a plane and the plan rerun.
+Result<CopperResult> encode_copper_zoned(const Image& image,
+                                         std::size_t max_depth,
+                                         const dither::Settings& dither_settings,
+                                         amiga::Chipset chipset,
+                                         std::size_t max_changes,
+                                         bool lock_color0,
+                                         const std::vector<std::pair<std::size_t, Color3f>>& locked,
+                                         const std::vector<std::size_t>& dither_excluded,
+                                         std::vector<DepthZone> zones,
+                                         std::size_t move_budget) {
+    const auto width = image.width();
+    const auto height = image.height();
+    const std::size_t num_colors = std::size_t{1} << max_depth;
+    const bool aga = chipset == amiga::Chipset::aga;
+    const bool aga_banks = aga && num_colors > 32;
+    std::vector<bool> excluded;
+    if (!dither_excluded.empty()) {
+        excluded.assign(num_colors, false);
+        for (auto i : dither_excluded)
+            if (i < num_colors) excluded[i] = true;
+    }
+
+    const bool pick = zones.empty();
+    if (pick) {
+        auto depths = row_min_depths(image, max_depth, chipset, lock_color0, locked, excluded);
+        zones = zones_from_row_depths(depths);
+    }
+    for (std::size_t z = 0; z < zones.size(); ++z) {
+        bool ok = zones[z].depth >= 1 && zones[z].depth <= max_depth &&
+                  zones[z].start_row < height &&
+                  (z == 0 ? zones[z].start_row == 0 : zones[z].start_row > zones[z - 1].start_row);
+        if (!ok) {
+            return std::unexpected{Error{
+                ErrorCode::invalid_depth,
+                std::format("Depth zones must start at row 0, ascend below the image height "
+                            "{}, and use depths 1-{}",
+                            height,
+                            max_depth),
+            }};
+        }
+    }
+
+    std::vector<std::size_t> row_slots(height);
+    std::vector<std::size_t> row_extra(height, 0);  // zone-switch MOVEs per row
+    std::vector<std::size_t> row_budget(height);
+    std::optional<ExactPlan> plan;
+    std::vector<std::vector<CopperChange>> changes;
+    std::vector<std::uint8_t> indices(width * height);
+    float err = 0.0f;
+    // Each pass either deepens a zone, trims a row's budget, or ends.
+    bool derive_budgets = true;
+    for (;;) {
+        std::ranges::fill(row_extra, 0);
+        for (std::size_t z = 0; z < zones.size(); ++z) {
+            auto end = z + 1 < zones.size() ? zones[z + 1].start_row : height;
+            for (auto y = zones[z].start_row; y < end; ++y)
+                row_slots[y] = std::size_t{1} << zones[z].depth;
+            if (z > 0) row_extra[zones[z].start_row] = zone_switch_moves(zones, z);
+        }
+        if (derive_budgets) {
+            derive_budgets = false;
+            // Changes that fit beside the switch MOVEs: OCS 1 MOVE each; AGA
+            // a hi and a lo write plus the LOCT pair (banks: plus BPLCON3s).
+            for (std::size_t y = 0; y < height; ++y) {
+                auto room = move_budget > row_extra[y] ? move_budget - row_extra[y] : 0;
+                auto fit = !aga ? room : room > 2 ? (room - 2) / (aga_banks ? 4 : 2) : 0;
+                row_budget[y] = std::min(max_changes, fit);
+            }
+        }
+        plan = plan_exact_copper(image,
+                                 num_colors,
+                                 max_changes,
+                                 chipset,
+                                 lock_color0,
+                                 locked,
+                                 excluded,
+                                 /*skip_initial_swap_rows=*/0,
+                                 /*is_lace=*/false,
+                                 ExactPlanLimits{row_slots, row_budget, /*force=*/true});
+        if (!plan) {
+            return std::unexpected{
+                Error{ErrorCode::invalid_depth, "Depth zones leave no palette slot to plan"}};
+        }
+        err = dither_rows(
+            image, dither_settings, plan->scanline_palettes, excluded, num_colors, indices, row_slots);
+        changes = changes_from_palettes(
+            plan->base_pal, plan->scanline_palettes, indices, width, false, chipset);
+
+        bool replan = false;
+        for (std::size_t y = 0; y < height; ++y) {
+            if (moves_for_line(changes[y], aga, aga_banks) + row_extra[y] > move_budget &&
+                row_budget[y] > 0) {
+                --row_budget[y];
+                replan = true;
+            }
+        }
+        if (!replan && pick) {
+            for (std::size_t z = 0; z < zones.size(); ++z) {
+                auto end = z + 1 < zones.size() ? zones[z + 1].start_row : height;
+                bool miss = false;
+                for (auto y = zones[z].start_row; y < end && !miss; ++y)
+                    miss = !plan->row_exact[y];
+                if (miss && zones[z].depth < max_depth) {
+                    ++zones[z].depth;
+                    replan = true;
+                }
+            }
+            if (replan) {
+                // Neighbours that now match merge back into one zone.
+                std::vector<DepthZone> merged;
+                for (auto& zone : zones)
+                    if (merged.empty() || merged.back().depth != zone.depth) merged.push_back(zone);
+                zones = std::move(merged);
+                derive_budgets = true;  // the boundaries moved
+            }
+        }
+        if (!replan) break;
+    }
+
+    std::size_t max_row_changes = 0;
+    std::size_t max_moves = 0;
+    for (std::size_t y = 0; y < height; ++y) {
+        max_row_changes = std::max(max_row_changes, changes[y].size());
+        max_moves = std::max(max_moves, moves_for_line(changes[y], aga, aga_banks) + row_extra[y]);
+    }
+    auto result = assemble_result(indices,
+                                  width,
+                                  max_depth,
+                                  std::move(plan->base_pal),
+                                  std::move(changes),
+                                  std::move(plan->scanline_palettes),
+                                  max_row_changes,
+                                  err,
+                                  chipset,
+                                  "exact");
+    if (!result) return result;
+    result->max_moves_per_line = max_moves;
+    result->zones = std::move(zones);
+    return result;
+}
+
 }  // namespace
+
+std::size_t zoned_plane_bytes(std::span<const DepthZone> zones,
+                              std::size_t height,
+                              std::size_t bytes_per_row) noexcept {
+    std::size_t bytes = 0;
+    for (std::size_t z = 0; z < zones.size(); ++z) {
+        auto end = z + 1 < zones.size() ? zones[z + 1].start_row : height;
+        bytes += (end - zones[z].start_row) * zones[z].depth * bytes_per_row;
+    }
+    return bytes;
+}
+
+std::size_t min_exact_depth(const Image& image,
+                            std::size_t max_depth,
+                            amiga::Chipset chipset,
+                            bool lock_color0) {
+    const bool aga = chipset == amiga::Chipset::aga;
+    const std::size_t limit = std::size_t{1} << max_depth;
+    std::vector<std::uint32_t> keys;
+    bool black = false;
+    for (auto c : image.pixels()) {
+        auto key = aga ? palette::linear_to_aga(c) : palette::linear_to_ocs(c);
+        if (key == 0) {
+            black = true;
+            continue;
+        }
+        if (std::ranges::find(keys, key) != keys.end()) continue;
+        keys.push_back(key);
+        if (keys.size() >= limit) return max_depth;
+    }
+    const std::size_t slots = keys.size() + ((lock_color0 || black) ? 1 : 0);
+    std::size_t d = 1;
+    while (d < max_depth && (std::size_t{1} << d) < slots)
+        ++d;
+    return d;
+}
+
+std::vector<std::size_t> zone_plane_reloads(std::span<const DepthZone> zones,
+                                            std::size_t zone_index) {
+    std::vector<std::size_t> planes;
+    if (zone_index == 0 || zone_index >= zones.size()) return planes;
+    for (std::size_t p = zones[zone_index - 1].depth; p < zones[zone_index].depth; ++p) {
+        bool earlier = false;
+        for (std::size_t z = 0; z + 1 < zone_index && !earlier; ++z)
+            earlier = zones[z].depth > p;
+        if (earlier) planes.push_back(p);
+    }
+    return planes;
+}
+
+std::size_t zone_switch_moves(std::span<const DepthZone> zones, std::size_t zone_index) noexcept {
+    if (zone_index == 0 || zone_index >= zones.size()) return 0;
+    std::size_t reloads = 0;
+    for (std::size_t p = zones[zone_index - 1].depth; p < zones[zone_index].depth; ++p) {
+        for (std::size_t z = 0; z + 1 < zone_index; ++z) {
+            if (zones[z].depth > p) {
+                ++reloads;
+                break;
+            }
+        }
+    }
+    return 3 + 2 * reloads;
+}
 
 // ===========================================================================
 // encode_copper
@@ -1363,7 +1698,8 @@ Result<CopperResult> encode_copper(const Image& image,
                                    const std::vector<std::size_t>& dither_excluded,
                                    std::optional<quantize::Algorithm> quantizer_override,
                                    bool sliced_beam,
-                                   bool dither_checked) {
+                                   bool dither_checked,
+                                   const std::optional<std::vector<DepthZone>>& depth_zones) {
     if (depth < 1 || depth > 8) {
         return std::unexpected{Error{
             ErrorCode::invalid_depth,
@@ -1384,6 +1720,31 @@ Result<CopperResult> encode_copper(const Image& image,
     auto num_colors = std::size_t{1} << depth;
     auto max_swappable = lock_color0 ? (num_colors > 1 ? num_colors - 1 : std::size_t{0})
                                      : num_colors;
+
+    if (depth_zones) {
+        if (is_ehb || is_lace || vertical_dither || (user_palette && !user_palette->empty())) {
+            return std::unexpected{Error{
+                ErrorCode::unsupported_mode,
+                "Depth zones need progressive lores or hires with the encoder's own palette "
+                "(no EHB, interlace, --palette or --sliced-vertical-dither)",
+            }};
+        }
+        if (on_progress) on_progress(0.0f, "encoding");
+        // The per-row MOVE budget bounds the changes; --slice-changes caps them.
+        auto r = encode_copper_zoned(image,
+                                     depth,
+                                     dither_settings,
+                                     chipset,
+                                     override_changes ? std::min(override_changes, max_swappable)
+                                                      : max_swappable,
+                                     lock_color0,
+                                     locked,
+                                     dither_excluded,
+                                     *depth_zones,
+                                     MOVE_BUDGET_PER_LINE);
+        if (on_progress) on_progress(1.0f, "done");
+        return r;
+    }
 
     // --copper-changes is a pure user escape hatch and bypasses the budget
     // check entirely — the user is telling us "emit exactly this K, I know
@@ -1447,7 +1808,8 @@ Result<CopperResult> encode_copper(const Image& image,
                                          dither_excluded,
                                          /*quantizer_override=*/std::nullopt,
                                          sliced_beam,
-                                         dither_checked);
+                                         dither_checked,
+                                         depth_zones);
             if (!stretch) return std::unexpected{stretch.error()};
             ++aga_speculatives_done;
             if (stretch->max_moves_per_line <= move_budget) {
@@ -1483,7 +1845,8 @@ Result<CopperResult> encode_copper(const Image& image,
                                          dither_excluded,
                                          /*quantizer_override=*/std::nullopt,
                                          sliced_beam,
-                                         dither_checked);
+                                         dither_checked,
+                                         depth_zones);
                 }
                 return stretch;
             }

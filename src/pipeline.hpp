@@ -145,6 +145,8 @@ struct PipelineResult {
     // AGA 8 bits per channel). All zero = the row converted 1:1. Empty for
     // other platforms.
     std::vector<std::uint32_t> row_mismatch;
+    // Sliced depth zones (copper::DepthZone); empty without them.
+    std::vector<copper::DepthZone> zones;
 
     // Mode-specific raw hardware bytes — used by DOS modes that don't flow
     // through the bitplane encoder (chunky VGA indices, CGA-banked planar

@@ -529,6 +529,31 @@ planner. `--report-rows` lists the scanlines that are not 1:1 with the
 source; the web tool marks them in red (Advanced → "Mark rows that are
 not 1:1").
 
+**Depth zones.** `--depth auto` picks the fewest bitplanes that keep the
+image 1:1. With `--sliced` the depth may change down the frame: the
+image splits into horizontal zones, each with the fewest planes its rows
+need, and the copper switches BPLCON0 and the modulos in the horizontal
+blank before each zone. A zone whose rows still miss gets one more plane.
+`--zones 0:3,64:5,180:2` sets the zones (start row:depth) instead.
+
+```bash
+png2amiga screen.png --mode lores --depth auto --sliced --dither none --report-rows -o screen.cpp
+# Zones:    0-63 2bpl, 64-179 5bpl, 180-255 1bpl
+```
+
+Bitplane data is interleaved with each row holding only its zone's
+planes, so a plane on in consecutive zones runs on into the next zone by
+itself; a plane that turns on again after a gap gets its pointer
+reloaded at the boundary. A boundary costs 3 copper MOVEs (BPLCON0,
+BPL1MOD, BPL2MOD) plus 2 per reloaded plane, taken from that line's
+colour-change budget. The `.cpp` viewer runs the zones; the `.h` carries
+the packed planes and a zone table (`_zone_row`, `_zone_depth`,
+`_zone_offset`); `--output-zones <prefix>` writes each zone as
+`<prefix>_zoneN.png` and `.iff` (its rows, planes and per-line
+palettes). Lores and hires, progressive; not with HAM, EHB, `--dpf`,
+`--strips`, `--palette`, interlace or `--best`. In the web tool: Depth →
+Auto with Sliced on; the zones show as grey bands beside the preview.
+
 `--slice-changes N` overrides the budget; use if you want to experiment
 with configurations that may exceed real hardware limits but still
 display correctly on emulators.
@@ -883,7 +908,11 @@ Modes:
     Sega:   sms-mode4 | gg-mode4
     CPC:    cpc-mode0 | cpc-mode1 | cpc-mode2 |
             cpc-plus-mode0 | cpc-plus-mode1 | cpc-plus-mode2
-  --depth <1-8>                   Bitplane depth (default: 5)
+  --depth <1-8|auto>              Bitplane depth (default: 5); auto = fewest
+                                  planes that keep the image 1:1, with
+                                  --sliced per horizontal zone
+  --zones <row:depth,...>         Depth zones for --sliced (lores/hires),
+                                  e.g. 0:3,64:5,180:2
   --chipset ocs|aga               Amiga chipset (default: auto)
   --dual-playfield, --dpf         Encode into PF2 (depth 3 OCS / 4 AGA)
   --width <int>                   Override output width
@@ -1012,6 +1041,8 @@ Output:
   --interleaved                   Alias for --layout interleaved
   --output-indexed <file>         Raw chunky indices: 1 byte/pixel,
                                   scan order, no header (post-pin)
+  --output-zones <prefix>         Depth zones: <prefix>_zoneN.png and .iff
+                                  per zone (its rows, planes and palettes)
   --preview                       Inline preview (iTerm2, kitty, sixel)
   --preview-scale <1-8>           Preview display scale
   --preview-video                 Batch only: loop frames inline

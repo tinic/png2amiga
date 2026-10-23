@@ -50,6 +50,8 @@ interface ReplyEnvelope {
   scanlinePaletteBytes?: ArrayBuffer
   scanlinePaletteSize?: number
   rowMismatch?: Uint32Array
+  zoneRows?: number[]
+  zoneDepths?: number[]
   error?: string
   rgba?: ArrayBuffer
   data?: ArrayBuffer
@@ -195,6 +197,8 @@ function buildReply(result: ConvertResult): { reply: ReplyEnvelope; transfers: A
     ...opt('c64BgColor', result.c64BgColor),
     ...opt('scanlinePaletteSize', result.scanlinePaletteSize),
     ...opt('rowMismatch', result.rowMismatch),
+    ...opt('zoneRows', result.zoneRows),
+    ...opt('zoneDepths', result.zoneDepths),
     ...opt('error', result.error),
   }
   const transfers: ArrayBuffer[] = []
