@@ -2750,15 +2750,6 @@ async function loadExample(example: typeof EXAMPLES[number]) {
                   <InputNumber v-model="options.depth" :min="1" :max="depthMax || 6" :step="1" class="w-full input-sm" :disabled="depthAutoActive" />
                 </div>
               </div>
-              <div v-if="showDepthSlider && depthAutoAvailable" class="grid align-items-center">
-                <div class="col-4" />
-                <div class="col-8 flex align-items-center gap-2">
-                  <input id="depthAuto" v-model="options.depthAuto" type="checkbox" />
-                  <label for="depthAuto" class="text-xs text-color-secondary"
-                    title="Use the fewest bitplanes that keep the image 1:1 at the chipset's colour precision. With Sliced, the depth changes per horizontal zone: the copper switches BPLCON0 and the modulos at each zone boundary, and the viewer, .h and IFF exports carry the zones.">Auto{{ options.copper ? ' (zones with Sliced)' : '' }}</label>
-                </div>
-              </div>
-
               <!-- CGA text mode only: per-cell error metric. When blur is
                    selected the dither selector below is hidden, since blur
                    needs the continuous source. -->
@@ -3234,6 +3225,15 @@ async function loadExample(example: typeof EXAMPLES[number]) {
                 <div class="flex align-items-center gap-2">
                   <input type="checkbox" v-model="markRows" id="markRows" />
                   <label for="markRows" class="text-xs text-color-secondary" title="Draw a red mark right of the preview on every scanline whose pixels differ from the source at the chipset's colour precision (OCS 12-bit, AGA 24-bit). Meant for hardware-ready pixel art: turn off Resize and use no dither or an error-diffusion dither.">Mark rows that are not 1:1</label>
+                </div>
+              </div>
+
+              <!-- Automatic depth: fewest planes for 1:1, zoned with Sliced -->
+              <div v-if="showDepthSlider && depthAutoAvailable" class="pt-3 mt-3 border-top-1 surface-border">
+                <div class="flex align-items-center gap-2">
+                  <input id="depthAuto" v-model="options.depthAuto" type="checkbox" />
+                  <label for="depthAuto" class="text-xs text-color-secondary"
+                    title="Use the fewest bitplanes that keep the image 1:1 at the chipset's colour precision; the Depth slider is ignored. With Sliced, the depth changes per horizontal zone: the copper switches BPLCON0 and the modulos at each zone boundary, and the viewer, .h and IFF exports carry the zones.">{{ options.copper ? 'Depth zones (fewest bitplanes per zone)' : 'Fewest bitplanes for 1:1' }}</label>
                 </div>
               </div>
 
