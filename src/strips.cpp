@@ -1636,6 +1636,11 @@ static Result<ScapResult> encode_strips_indexed(
                     auto s = static_cast<std::size_t>(x_strip[x]);
                     auto& pl_lab = strip_pal_lab_per_row[y][s];
                     return {pl_lab.data(), kBaseColors};
+                },
+                [&](std::size_t x, std::size_t y) -> std::uint64_t {
+                    const std::uint64_t usable = ((std::uint64_t{1} << kBaseColors) - 1) &
+                                                 ~((std::uint64_t{1} << k_pick) - 1);
+                    return usable & ~std::uint64_t{boundary_mask[y * width + x]};
                 });
             for (std::size_t y = 0; y < height; ++y) {
                 for (std::size_t x = 0; x < width; ++x) {
@@ -3256,6 +3261,14 @@ Result<ScapResult> encode_strips_ehb_ocs(
                     auto s = static_cast<std::size_t>(x_strip[x]);
                     auto& eff_lab = strip_eff_lab_per_row[y][s];
                     return {eff_lab.data(), kEffective};
+                },
+                [&](std::size_t x, std::size_t y) -> std::uint64_t {
+                    const auto excluded = boundary_mask[y * width + x];
+                    std::uint64_t m = 0;
+                    for (std::size_t c = 0; c < kEffective; ++c)
+                        if (!eff_blocked[c] && (excluded & (std::uint32_t{1} << (c & 31))) == 0)
+                            m |= std::uint64_t{1} << c;
+                    return m;
                 });
             for (std::size_t y = 0; y < height; ++y) {
                 for (std::size_t x = 0; x < width; ++x) {

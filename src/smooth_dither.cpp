@@ -59,6 +59,11 @@ struct Palettes {
     std::vector<std::span<const OKLab>> lab;
     std::vector<std::vector<Color3f>> lin;
     std::vector<std::uint32_t> of;  // per pixel
+    std::vector<std::uint64_t> allowed;  // per pixel, bit i: index i usable; empty: all
+
+    bool may(std::size_t p, std::uint8_t i) const {
+        return allowed.empty() || i >= 64 || (allowed[p] >> i & 1);
+    }
 
     std::uint32_t add(std::span<const OKLab> p) {
         lab.push_back(p);
@@ -68,12 +73,13 @@ struct Palettes {
         return static_cast<std::uint32_t>(lab.size() - 1);
     }
     const Color3f& colour(std::size_t p, std::uint8_t i) const { return lin[of[p]][i]; }
-    // Index of colour c in pixel p's palette, trying `hint` first; -1 if absent.
+    // Index of colour c that pixel p may use, trying `hint` first; -1 if none.
     int find(std::size_t p, Color3f c, std::uint8_t hint) const {
         const auto& l = lin[of[p]];
-        if (hint < l.size() && same_colour(l[hint], c)) return hint;
+        if (hint < l.size() && same_colour(l[hint], c) && may(p, hint)) return hint;
         for (std::size_t i = 0; i < l.size(); ++i)
-            if (same_colour(l[i], c)) return static_cast<int>(i);
+            if (same_colour(l[i], c) && may(p, static_cast<std::uint8_t>(i)))
+                return static_cast<int>(i);
         return -1;
     }
 };
@@ -201,7 +207,7 @@ public:
                     const Color3f cq = pals.colour(q, idx[q]);
                     if (same_colour(cq, cp)) continue;
                     std::uint8_t ip = idx[q], iq = idx[p];
-                    if (pals.of[p] != pals.of[q]) {
+                    if (pals.of[p] != pals.of[q] || !pals.may(p, ip) || !pals.may(q, iq)) {
                         int fp = pals.find(p, cq, idx[q]), fq = pals.find(q, cp, idx[p]);
                         if (fp < 0 || fq < 0) continue;
                         ip = static_cast<std::uint8_t>(fp);
@@ -265,42 +271,84 @@ DitherResult smooth(const Image& image, const Palettes& pals) {
     if (n == 0) return res;
     std::span<const Color3f> source = image.pixels();
 
-    // 1. Plan per pixel.
+    // 1. Plan per pixel. Returns the planned mix.
     std::vector<std::array<std::uint8_t, kCandidates>> cand(n);
     std::vector<std::array<std::uint8_t, 2>> pair(n);
     std::vector<std::uint8_t> cover(n);
+    auto plan = [&](std::size_t p,
+                    Color3f target,
+                    std::vector<std::pair<float, std::uint8_t>>& near) {
+        const auto palette_lab = pals.lab[pals.of[p]];
+        const auto& pal = pals.lin[pals.of[p]];
+        const OKLab t = color_space::linear_to_oklab(target);
+        near.clear();
+        for (std::size_t i = 0; i < palette_lab.size(); ++i)
+            if (pals.may(p, static_cast<std::uint8_t>(i)))
+                near.push_back({lab_dist(t, palette_lab[i]), static_cast<std::uint8_t>(i)});
+        if (near.empty())
+            for (std::size_t i = 0; i < palette_lab.size(); ++i)
+                near.push_back({lab_dist(t, palette_lab[i]), static_cast<std::uint8_t>(i)});
+        const std::size_t nc = std::min(kCandidates, near.size());
+        std::partial_sort(near.begin(), near.begin() + static_cast<std::ptrdiff_t>(nc), near.end());
+        auto& cs = cand[p];
+        for (std::size_t i = 0; i < kCandidates; ++i)
+            cs[i] = near[std::min(i, nc - 1)].second;
+        float best = std::numeric_limits<float>::infinity();
+        Color3f mix{};
+        for (std::size_t a = 0; a < nc; ++a)
+            for (std::size_t b = a; b < nc; ++b) {
+                const auto ia = cs[a], ib = cs[b];
+                const float spread = lab_dist(palette_lab[ia], palette_lab[ib]);
+                for (std::size_t k = 0; k <= (ia == ib ? 0 : kSteps); ++k) {
+                    const float al = static_cast<float>(k) / static_cast<float>(kSteps);
+                    const Color3f c = pal[ia] * (1 - al) + pal[ib] * al;
+                    float e = lab_dist(t, color_space::linear_to_oklab(c)) +
+                              kGrain * al * (1 - al) * spread;
+                    if (e < best) {
+                        best = e;
+                        pair[p] = {ia, ib};
+                        cover[p] = static_cast<std::uint8_t>(k);
+                        mix = c;
+                    }
+                }
+            }
+        return mix;
+    };
+    // Pixels kept off part of their palette (Strips boundaries) plan first;
+    // what their mix misses goes to the nearest free pixel on each side in
+    // the row, so a boundary column does not show as a line.
+    // Restricted: allowed less than the row allows anywhere.
+    std::vector<std::uint8_t> restricted(n, 0);
+    if (!pals.allowed.empty())
+        for (std::size_t y = 0; y < h; ++y) {
+            std::uint64_t row = 0;
+            for (std::size_t x = 0; x < w; ++x)
+                row |= pals.allowed[y * w + x];
+            for (std::size_t x = 0; x < w; ++x)
+                restricted[y * w + x] = pals.allowed[y * w + x] != row;
+        }
+    std::vector<Color3f> target(source.begin(), source.end());
     pipeline::parallel_for(h, [&](std::size_t y) {
         std::vector<std::pair<float, std::uint8_t>> near;
         for (std::size_t x = 0; x < w; ++x) {
             const std::size_t p = y * w + x;
-            const auto palette_lab = pals.lab[pals.of[p]];
-            const auto& pal = pals.lin[pals.of[p]];
-            const std::size_t pn = palette_lab.size(), nc = std::min(kCandidates, pn);
-            near.resize(pn);
-            const OKLab t = color_space::linear_to_oklab(source[p]);
-            for (std::size_t i = 0; i < pn; ++i)
-                near[i] = {lab_dist(t, palette_lab[i]), static_cast<std::uint8_t>(i)};
-            std::partial_sort(near.begin(), near.begin() + static_cast<std::ptrdiff_t>(nc),
-                              near.end());
-            auto& cs = cand[p];
-            for (std::size_t i = 0; i < kCandidates; ++i)
-                cs[i] = near[std::min(i, nc - 1)].second;
-            float best = std::numeric_limits<float>::infinity();
-            for (std::size_t a = 0; a < nc; ++a)
-                for (std::size_t b = a; b < nc; ++b) {
-                    const auto ia = cs[a], ib = cs[b];
-                    const float spread = lab_dist(palette_lab[ia], palette_lab[ib]);
-                    for (std::size_t k = 0; k <= (ia == ib ? 0 : kSteps); ++k) {
-                        const float al = static_cast<float>(k) / static_cast<float>(kSteps);
-                        OKLab m = color_space::linear_to_oklab(pal[ia] * (1 - al) + pal[ib] * al);
-                        float e = lab_dist(t, m) + kGrain * al * (1 - al) * spread;
-                        if (e < best) {
-                            best = e;
-                            pair[p] = {ia, ib};
-                            cover[p] = static_cast<std::uint8_t>(k);
-                        }
-                    }
-                }
+            if (!restricted[p]) continue;
+            const Color3f miss = source[p] - plan(p, source[p], near);
+            std::size_t l = x, r = x;
+            while (l > 0 && restricted[y * w + l])
+                --l;
+            while (r + 1 < w && restricted[y * w + r])
+                ++r;
+            const bool hl = !restricted[y * w + l], hr = !restricted[y * w + r];
+            if (hl) target[y * w + l] += miss * (hr ? 0.5f : 1.0f);
+            if (hr) target[y * w + r] += miss * (hl ? 0.5f : 1.0f);
+        }
+        for (std::size_t x = 0; x < w; ++x) {
+            const std::size_t p = y * w + x;
+            if (restricted[p]) continue;
+            Color3f& t = target[p];
+            t = {std::max(t.r, 0.0f), std::max(t.g, 0.0f), std::max(t.b, 0.0f)};
+            plan(p, t, near);
         }
     });
 
@@ -353,7 +401,8 @@ DitherResult apply_smooth(const Image& image, std::span<const OKLab> palette_lab
 
 void apply_smooth_post_pass(const Image& image,
                             std::vector<std::uint8_t>& indices,
-                            const PalettePerPixel& palette_for_pixel) {
+                            const PalettePerPixel& palette_for_pixel,
+                            const AllowedPerPixel& allowed) {
     const std::size_t w = image.width(), h = image.height();
     if (indices.size() != w * h) return;
     Palettes pals;
@@ -367,6 +416,12 @@ void apply_smooth_post_pass(const Image& image,
             if (fresh) it->second = pals.add(p);
             pals.of[y * w + x] = it->second;
         }
+    if (allowed) {
+        pals.allowed.resize(w * h);
+        for (std::size_t y = 0; y < h; ++y)
+            for (std::size_t x = 0; x < w; ++x)
+                pals.allowed[y * w + x] = allowed(x, y);
+    }
     indices = smooth(image, pals).indices;
 }
 

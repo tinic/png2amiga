@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Smooth dither on a generated gradient: less banding and a closer blurred
-tone than Floyd-Steinberg, in plain, sliced and strips modes; rejected on HAM.
+tone than Floyd-Steinberg, in plain, sliced and strips modes; on strips no
+boundary column further off than Floyd-Steinberg's; rejected on HAM.
 
 Prints key=value lines; exit status 0 on success.
 """
@@ -58,7 +59,12 @@ def metrics(source, preview):
             np.abs(a[2:, 1:-1] - 2 * a[1:-1, 1:-1] + a[:-2, 1:-1])
     ls, lo = oklab(blur(s, 2))[..., 0], oklab(blur(o, 2))[..., 0]
     band = np.maximum(d2(lo) - d2(ls), 0).mean() * 1000
-    return blur_err, band
+    # Worst column of the grey ramp (rows 120+), blurred, against the source:
+    # strip boundaries show up as single columns.
+    cs = oklab(blur(s, 1))[120:].mean(0)
+    co = oklab(blur(o, 1))[120:].mean(0)
+    column = np.linalg.norm(co - cs, axis=1)[3:-3].max() * 1000
+    return blur_err, band, column
 
 
 def main():
@@ -70,25 +76,29 @@ def main():
         tmp = Path(tmp)
         src = tmp / 'gradient.png'
         gradient(src)
-        modes = {'plain': ['--depth', '5'],
-                 'sliced': ['--depth', '4', '--sliced'],
-                 'strips': ['--depth', '4', '--strips']}
+        modes = {'plain': ['lores', '--depth', '5'],
+                 'sliced': ['lores', '--depth', '4', '--sliced'],
+                 'strips': ['lores', '--depth', '4', '--strips'],
+                 'ehb-strips': ['ehb', '--strips']}
         for name, flags in modes.items():
             result = {}
             for d in ('floyd-steinberg', 'smooth'):
                 out = tmp / f'{name}-{d}.png'
-                proc = subprocess.run([cli, str(src), '--mode', 'lores', *flags,
+                proc = subprocess.run([cli, str(src), '--mode', *flags,
                                        '--dither', d, '-o', str(out)],
                                       capture_output=True, text=True)
                 if proc.returncode:
                     print(f'error=cli {name} {d} exit {proc.returncode}: {proc.stderr.strip()}')
                     return 1
                 result[d] = metrics(src, out)
-                print(f'{name}_{d}_blur_err={result[d][0]:.4f} {name}_{d}_band={result[d][1]:.3f}')
+                print(f'{name}_{d}_blur_err={result[d][0]:.4f} {name}_{d}_band={result[d][1]:.3f} '
+                      f'{name}_{d}_column={result[d][2]:.1f}')
             if result['smooth'][1] >= result['floyd-steinberg'][1]:
                 failures.append(f'{name}: smooth bands as much as floyd-steinberg')
             if result['smooth'][0] >= result['floyd-steinberg'][0]:
                 failures.append(f'{name}: smooth tone no closer than floyd-steinberg')
+            if 'strips' in name and result['smooth'][2] > result['floyd-steinberg'][2] + 0.5:
+                failures.append(f'{name}: smooth strip boundary column worse than floyd-steinberg')
         proc = subprocess.run([cli, str(src), '--mode', 'ham6', '--dither', 'smooth',
                                '-o', str(tmp / 'ham.png')], capture_output=True, text=True)
         print(f'ham_rejected={int(proc.returncode != 0)}')

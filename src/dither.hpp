@@ -431,20 +431,28 @@ void apply_dbs_post_pass(const Image& image,
                          const PalettePerPixel& palette_for_pixel,
                          int max_sweeps = 8);
 
+// Bit i set: palette index i may be used at (x, y). Indices 64+ are
+// always allowed.
+using AllowedPerPixel = std::function<std::uint64_t(std::size_t x, std::size_t y)>;
+
 // Smooth for tiled-palette modes: replaces `indices` with a Smooth dither
 // in which each pixel indexes palette_for_pixel(x, y). Pixels whose spans
 // share data and size share a palette; neighbours on different palettes
-// only swap colours both palettes hold.
+// only swap colours both palettes hold. `allowed`, when set, keeps each
+// pixel off indices it may not use (Strips' boundary pixels).
 void apply_smooth_post_pass(const Image& image,
                             std::vector<std::uint8_t>& indices,  // out, size w*h
-                            const PalettePerPixel& palette_for_pixel);
+                            const PalettePerPixel& palette_for_pixel,
+                            const AllowedPerPixel& allowed = {});
 
-// The tiled-palette refinement for `method`: DBS or Smooth.
+// The tiled-palette refinement for `method`: DBS or Smooth. Only Smooth
+// reads `allowed`; DBS output still needs the caller's remap.
 bool has_post_pass(Method method);
 void apply_post_pass(Method method,
                      const Image& image,
                      std::vector<std::uint8_t>& indices,
-                     const PalettePerPixel& palette_for_pixel);
+                     const PalettePerPixel& palette_for_pixel,
+                     const AllowedPerPixel& allowed = {});
 
 // ---------------------------------------------------------------------------
 // diffuse_raw_buffer — single source of truth for per-pixel error-diffusion

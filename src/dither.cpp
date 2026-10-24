@@ -2835,9 +2835,10 @@ bool has_post_pass(Method method) {
 void apply_post_pass(Method method,
                      const Image& image,
                      std::vector<std::uint8_t>& indices,
-                     const PalettePerPixel& palette_for_pixel) {
+                     const PalettePerPixel& palette_for_pixel,
+                     const AllowedPerPixel& allowed) {
     if (method == Method::smooth)
-        apply_smooth_post_pass(image, indices, palette_for_pixel);
+        apply_smooth_post_pass(image, indices, palette_for_pixel, allowed);
     else
         apply_dbs_post_pass(image, indices, palette_for_pixel);
 }
