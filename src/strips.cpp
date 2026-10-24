@@ -1626,8 +1626,10 @@ static Result<ScapResult> encode_strips_indexed(
         // HVS-blurred OKLab cost. After this pass we re-render `preview`
         // from the (possibly-changed) indices so caller-visible buffers
         // stay consistent.
-        if (dither_settings.method == dither::Method::dbs) {
-            dither::apply_dbs_post_pass(
+        if (dither::has_post_pass(dither_settings.method)) {
+            dither::apply_post_pass(
+                dither_settings.method,
+
                 src,
                 indices,
                 [&](std::size_t x, std::size_t y) -> std::span<const color_space::OKLab> {
@@ -3244,8 +3246,10 @@ Result<ScapResult> encode_strips_ehb_ocs(
         // the candidate set is the 64-entry effective palette (32 base +
         // 32 half-brites). DBS picks any of the 64 indices; the half-brite
         // bit is just bit 5 of the resulting index.
-        if (dither_settings.method == dither::Method::dbs) {
-            dither::apply_dbs_post_pass(
+        if (dither::has_post_pass(dither_settings.method)) {
+            dither::apply_post_pass(
+                dither_settings.method,
+
                 src,
                 indices,
                 [&](std::size_t x, std::size_t y) -> std::span<const color_space::OKLab> {

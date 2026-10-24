@@ -1002,13 +1002,16 @@ float dither_rows(const Image& image,
             return {chosen, thr};
         });
 
-    // DBS post-pass refinement for sliced. The base picker above already
+    // DBS / Smooth post-pass for sliced. The base picker above already
     // picked a sensible per-row palette index per pixel; DBS sweeps
-    // and toggles indices to lower the HVS-blurred OKLab cost,
-    // respecting that each row has a different palette.
-    if (dither_settings.method == dither::Method::dbs) {
+    // and toggles indices to lower the HVS-blurred OKLab cost, and
+    // Smooth redithers from scratch, both respecting that each row has
+    // a different palette.
+    if (dither::has_post_pass(dither_settings.method)) {
         if (excluded_mask.empty()) {
-            dither::apply_dbs_post_pass(
+            dither::apply_post_pass(
+                dither_settings.method,
+
                 image,
                 all_indices,
                 [&](std::size_t /*x*/, std::size_t y) -> std::span<const color_space::OKLab> {
@@ -1028,7 +1031,9 @@ float dither_rows(const Image& image,
                 auto y = i / width;
                 cand_indices[i] = full_to_cand_per_row[y][all_indices[i]];
             }
-            dither::apply_dbs_post_pass(
+            dither::apply_post_pass(
+                dither_settings.method,
+
                 image,
                 cand_indices,
                 [&](std::size_t /*x*/, std::size_t y) -> std::span<const color_space::OKLab> {

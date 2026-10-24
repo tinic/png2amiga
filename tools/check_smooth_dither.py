@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """Smooth dither on a generated gradient: less banding and a closer blurred
-tone than Floyd-Steinberg, and rejected on HAM.
+tone than Floyd-Steinberg, in plain, sliced and strips modes; rejected on HAM.
 
 Prints key=value lines; exit status 0 on success.
 """
@@ -70,20 +70,25 @@ def main():
         tmp = Path(tmp)
         src = tmp / 'gradient.png'
         gradient(src)
-        result = {}
-        for d in ('floyd-steinberg', 'smooth'):
-            out = tmp / f'{d}.png'
-            proc = subprocess.run([cli, str(src), '--mode', 'lores', '--depth', '5',
-                                   '--dither', d, '-o', str(out)], capture_output=True, text=True)
-            if proc.returncode:
-                print(f'error=cli {d} exit {proc.returncode}: {proc.stderr.strip()}')
-                return 1
-            result[d] = metrics(src, out)
-            print(f'{d}_blur_err={result[d][0]:.4f} {d}_band={result[d][1]:.3f}')
-        if result['smooth'][1] >= result['floyd-steinberg'][1]:
-            failures.append('smooth bands as much as floyd-steinberg')
-        if result['smooth'][0] >= result['floyd-steinberg'][0]:
-            failures.append('smooth tone no closer than floyd-steinberg')
+        modes = {'plain': ['--depth', '5'],
+                 'sliced': ['--depth', '4', '--sliced'],
+                 'strips': ['--depth', '4', '--strips']}
+        for name, flags in modes.items():
+            result = {}
+            for d in ('floyd-steinberg', 'smooth'):
+                out = tmp / f'{name}-{d}.png'
+                proc = subprocess.run([cli, str(src), '--mode', 'lores', *flags,
+                                       '--dither', d, '-o', str(out)],
+                                      capture_output=True, text=True)
+                if proc.returncode:
+                    print(f'error=cli {name} {d} exit {proc.returncode}: {proc.stderr.strip()}')
+                    return 1
+                result[d] = metrics(src, out)
+                print(f'{name}_{d}_blur_err={result[d][0]:.4f} {name}_{d}_band={result[d][1]:.3f}')
+            if result['smooth'][1] >= result['floyd-steinberg'][1]:
+                failures.append(f'{name}: smooth bands as much as floyd-steinberg')
+            if result['smooth'][0] >= result['floyd-steinberg'][0]:
+                failures.append(f'{name}: smooth tone no closer than floyd-steinberg')
         proc = subprocess.run([cli, str(src), '--mode', 'ham6', '--dither', 'smooth',
                                '-o', str(tmp / 'ham.png')], capture_output=True, text=True)
         print(f'ham_rejected={int(proc.returncode != 0)}')

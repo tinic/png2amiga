@@ -2828,6 +2828,20 @@ DitherResult apply_dbs(const Image& image,
 // place.
 // ===========================================================================
 
+bool has_post_pass(Method method) {
+    return method == Method::dbs || method == Method::smooth;
+}
+
+void apply_post_pass(Method method,
+                     const Image& image,
+                     std::vector<std::uint8_t>& indices,
+                     const PalettePerPixel& palette_for_pixel) {
+    if (method == Method::smooth)
+        apply_smooth_post_pass(image, indices, palette_for_pixel);
+    else
+        apply_dbs_post_pass(image, indices, palette_for_pixel);
+}
+
 void apply_dbs_post_pass(const Image& image,
                          std::vector<std::uint8_t>& indices,
                          const PalettePerPixel& palette_for_pixel,

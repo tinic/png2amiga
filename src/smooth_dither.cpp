@@ -11,6 +11,9 @@
 //    pixels in four interleaved classes. Coarse kSteps only swap
 //    neighbouring pixels (coverage kept); the last level also lets a
 //    pixel take any of its 8 candidates, with a fidelity term.
+//
+// Each pixel may have its own palette (Sliced rows, Strips cells). A swap
+// across two palettes needs each colour in the other's palette.
 
 #include "dither.hpp"
 #include "color_space.hpp"
@@ -21,6 +24,7 @@
 #include <cmath>
 #include <cstdint>
 #include <limits>
+#include <map>
 #include <span>
 #include <vector>
 
@@ -45,6 +49,34 @@ float lab_dist(const OKLab& a, const OKLab& b) {
     float dL = a.L - b.L, da = a.a - b.a, db = a.b - b.b;
     return dL * dL + da * da + db * db;
 }
+
+bool same_colour(Color3f a, Color3f b) {
+    return a.r == b.r && a.g == b.g && a.b == b.b;
+}
+
+// The distinct palettes and which one each pixel uses.
+struct Palettes {
+    std::vector<std::span<const OKLab>> lab;
+    std::vector<std::vector<Color3f>> lin;
+    std::vector<std::uint32_t> of;  // per pixel
+
+    std::uint32_t add(std::span<const OKLab> p) {
+        lab.push_back(p);
+        auto& l = lin.emplace_back(p.size());
+        for (std::size_t i = 0; i < p.size(); ++i)
+            l[i] = color_space::oklab_to_linear(p[i]);
+        return static_cast<std::uint32_t>(lab.size() - 1);
+    }
+    const Color3f& colour(std::size_t p, std::uint8_t i) const { return lin[of[p]][i]; }
+    // Index of colour c in pixel p's palette, trying `hint` first; -1 if absent.
+    int find(std::size_t p, Color3f c, std::uint8_t hint) const {
+        const auto& l = lin[of[p]];
+        if (hint < l.size() && same_colour(l[hint], c)) return hint;
+        for (std::size_t i = 0; i < l.size(); ++i)
+            if (same_colour(l[i], c)) return static_cast<int>(i);
+        return -1;
+    }
+};
 
 std::vector<float> gaussian(float sigma) {
     int r = static_cast<int>(std::ceil(3 * sigma));
@@ -136,7 +168,7 @@ public:
 
     // Returns the number of accepted changes.
     std::size_t sweep(std::vector<std::uint8_t>& idx,
-                      std::span<const Color3f> pal,
+                      const Palettes& pals,
                       std::span<const Color3f> source,
                       std::span<const std::array<std::uint8_t, kCandidates>> cand,
                       std::span<const float> weight,
@@ -154,10 +186,10 @@ public:
         if (reverse) std::reverse(order.begin(), order.end());
         for (const std::size_t p : order) {
             const int px = static_cast<int>(p % w), py = static_cast<int>(p / w);
-            const Color3f cp = pal[idx[p]];
+            const Color3f cp = pals.colour(p, idx[p]);
             float best = -1e-9f;
             int best_q = -1;
-            std::uint8_t best_c = idx[p];
+            std::uint8_t best_c = idx[p], best_ip = 0, best_iq = 0;
             // Swap with a neighbour: keeps the local coverage.
             for (int dy = -1; dy <= 1; ++dy)
                 for (int dx = -1; dx <= 1; ++dx) {
@@ -166,28 +198,39 @@ public:
                     if (qx < 0 || qy < 0 || qx >= static_cast<int>(w) || qy >= static_cast<int>(h))
                         continue;
                     std::size_t q = static_cast<std::size_t>(qy) * w + static_cast<std::size_t>(qx);
-                    if (idx[q] == idx[p]) continue;
-                    Color3f dp = pal[idx[q]] - cp, dq = cp - pal[idx[q]];
+                    const Color3f cq = pals.colour(q, idx[q]);
+                    if (same_colour(cq, cp)) continue;
+                    std::uint8_t ip = idx[q], iq = idx[p];
+                    if (pals.of[p] != pals.of[q]) {
+                        int fp = pals.find(p, cq, idx[q]), fq = pals.find(q, cp, idx[p]);
+                        if (fp < 0 || fq < 0) continue;
+                        ip = static_cast<std::uint8_t>(fp);
+                        iq = static_cast<std::uint8_t>(fq);
+                    }
+                    Color3f dp = cq - cp, dq = cp - cq;
                     float e = 2 * dot(dp, cpe[p]) + 2 * dot(dq, cpe[q]) +
                               a0 * (dot(dp, dp) + dot(dq, dq)) + 2 * A(dx, dy) * dot(dp, dq);
                     e *= 0.5f * (weight[p] + weight[q]);
                     if (toggles) {
-                        auto fid = [&](std::size_t at, std::uint8_t from, std::uint8_t to) {
-                            Color3f a = pal[to] - source[at], b = pal[from] - source[at];
+                        auto fid = [&](std::size_t at, Color3f from, Color3f to) {
+                            Color3f a = to - source[at], b = from - source[at];
                             return weight[at] * kFidelity * (dot(a, a) - dot(b, b));
                         };
-                        e += fid(p, idx[p], idx[q]) + fid(q, idx[q], idx[p]);
+                        e += fid(p, cp, cq) + fid(q, cq, cp);
                     }
                     if (e < best) {
                         best = e;
                         best_q = static_cast<int>(q);
+                        best_ip = ip;
+                        best_iq = iq;
                     }
                 }
             if (toggles)
                 for (auto c : cand[p]) {
                     if (c == idx[p]) continue;
-                    Color3f d = pal[c] - cp;
-                    Color3f a = pal[c] - source[p], b = cp - source[p];
+                    const Color3f cc = pals.colour(p, c);
+                    Color3f d = cc - cp;
+                    Color3f a = cc - source[p], b = cp - source[p];
                     float e = weight[p] * (2 * dot(d, cpe[p]) + a0 * dot(d, d) +
                                            kFidelity * (dot(a, a) - dot(b, b)));
                     if (e < best) {
@@ -198,13 +241,14 @@ public:
                 }
             if (best_q >= 0) {
                 auto q = static_cast<std::size_t>(best_q);
-                Color3f d = pal[idx[q]] - cp;
+                Color3f d = pals.colour(q, idx[q]) - cp;
                 apply(p, d);
                 apply(q, d * -1.0f);
-                std::swap(idx[p], idx[q]);
+                idx[p] = best_ip;
+                idx[q] = best_iq;
                 ++changes;
             } else if (best_c != idx[p]) {
-                apply(p, pal[best_c] - cp);
+                apply(p, pals.colour(p, best_c) - cp);
                 idx[p] = best_c;
                 ++changes;
             }
@@ -213,28 +257,26 @@ public:
     }
 };
 
-}  // namespace
-
-DitherResult apply_smooth(const Image& image, std::span<const OKLab> palette_lab) {
+// Fills res.indices (indices into each pixel's palette) and total_error.
+DitherResult smooth(const Image& image, const Palettes& pals) {
     const std::size_t w = image.width(), h = image.height(), n = w * h;
-    const std::size_t pn = palette_lab.size();
     DitherResult res;
     res.indices.assign(n, 0);
-    if (pn == 0 || n == 0) return res;
-    std::vector<Color3f> pal(pn);
-    for (std::size_t i = 0; i < pn; ++i)
-        pal[i] = color_space::oklab_to_linear(palette_lab[i]);
+    if (n == 0) return res;
     std::span<const Color3f> source = image.pixels();
 
     // 1. Plan per pixel.
-    const std::size_t nc = std::min(kCandidates, pn);
     std::vector<std::array<std::uint8_t, kCandidates>> cand(n);
     std::vector<std::array<std::uint8_t, 2>> pair(n);
     std::vector<std::uint8_t> cover(n);
     pipeline::parallel_for(h, [&](std::size_t y) {
-        std::vector<std::pair<float, std::uint8_t>> near(pn);
+        std::vector<std::pair<float, std::uint8_t>> near;
         for (std::size_t x = 0; x < w; ++x) {
             const std::size_t p = y * w + x;
+            const auto palette_lab = pals.lab[pals.of[p]];
+            const auto& pal = pals.lin[pals.of[p]];
+            const std::size_t pn = palette_lab.size(), nc = std::min(kCandidates, pn);
+            near.resize(pn);
             const OKLab t = color_space::linear_to_oklab(source[p]);
             for (std::size_t i = 0; i < pn; ++i)
                 near[i] = {lab_dist(t, palette_lab[i]), static_cast<std::uint8_t>(i)};
@@ -283,18 +325,49 @@ DitherResult apply_smooth(const Image& image, std::span<const OKLab> palette_lab
     std::vector<Color3f> halftone(n);
     for (std::size_t li = 0; li < kSigmas.size(); ++li) {
         for (std::size_t i = 0; i < n; ++i)
-            halftone[i] = pal[res.indices[i]];
+            halftone[i] = pals.colour(i, res.indices[i]);
         Level level(kSigmas[li], w, h, source, halftone);
         const bool last = li + 1 == kSigmas.size();
         for (int s = 0; s < kSweeps; ++s)
-            if (level.sweep(res.indices, pal, source, cand, weight, last, s & 1) < n / 1000) break;
+            if (level.sweep(res.indices, pals, source, cand, weight, last, s & 1) < n / 1000) break;
     }
 
     float total = 0;
     for (std::size_t i = 0; i < n; ++i)
-        total += lab_dist(color_space::linear_to_oklab(source[i]), palette_lab[res.indices[i]]);
+        total += lab_dist(color_space::linear_to_oklab(source[i]),
+                          pals.lab[pals.of[i]][res.indices[i]]);
     res.total_error = total;
     return res;
+}
+
+}  // namespace
+
+DitherResult apply_smooth(const Image& image, std::span<const OKLab> palette_lab) {
+    if (palette_lab.empty())
+        return {std::vector<std::uint8_t>(image.width() * image.height(), 0), 0};
+    Palettes pals;
+    pals.add(palette_lab);
+    pals.of.assign(image.width() * image.height(), 0);
+    return smooth(image, pals);
+}
+
+void apply_smooth_post_pass(const Image& image,
+                            std::vector<std::uint8_t>& indices,
+                            const PalettePerPixel& palette_for_pixel) {
+    const std::size_t w = image.width(), h = image.height();
+    if (indices.size() != w * h) return;
+    Palettes pals;
+    pals.of.resize(w * h);
+    std::map<std::pair<const OKLab*, std::size_t>, std::uint32_t> ids;
+    for (std::size_t y = 0; y < h; ++y)
+        for (std::size_t x = 0; x < w; ++x) {
+            auto p = palette_for_pixel(x, y);
+            if (p.empty()) return;
+            auto [it, fresh] = ids.try_emplace({p.data(), p.size()}, 0);
+            if (fresh) it->second = pals.add(p);
+            pals.of[y * w + x] = it->second;
+        }
+    indices = smooth(image, pals).indices;
 }
 
 }  // namespace png2amiga::dither

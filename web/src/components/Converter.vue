@@ -797,10 +797,10 @@ const YLIL_FAMILY = new Set([
 // pattern dithers) has nothing to mix and is hidden. All other ordered
 // + ED methods route through dither::diffuse_raw_buffer.
 
-// Smooth plans against one palette for the whole image: plain Amiga
-// bitplane modes only, not HAM, Sliced or Strips (api.cpp).
+// Smooth plans colour pairs from a palette: Amiga bitplane modes,
+// including Sliced and Strips, but not HAM (api.cpp).
 function smoothAvailable(): boolean {
-  return isAmigaMode(options.mode) && hamType(options.mode) === null && !options.copper && !options.scap
+  return isAmigaMode(options.mode) && hamType(options.mode) === null
 }
 const groupedDitherOptions = computed(() => {
   const ht = hamType(options.mode)

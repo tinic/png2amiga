@@ -1186,12 +1186,11 @@ static Result<PipelineResult> run_pipeline_core(const std::uint8_t* input_data,
     // on HAM6/HAM7/HAM8 (including --sliced). Web frontend's
     // HAM_INCOMPATIBLE_DITHERS list should be kept in sync.
     if (auto dm = parse_dither(options.dither); dither::needs_discrete_palette(dm)) {
-        if (dm == dither::Method::smooth &&
-            (amiga::is_ham(mode) || options.copper || options.scap)) {
+        if (dm == dither::Method::smooth && amiga::is_ham(mode)) {
             return std::unexpected{Error{
                 ErrorCode::unsupported_mode,
-                "Dither '" + options.dither + "' needs one palette for the whole image "
-                "(not HAM, sliced or strips).",
+                "Dither '" + options.dither + "' plans colour pairs from a palette "
+                "and has no equivalent on HAM modes.",
             }};
         }
         if (amiga::is_ham(mode) && dm == dither::Method::dbs) {
@@ -3335,14 +3334,15 @@ static Result<PipelineResult> run_pipeline_core(const std::uint8_t* input_data,
                         return {chosen, thr};
                     });
 
-                if (d.method == dither::Method::dbs) {
+                if (dither::has_post_pass(d.method)) {
                     if (ehb_cap_excluded.empty()) {
-                        dither::apply_dbs_post_pass(img,
-                                                    all_indices,
-                                                    [&](std::size_t /*x*/, std::size_t y)
-                                                        -> std::span<const color_space::OKLab> {
-                                                        return pal_lab_per_row[y];
-                                                    });
+                        dither::apply_post_pass(d.method,
+                                                img,
+                                                all_indices,
+                                                [&](std::size_t /*x*/, std::size_t y)
+                                                    -> std::span<const color_space::OKLab> {
+                                                    return pal_lab_per_row[y];
+                                                });
                     } else {
                         std::vector<std::vector<std::uint8_t>> full_to_cand_per_row(h);
                         for (std::size_t y = 0; y < h; ++y) {
@@ -3354,12 +3354,13 @@ static Result<PipelineResult> run_pipeline_core(const std::uint8_t* input_data,
                         std::vector<std::uint8_t> cand_indices(all_indices.size());
                         for (std::size_t i = 0; i < all_indices.size(); ++i)
                             cand_indices[i] = full_to_cand_per_row[i / w][all_indices[i]];
-                        dither::apply_dbs_post_pass(img,
-                                                    cand_indices,
-                                                    [&](std::size_t /*x*/, std::size_t y)
-                                                        -> std::span<const color_space::OKLab> {
-                                                        return pal_lab_per_row[y];
-                                                    });
+                        dither::apply_post_pass(d.method,
+                                                img,
+                                                cand_indices,
+                                                [&](std::size_t /*x*/, std::size_t y)
+                                                    -> std::span<const color_space::OKLab> {
+                                                    return pal_lab_per_row[y];
+                                                });
                         for (std::size_t i = 0; i < cand_indices.size(); ++i)
                             all_indices[i] = cand_to_full_per_row[i / w][cand_indices[i]];
                     }
@@ -3910,7 +3911,7 @@ static Result<PipelineResult> run_pipeline_core(const std::uint8_t* input_data,
                         indices[y * w + x] = cand_to_full[k];
                         return {chosen, thr};
                     });
-                if (dith.method == dither::Method::dbs) {
+                if (dither::has_post_pass(dith.method)) {
                     // DBS post-pass also needs the filtered candidate set so
                     // it doesn't swap pixels back onto reserved slots.
                     std::vector<std::uint8_t> cand_indices(indices.size());
@@ -3919,7 +3920,8 @@ static Result<PipelineResult> run_pipeline_core(const std::uint8_t* input_data,
                         full_to_cand[cand_to_full[k]] = static_cast<std::uint8_t>(k);
                     for (std::size_t i = 0; i < indices.size(); ++i)
                         cand_indices[i] = full_to_cand[indices[i]];
-                    dither::apply_dbs_post_pass(
+                    dither::apply_post_pass(
+                        dith.method,
                         *image,
                         cand_indices,
                         [&](std::size_t /*x*/, std::size_t /*y*/)

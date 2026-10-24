@@ -103,8 +103,9 @@ refinement in OKLab (CPU fallback when Metal isn't available).
   Smooth plans a colour pair and a 1/16 coverage step per pixel on a
   Bayer layout, then refines against a blurred error at three scales
   with no scan direction. Gradients show almost no banding. Smooth
-  applies to Amiga bitplane modes with one palette (not HAM, sliced
-  or strips).
+  applies to Amiga bitplane modes, including sliced and strips, but
+  not HAM. With sliced or strips, a row whose palette loses a colour
+  to a copper load can still show as a seam.
 - **Bayer** (14) — Bayer 2×2 / 4×4 / 8×8 / 3×3 / 5×5 / 6×6 / 7×7,
   non-square Bayer 4×2 and 2×4, plus the matrices Aseprite (old
   4×4), libcaca (3×3 and 6×6), Pegasus 8×8 shipped, and

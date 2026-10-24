@@ -128,7 +128,8 @@ enum class Method : unsigned char {
 
     // Smooth (smooth_dither.cpp): per-pixel pair + 1/16 coverage plan on
     // a Bayer layout, then coarse-to-fine blur refinement with no scan
-    // direction. Built for gradients: almost no banding.
+    // direction. Built for gradients: almost no banding. Sliced and
+    // strips run it through apply_smooth_post_pass.
     smooth,
 };
 
@@ -429,6 +430,21 @@ void apply_dbs_post_pass(const Image& image,
                          std::vector<std::uint8_t>& indices,  // in/out, size w*h
                          const PalettePerPixel& palette_for_pixel,
                          int max_sweeps = 8);
+
+// Smooth for tiled-palette modes: replaces `indices` with a Smooth dither
+// in which each pixel indexes palette_for_pixel(x, y). Pixels whose spans
+// share data and size share a palette; neighbours on different palettes
+// only swap colours both palettes hold.
+void apply_smooth_post_pass(const Image& image,
+                            std::vector<std::uint8_t>& indices,  // out, size w*h
+                            const PalettePerPixel& palette_for_pixel);
+
+// The tiled-palette refinement for `method`: DBS or Smooth.
+bool has_post_pass(Method method);
+void apply_post_pass(Method method,
+                     const Image& image,
+                     std::vector<std::uint8_t>& indices,
+                     const PalettePerPixel& palette_for_pixel);
 
 // ---------------------------------------------------------------------------
 // diffuse_raw_buffer — single source of truth for per-pixel error-diffusion
