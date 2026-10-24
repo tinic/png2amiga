@@ -370,6 +370,7 @@ export const DITHER_METHODS: DitherGroup[] = [
     { value: 'gilbert',         label: 'Gilbert' },
     { value: 'riemersma',       label: 'Riemersma' },
     { value: 'dbs',             label: 'DBS\n(slow)' },
+    { value: 'smooth',          label: 'Smooth' },
     { value: 'opt-checker',     label: 'Optimal\nChecker' },
     { value: 'opt-line',        label: 'Optimal\nLine' },
     { value: 'opt-line-checker',label: 'Optimal\nLine-Chk' },

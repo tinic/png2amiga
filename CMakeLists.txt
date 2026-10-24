@@ -61,6 +61,7 @@ set(PNG2AMIGA_CORE_SOURCES
     src/quantize_metal_wrap.cpp
     src/palette_search.cpp
     src/dither.cpp
+    src/smooth_dither.cpp
     src/bitplane.cpp
     src/degas.cpp
     src/ham.cpp
@@ -3122,6 +3123,9 @@ sys.exit(0 if ok else 1)")
     # --output-zones) on generated OCS-exact pixel art.
     add_test(NAME "sliced-exact-depth-zones"
         COMMAND ${Python3_EXECUTABLE} ${CMAKE_SOURCE_DIR}/tools/check_depth_zones.py
+            --cli $<TARGET_FILE:png2amiga>)
+    add_test(NAME "dither-smooth-gradient"
+        COMMAND ${PNG2AMIGA_PYTHON} ${CMAKE_SOURCE_DIR}/tools/check_smooth_dither.py
             --cli $<TARGET_FILE:png2amiga>)
 
 endif() # NOT EMSCRIPTEN

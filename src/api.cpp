@@ -1186,6 +1186,14 @@ static Result<PipelineResult> run_pipeline_core(const std::uint8_t* input_data,
     // on HAM6/HAM7/HAM8 (including --sliced). Web frontend's
     // HAM_INCOMPATIBLE_DITHERS list should be kept in sync.
     if (auto dm = parse_dither(options.dither); dither::needs_discrete_palette(dm)) {
+        if (dm == dither::Method::smooth &&
+            (amiga::is_ham(mode) || options.copper || options.scap)) {
+            return std::unexpected{Error{
+                ErrorCode::unsupported_mode,
+                "Dither '" + options.dither + "' needs one palette for the whole image "
+                "(not HAM, sliced or strips).",
+            }};
+        }
         if (amiga::is_ham(mode) && dm == dither::Method::dbs) {
             return std::unexpected{Error{
                 ErrorCode::unsupported_mode,

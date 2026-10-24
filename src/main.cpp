@@ -6039,6 +6039,7 @@ int run_main(int argc, char* argv[]) {
         cli_status("             opt-rowdot-aligned, opt-rowdot-checker, tri-tone,");
         cli_status("             knoll, yliluoma1, yliluoma, yliluoma2");
         cli_status("  DBS:       dbs (perceptual optimum, slow)");
+        cli_status("  Smooth:    smooth (pair + coverage plan, blur refinement; gradients)");
         cli_status("  Structure: structure-fs, contrast-fs, zhoufang");
         cli_status("  Bayer:     bayer2x2, bayer4x4, bayer8x8, bayer4x2, bayer2x4,");
         cli_status("             bayer3x3, bayer5x5, bayer6x6, bayer7x7,");

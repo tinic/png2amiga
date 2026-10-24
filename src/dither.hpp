@@ -125,6 +125,11 @@ enum class Method : unsigned char {
     // than ED (5-30s typical) but produces the best quality reachable
     // by any per-pixel dither — every other method approximates this.
     dbs,
+
+    // Smooth (smooth_dither.cpp): per-pixel pair + 1/16 coverage plan on
+    // a Bayer layout, then coarse-to-fine blur refinement with no scan
+    // direction. Built for gradients: almost no banding.
+    smooth,
 };
 
 // ---------------------------------------------------------------------------
@@ -156,6 +161,8 @@ struct DitherResult {
     std::vector<std::uint8_t> indices;  // per-pixel palette index
     float total_error{};                // sum of perceptual squared error
 };
+
+DitherResult apply_smooth(const Image& image, std::span<const color_space::OKLab> palette_lab);
 
 // Per-image precompute reused across many apply() calls with the same
 // source image but different palettes (pop_search's hot loop). Built

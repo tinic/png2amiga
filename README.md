@@ -90,16 +90,21 @@ k-means over all 4096 OCS colors), PNN agglomerative (Ward's
 linkage in OKLab — default for HAM AGA), and median-cut + k-means
 refinement in OKLab (CPU fallback when Metal isn't available).
 
-**Dithering**: 70 methods.
+**Dithering**: 71 methods.
 
-- **Error Diffusion** (22) — Floyd–Steinberg, Sierra-Lite, Atkinson,
-  Jarvis, Stucki, Gilbert, Riemersma, DBS (slow); palette-aware
+- **Error Diffusion** (23) — Floyd–Steinberg, Sierra-Lite, Atkinson,
+  Jarvis, Stucki, Gilbert, Riemersma, DBS (slow), Smooth; palette-aware
   planning: Optimal Checker, Optimal Line, Optimal Line-Checker,
   Optimal Row-Dot / Row-Dot Aligned / Row-Dot Checker (two colours at
   five fixed levels), Tri-tone, Knoll, Yliluoma 1 (exhaustive) and
   Yliluoma 2 (greedy + luma-weighted variant); structure-aware:
   Structure-FS,
   Contrast-FS, Zhou–Fang.
+  Smooth plans a colour pair and a 1/16 coverage step per pixel on a
+  Bayer layout, then refines against a blurred error at three scales
+  with no scan direction. Gradients show almost no banding. Smooth
+  applies to Amiga bitplane modes with one palette (not HAM, sliced
+  or strips).
 - **Bayer** (14) — Bayer 2×2 / 4×4 / 8×8 / 3×3 / 5×5 / 6×6 / 7×7,
   non-square Bayer 4×2 and 2×4, plus the matrices Aseprite (old
   4×4), libcaca (3×3 and 6×6), Pegasus 8×8 shipped, and

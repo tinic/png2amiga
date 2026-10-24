@@ -797,6 +797,11 @@ const YLIL_FAMILY = new Set([
 // pattern dithers) has nothing to mix and is hidden. All other ordered
 // + ED methods route through dither::diffuse_raw_buffer.
 
+// Smooth plans against one palette for the whole image: plain Amiga
+// bitplane modes only, not HAM, Sliced or Strips (api.cpp).
+function smoothAvailable(): boolean {
+  return isAmigaMode(options.mode) && hamType(options.mode) === null && !options.copper && !options.scap
+}
 const groupedDitherOptions = computed(() => {
   const ht = hamType(options.mode)
   const hide_nonsquare = ht !== null
@@ -818,6 +823,7 @@ const groupedDitherOptions = computed(() => {
         .filter(d => !(hide_nonsquare && isNonSquareDither(d.value)))
         .filter(d => !(hide_yliluoma && YLIL_FAMILY.has(d.value)))
         .filter(d => !(hide_dbs && d.value === 'dbs'))
+        .filter(d => d.value !== 'smooth' || smoothAvailable())
         .map(d => ({ value: d.value, label: d.label }))
     }))
     .filter(g => g.items.length > 0)

@@ -1905,7 +1905,7 @@ bool is_yliluoma(Method method) {
 }
 
 bool needs_discrete_palette(Method method) {
-    return is_yliluoma(method) || method == Method::dbs;
+    return is_yliluoma(method) || method == Method::dbs || method == Method::smooth;
 }
 
 // Per-pixel optimal-pair quantizer for the 2×2 checker variant.
@@ -3230,6 +3230,8 @@ DitherResult apply(const Image& image,
 
     case Method::dbs:
         return apply_dbs(image, pal_span, settings);
+    case Method::smooth:
+        return apply_smooth(image, pal_span);
 
     case Method::gilbert:
         return apply_gilbert(image, pal_span, settings.strength, settings.error_clamp);
@@ -4373,6 +4375,7 @@ constexpr MethodNameRow kMethodNames[] = {
     {"stucki", Method::stucki},
     {"jarvis", Method::jarvis},
     {"dbs", Method::dbs},
+    {"smooth", Method::smooth},
     {"gilbert", Method::gilbert},
     {"riemersma", Method::riemersma},
     {"structure-fs", Method::structure_fs},
