@@ -9,6 +9,8 @@
 
 #include <algorithm>
 #include <array>
+#include <atomic>
+#include <cmath>
 #include <limits>
 #include <unordered_map>
 #include <vector>
@@ -570,8 +572,51 @@ Result<Mode7EncodedFrame> encode_snes_mode7(const Image& source,
         0,  32, 8,  40, 2,  34, 10, 42, 48, 16, 56, 24, 50, 18, 58, 26, 12, 44, 4,  36, 14, 46,
         6,  38, 60, 28, 52, 20, 62, 30, 54, 22, 3,  35, 11, 43, 1,  33, 9,  41, 51, 19, 59, 27,
         49, 17, 57, 25, 15, 47, 7,  39, 13, 45, 5,  37, 63, 31, 55, 23, 61, 29, 53, 21};
+    // With dithering off, tiles snap to the nearest colour instead. A
+    // pattern dither (ordered, or a Yliluoma-style plan) rebuilds with its
+    // own threshold matrix so merged tiles keep the chosen look; the
+    // palette-aware plans use the ordered matrix their phase follows.
+    using dither::Method;
+    const Method dm = dither_settings.method;
+    const bool tile_dither = dm != Method::none && dither_settings.strength > 0.0f;
+    const bool pattern_dither = dither::is_ordered(dm) || dither::is_yliluoma(dm);
+    const Method tile_matrix = [&] {
+        switch (dm) {
+        case Method::opt_checker:
+        case Method::tri_tone:
+            return Method::checker;
+        case Method::opt_line:
+            return Method::line2;
+        case Method::opt_line_checker:
+            return Method::line_checker;
+        case Method::opt_vline:
+            return Method::vline2;
+        case Method::opt_vline_checker:
+            return Method::vline_checker;
+        case Method::opt_rowdot:
+            return Method::rowdot;
+        case Method::opt_rowdot_aligned:
+            return Method::rowdot_aligned;
+        case Method::opt_rowdot_checker:
+            return Method::rowdot_checker;
+        case Method::knoll:
+            return Method::bayer4x4;
+        case Method::yliluoma:
+        case Method::yliluoma1:
+        case Method::yliluoma2:
+            return Method::bayer8x8;
+        default:
+            return dm;
+        }
+    }();
+    auto tile_threshold = [&](std::size_t pos) {
+        if (!tile_dither) return 0.5f;
+        if (!pattern_dither) return (static_cast<float>(kBayer8[pos]) + 0.5f) / 64.0f;
+        const float t = dither::ordered_threshold(tile_matrix, pos % kTile, pos / kTile);
+        return std::clamp(0.5f + t * std::min(dither_settings.strength, 1.0f), 0.0f, 1.0f);
+    };
     auto lab_to_byte_bayer = [&](color_space::OKLab lab, std::size_t pos) -> std::uint8_t {
-        const float thr = (static_cast<float>(kBayer8[pos]) + 0.5f) / 64.0f;
+        const float thr = tile_threshold(pos);
         if (direct_color) {
             auto srgb = color_space::linear_to_srgb(color_space::oklab_to_linear(lab));
             // Per channel, between the two direct levels around the value.
@@ -595,7 +640,7 @@ Result<Mode7EncodedFrame> encode_snes_mode7(const Image& source,
             const auto& c = pal_lab[i];
             d[i] = {color_space::fma_dist_sq(lab.L - c.L, lab.a - c.a, lab.b - c.b), i};
         }
-        const std::size_t k = std::min<std::size_t>(8, pn);
+        const std::size_t k = tile_dither ? std::min<std::size_t>(8, pn) : 1;
         std::partial_sort(d.begin(),
                           d.begin() + static_cast<std::ptrdiff_t>(k),
                           d.begin() + static_cast<std::ptrdiff_t>(pn));
@@ -952,6 +997,343 @@ Result<Mode7EncodedFrame> encode_snes_mode7(const Image& source,
             }
         }
     }  // end outer loop
+
+    // ---- Step 2c: pick each cell's tile with its neighbours in view.
+    //   Lloyd scores a cell on its own 8x8 block, so two neighbours can
+    //   each be close and still join with a visible step. Re-pick every
+    //   cell among its best few tiles on the blurred error over the cell
+    //   plus a margin into its neighbours. Cells are swept in 2x2
+    //   interleaved classes; same-class cells are 8 px apart, so with a
+    //   blur radius of at most 4 they never read each other's pixels.
+    //   Each round then runs a descent on the tile bytes themselves,
+    //   scored on the same blurred error summed over every cell showing
+    //   the tile. A small per-pixel term against the source keeps both
+    //   steps from trading accuracy for colour noise the blur hides.
+    //   Both steps dither (the pick at tile scale) with an unstructured
+    //   look, so neither runs when dithering is off or a pattern dither
+    //   is chosen.
+    //   Two rounds of (3 pick sweeps, 2 descent sweeps) are the knee:
+    //   mean S2 over the test set +4.5 in 256 mode, +14.5 in Direct.
+    constexpr float nb_sigma = 1.0f;
+    constexpr std::size_t nb_k = 16;
+    constexpr int nb_sweeps = 3;
+    constexpr int nb_tile_sweeps = 2;
+    constexpr int nb_rounds = 2;
+    constexpr float nb_fid = 0.05f;
+    if (tile_dither && !pattern_dither && num_tiles > 1) {
+        const int r = std::min(4, static_cast<int>(std::ceil(2.0f * nb_sigma)));
+        std::vector<float> kern(static_cast<std::size_t>(2 * r + 1));
+        float ksum = 0;
+        for (int i = -r; i <= r; ++i)
+            ksum += kern[static_cast<std::size_t>(i + r)] = std::exp(
+                -0.5f * static_cast<float>(i * i) / (nb_sigma * nb_sigma));
+        for (auto& k : kern)
+            k /= ksum;
+        auto byte_lin = [&](std::uint8_t b) {
+            return direct_color ? console_color::direct_color_linear(b) : out.palette[b];
+        };
+        const int iw = static_cast<int>(w), ih = static_cast<int>(h);
+        auto clampx = [&](int x) {
+            return std::clamp(x, 0, iw - 1);
+        };
+        auto clampy = [&](int y) {
+            return std::clamp(y, 0, ih - 1);
+        };
+        // Blurred source in OKLab, once.
+        std::vector<color_space::OKLab> src_blur(w * h);
+        {
+            std::vector<Color3f> tmp(w * h);
+            pipeline::parallel_for(h, [&](std::size_t y) {
+                for (int x = 0; x < iw; ++x) {
+                    Color3f a{};
+                    for (int i = -r; i <= r; ++i)
+                        a = a + source[static_cast<std::size_t>(clampx(x + i)), y] *
+                                    kern[static_cast<std::size_t>(i + r)];
+                    tmp[y * w + static_cast<std::size_t>(x)] = a;
+                }
+            });
+            pipeline::parallel_for(h, [&](std::size_t y) {
+                for (std::size_t x = 0; x < w; ++x) {
+                    Color3f a{};
+                    for (int i = -r; i <= r; ++i)
+                        a = a +
+                            tmp[static_cast<std::size_t>(clampy(static_cast<int>(y) + i)) * w + x] *
+                                kern[static_cast<std::size_t>(i + r)];
+                    src_blur[y * w + x] = color_space::linear_to_oklab(a);
+                }
+            });
+        }
+        std::vector<color_space::OKLab> src_lab(w * h);
+        pipeline::parallel_for(h, [&](std::size_t y) {
+            for (std::size_t x = 0; x < w; ++x)
+                src_lab[y * w + x] = color_space::linear_to_oklab(source[x, y]);
+        });
+        std::array<color_space::OKLab, 256> byte_lab{};
+        for (std::size_t b = 0; b < 256; ++b)
+            byte_lab[b] = color_space::linear_to_oklab(byte_lin(static_cast<std::uint8_t>(b)));
+        auto fid = [&](std::uint8_t b, std::size_t q) {
+            const auto &l = byte_lab[b], &s = src_lab[q];
+            return color_space::fma_dist_sq(l.L - s.L, l.a - s.a, l.b - s.b);
+        };
+        // Current render, linear.
+        std::vector<Color3f> ren(w * h);
+        auto paint = [&](std::size_t tx, std::size_t ty, std::size_t t) {
+            for (std::size_t row = 0; row < kTile; ++row)
+                for (std::size_t col = 0; col < kTile; ++col) {
+                    auto px = tx * kTile + col, py = ty * kTile + row;
+                    if (px < w && py < h)
+                        ren[py * w + px] = byte_lin(tiles[t * 64 + row * kTile + col]);
+                }
+        };
+        for (std::size_t ty = 0; ty < tiles_y; ++ty)
+            for (std::size_t tx = 0; tx < tiles_x; ++tx)
+                paint(tx, ty, tilemap[ty * kVirtualSide + tx]);
+
+        // Candidates: the nb_k tiles nearest each cell by the Lloyd metric.
+        const std::size_t live_cells = tiles_y * tiles_x;
+        const std::size_t kc = std::min(nb_k, num_tiles);
+        std::vector<SlotPre> tile_pre(num_tiles);
+        pipeline::parallel_for(num_tiles, [&](std::size_t t) {
+            tile_pre[t] = cached.prepare(std::span<const std::uint8_t>(tiles.data() + t * 64, 64));
+        });
+        std::vector<std::uint16_t> cand(live_cells * kc);
+        pipeline::parallel_for(live_cells, [&](std::size_t lin) {
+            const std::size_t ty = lin / tiles_x, tx = lin % tiles_x;
+            std::array<std::uint8_t, 64> cp{};
+            for (std::size_t row = 0; row < kTile; ++row)
+                for (std::size_t col = 0; col < kTile; ++col) {
+                    auto px = tx * kTile + col, py = ty * kTile + row;
+                    cp[row * kTile + col] = (px < w && py < h) ? chunky[py * w + px] : 0;
+                }
+            auto pre = cached.prepare(std::span<const std::uint8_t>(cp));
+            std::vector<std::pair<float, std::uint16_t>> d(num_tiles);
+            for (std::size_t t = 0; t < num_tiles; ++t)
+                d[t] = {cached.score(pre, tile_pre[t]), static_cast<std::uint16_t>(t)};
+            std::partial_sort(d.begin(), d.begin() + static_cast<std::ptrdiff_t>(kc), d.end());
+            for (std::size_t j = 0; j < kc; ++j)
+                cand[lin * kc + j] = d[j].second;
+        });
+
+        // Cost of the cell at (tx, ty) showing tile t: blurred OKLab error
+        // over the cell plus r px around it.
+        auto cost = [&](std::size_t tx, std::size_t ty, std::size_t t) {
+            const int cx0 = static_cast<int>(tx * kTile), cy0 = static_cast<int>(ty * kTile);
+            const int x0 = std::max(0, cx0 - r),
+                      x1 = std::min(iw, cx0 + static_cast<int>(kTile) + r);
+            const int y0 = std::max(0, cy0 - r),
+                      y1 = std::min(ih, cy0 + static_cast<int>(kTile) + r);
+            auto at = [&](int x, int y) -> Color3f {
+                x = clampx(x);
+                y = clampy(y);
+                const int lx = x - cx0, ly = y - cy0;
+                if (lx >= 0 && lx < static_cast<int>(kTile) && ly >= 0 &&
+                    ly < static_cast<int>(kTile))
+                    return byte_lin(tiles[t * 64 + static_cast<std::size_t>(ly) * kTile +
+                                          static_cast<std::size_t>(lx)]);
+                return ren[static_cast<std::size_t>(y) * w + static_cast<std::size_t>(x)];
+            };
+            constexpr int kMax = 8 + 4 * 4;
+            std::array<Color3f, kMax * kMax> hb{};  // horizontal blur, rows y0-r..y1+r
+            const int rows = (y1 + r) - (y0 - r);
+            for (int yy = 0; yy < rows; ++yy)
+                for (int x = x0; x < x1; ++x) {
+                    Color3f a{};
+                    for (int i = -r; i <= r; ++i)
+                        a = a + at(x + i, y0 - r + yy) * kern[static_cast<std::size_t>(i + r)];
+                    hb[static_cast<std::size_t>(yy * kMax + (x - x0))] = a;
+                }
+            float e = 0;
+            for (int y = y0; y < y1; ++y)
+                for (int x = x0; x < x1; ++x) {
+                    Color3f a{};
+                    for (int i = -r; i <= r; ++i)
+                        a = a + hb[static_cast<std::size_t>((y - y0 + r + i) * kMax + (x - x0))] *
+                                    kern[static_cast<std::size_t>(i + r)];
+                    auto l = color_space::linear_to_oklab(a);
+                    const auto& s =
+                        src_blur[static_cast<std::size_t>(y) * w + static_cast<std::size_t>(x)];
+                    e += color_space::fma_dist_sq(l.L - s.L, l.a - s.a, l.b - s.b);
+                }
+            for (int ly = 0; ly < static_cast<int>(kTile) && cy0 + ly < ih; ++ly)
+                for (int lx = 0; lx < static_cast<int>(kTile) && cx0 + lx < iw; ++lx)
+                    e += nb_fid * fid(tiles[t * 64 + static_cast<std::size_t>(ly) * kTile +
+                                            static_cast<std::size_t>(lx)],
+                                      static_cast<std::size_t>(cy0 + ly) * w +
+                                          static_cast<std::size_t>(cx0 + lx));
+            return e;
+        };
+
+        // Blurred render, linear; kept exact under tile edits below.
+        std::vector<Color3f> ren_blur(w * h);
+        auto reblur = [&]() {
+            std::vector<Color3f> tmp(w * h);
+            pipeline::parallel_for(h, [&](std::size_t y) {
+                for (int x = 0; x < iw; ++x) {
+                    Color3f a{};
+                    for (int i = -r; i <= r; ++i)
+                        a = a + ren[y * w + static_cast<std::size_t>(clampx(x + i))] *
+                                    kern[static_cast<std::size_t>(i + r)];
+                    tmp[y * w + static_cast<std::size_t>(x)] = a;
+                }
+            });
+            pipeline::parallel_for(h, [&](std::size_t y) {
+                for (std::size_t x = 0; x < w; ++x) {
+                    Color3f a{};
+                    for (int i = -r; i <= r; ++i)
+                        a = a +
+                            tmp[static_cast<std::size_t>(clampy(static_cast<int>(y) + i)) * w + x] *
+                                kern[static_cast<std::size_t>(i + r)];
+                    ren_blur[y * w + x] = a;
+                }
+            });
+        };
+        // Weight of source pixel p in the blur at q along one axis,
+        // counting the clamped edge samples.
+        auto axis_w = [&](int q, int p, int n) {
+            float a = 0;
+            for (int i = -r; i <= r; ++i)
+                if (std::clamp(q + i, 0, n - 1) == p) a += kern[static_cast<std::size_t>(i + r)];
+            return a;
+        };
+        // Byte alternatives for the tile descent.
+        std::vector<std::vector<std::uint8_t>> alts(256);
+        for (std::size_t b = 0; b < 256; ++b) {
+            if (direct_color) {
+                const int rr = static_cast<int>(b & 7), gg = static_cast<int>((b >> 3) & 7),
+                          bb = static_cast<int>(b >> 6);
+                auto add = [&](int r2, int g2, int b2) {
+                    if (r2 < 0 || r2 > 7 || g2 < 0 || g2 > 7 || b2 < 0 || b2 > 3) return;
+                    alts[b].push_back(static_cast<std::uint8_t>((b2 << 6) | (g2 << 3) | r2));
+                };
+                for (int d : {-1, 1}) {
+                    add(rr + d, gg, bb);
+                    add(rr, gg + d, bb);
+                    add(rr, gg, bb + d);
+                    add(rr + d, gg + d, bb);
+                    add(rr, gg + d, bb + d);
+                    add(rr + d, gg + d, bb + d);
+                }
+            } else if (b < pal_lab.size()) {
+                std::vector<std::pair<float, std::uint8_t>> d;
+                for (std::size_t i = 0; i < pal_lab.size(); ++i) {
+                    if (i == b) continue;
+                    const auto &c = pal_lab[i], &o = pal_lab[b];
+                    d.push_back({color_space::fma_dist_sq(c.L - o.L, c.a - o.a, c.b - o.b),
+                                 static_cast<std::uint8_t>(i)});
+                }
+                const std::size_t k = std::min<std::size_t>(8, d.size());
+                std::partial_sort(d.begin(), d.begin() + static_cast<std::ptrdiff_t>(k), d.end());
+                for (std::size_t j = 0; j < k; ++j)
+                    alts[b].push_back(d[j].second);
+            }
+        }
+        auto tile_descent = [&]() {
+            reblur();
+            std::vector<std::vector<std::size_t>> users(num_tiles);
+            for (std::size_t ty = 0; ty < tiles_y; ++ty)
+                for (std::size_t tx = 0; tx < tiles_x; ++tx)
+                    users[tilemap[ty * kVirtualSide + tx]].push_back(ty * tiles_x + tx);
+            std::size_t changed = 0;
+            for (std::size_t t = 0; t < num_tiles; ++t) {
+                if (users[t].empty()) continue;
+                for (std::size_t pos = 0; pos < 64; ++pos) {
+                    const std::uint8_t cur = tiles[t * 64 + pos];
+                    const Color3f cl = byte_lin(cur);
+                    std::uint8_t best = cur;
+                    float best_d = 0;
+                    for (auto nb : alts[cur]) {
+                        const Color3f dl = byte_lin(nb) - cl;
+                        float dsum = 0;
+                        for (auto lin : users[t]) {
+                            const int px = static_cast<int>(lin % tiles_x * kTile + pos % kTile);
+                            const int py = static_cast<int>(lin / tiles_x * kTile + pos / kTile);
+                            if (px >= iw || py >= ih) continue;
+                            {
+                                const std::size_t pq = static_cast<std::size_t>(py) * w +
+                                                       static_cast<std::size_t>(px);
+                                dsum += nb_fid * (fid(nb, pq) - fid(cur, pq));
+                            }
+                            for (int qy = std::max(0, py - r); qy <= std::min(ih - 1, py + r);
+                                 ++qy) {
+                                const float wy = axis_w(qy, py, ih);
+                                for (int qx = std::max(0, px - r); qx <= std::min(iw - 1, px + r);
+                                     ++qx) {
+                                    const float k = wy * axis_w(qx, px, iw);
+                                    const std::size_t q = static_cast<std::size_t>(qy) * w +
+                                                          static_cast<std::size_t>(qx);
+                                    const auto& sl = src_blur[q];
+                                    auto o = color_space::linear_to_oklab(ren_blur[q]);
+                                    auto n = color_space::linear_to_oklab(ren_blur[q] + dl * k);
+                                    dsum += color_space::fma_dist_sq(
+                                                n.L - sl.L, n.a - sl.a, n.b - sl.b) -
+                                            color_space::fma_dist_sq(
+                                                o.L - sl.L, o.a - sl.a, o.b - sl.b);
+                                }
+                            }
+                        }
+                        if (dsum < best_d) {
+                            best_d = dsum;
+                            best = nb;
+                        }
+                    }
+                    if (best == cur) continue;
+                    const Color3f dl = byte_lin(best) - cl;
+                    tiles[t * 64 + pos] = best;
+                    ++changed;
+                    for (auto lin : users[t]) {
+                        const int px = static_cast<int>(lin % tiles_x * kTile + pos % kTile);
+                        const int py = static_cast<int>(lin / tiles_x * kTile + pos / kTile);
+                        if (px >= iw || py >= ih) continue;
+                        ren[static_cast<std::size_t>(py) * w + static_cast<std::size_t>(px)] =
+                            byte_lin(best);
+                        for (int qy = std::max(0, py - r); qy <= std::min(ih - 1, py + r); ++qy) {
+                            const float wy = axis_w(qy, py, ih);
+                            for (int qx = std::max(0, px - r); qx <= std::min(iw - 1, px + r); ++qx)
+                                ren_blur[static_cast<std::size_t>(qy) * w +
+                                         static_cast<std::size_t>(qx)] += dl *
+                                                                          (wy * axis_w(qx, px, iw));
+                        }
+                    }
+                }
+            }
+            return changed;
+        };
+
+        for (int round = 0; round < nb_rounds; ++round) {
+            for (int sweep = 0; sweep < nb_sweeps; ++sweep) {
+                std::atomic<std::size_t> moved{0};
+                for (std::size_t cls = 0; cls < 4; ++cls) {
+                    std::vector<std::size_t> cells;
+                    for (std::size_t ty = cls / 2; ty < tiles_y; ty += 2)
+                        for (std::size_t tx = cls % 2; tx < tiles_x; tx += 2)
+                            cells.push_back(ty * tiles_x + tx);
+                    pipeline::parallel_for(cells.size(), [&](std::size_t i) {
+                        const std::size_t lin = cells[i], ty = lin / tiles_x, tx = lin % tiles_x;
+                        auto& cell = tilemap[ty * kVirtualSide + tx];
+                        std::size_t best = cell;
+                        float best_e = cost(tx, ty, cell);
+                        for (std::size_t j = 0; j < kc; ++j) {
+                            const std::size_t t = cand[lin * kc + j];
+                            if (t == cell) continue;
+                            float e = cost(tx, ty, t);
+                            if (e < best_e) {
+                                best_e = e;
+                                best = t;
+                            }
+                        }
+                        if (best != cell) {
+                            cell = static_cast<std::uint8_t>(best);
+                            paint(tx, ty, best);
+                            moved.fetch_add(1, std::memory_order_relaxed);
+                        }
+                    });
+                }
+                if (moved.load() == 0) break;
+            }
+            for (int ts = 0; ts < nb_tile_sweeps; ++ts)
+                if (tile_descent() == 0) break;
+        }
+    }
     report(kStageQuant + kStagePack + kStageLloyd, "rendering preview");
 
     // ---- Step 3: build packed bytes (tilemap + tile data) AND re-render
