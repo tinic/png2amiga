@@ -64,9 +64,12 @@ Hamming-distance pair merging when content overflows. Outputs
 optional Shadow/Highlight extension. 4 palette lines × 16 BGR333,
 8×8 4bpp tiles + tilemap. SGDK `.h` / `.bin` output.
 
-**SNES Mode 7**: 256-color BGR555-palette and 2048-color Direct
+**SNES Mode 7**: 256-color BGR555-palette and 256-color Direct
 Color (BBGGGRRR) variants. Affine-transformable 8bpp BG1, ≤256
 unique 8×8 tiles via greedy distance-merging when content overflows.
+`tools/snes-mode7-viewer/build.sh` turns a frame into a LoROM `.sfc`
+for an emulator or a flash cart; set M7VOFS to -1 in your own code, or
+the frame's top row is hidden.
 
 **Game Boy Advance**: Mode 3 (240×160 16bpp BGR555 direct), Mode 4
 (240×160 8bpp + 256-color BGR555 palette), and Mode 5 (160×128 16bpp

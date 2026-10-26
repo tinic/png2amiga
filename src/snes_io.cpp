@@ -348,15 +348,12 @@ Result<Mode7EncodedFrame> encode_snes_mode7(const Image& source,
                     [&](const color_space::OKLab& target,
                         std::size_t bxp,
                         std::size_t byp) -> dither::PickResult {
-                        auto snapped = console_color::rgb332_quantize(
+                        auto byte = console_color::direct_color_byte(
                             color_space::oklab_to_linear(target));
-                        auto srgb = color_space::linear_to_srgb(snapped);
-                        int r3 = console_color::quantise_srgb_to_int(srgb.r, 3);
-                        int g3 = console_color::quantise_srgb_to_int(srgb.g, 3);
-                        int b2 = console_color::quantise_srgb_to_int(srgb.b, 2);
-                        block_byte[byp * k3T + bxp] = static_cast<std::uint8_t>((b2 << 6) |
-                                                                                (g3 << 3) | r3);
-                        return {color_space::linear_to_oklab(snapped), 0.5f};
+                        block_byte[byp * k3T + bxp] = byte;
+                        return {
+                            color_space::linear_to_oklab(console_color::direct_color_linear(byte)),
+                            0.5f};
                     });
                 for (std::size_t ly = 0; ly < kTS; ++ly) {
                     for (std::size_t lx = 0; lx < kTS; ++lx) {
@@ -380,30 +377,18 @@ Result<Mode7EncodedFrame> encode_snes_mode7(const Image& source,
         for (std::size_t i = 0; i < out.palette.size(); ++i)
             pal_lab[i] = color_space::linear_to_oklab(out.palette[i]);
     }
-    // Decode BBGGGRRR pixel byte to linear RGB using the SAME bit-
-    // replication path that rgb332_quantize uses to encode it. Plain
-    // division (r3/7, g3/7, b2/3) drifts from the quantiser by ~2 sRGB
-    // units per channel and is what made the dither distance metric
-    // disagree with the actual displayed color.
-    // Direct-color byte (BBGGGRRR) → OKLab cache. Only 256 possible
+    // Direct-color byte (BBGGGRRR) → OKLab cache, decoded the way the
+    // hardware shows it (console_color::direct_color_linear), the same
+    // decode the picker above scores against. Only 256 possible
     // byte values, but unpack_direct gets called per-pixel-per-tile-
     // pair inside distance_fn (called O(N²) by pack_snes_mode7_frame's
     // greedy merger). AMDuProf showed linear_to_oklab at 33 % of CPU
     // for snes-mode7-direct, dominated by these per-call cbrt+pow
     // calls — the LUT collapses that to a 256-entry array load.
     std::array<color_space::OKLab, 256> direct_lab_lut{};
-    for (int b = 0; b < 256; ++b) {
-        int r3 = (b >> 0) & 0x07;
-        int g3 = (b >> 3) & 0x07;
-        int b2 = (b >> 6) & 0x03;
-        Color3f srgb{
-            console_color::quantise_srgb_to_bits(static_cast<float>(r3) / 7.0f, 3),
-            console_color::quantise_srgb_to_bits(static_cast<float>(g3) / 7.0f, 3),
-            console_color::quantise_srgb_to_bits(static_cast<float>(b2) / 3.0f, 2),
-        };
+    for (int b = 0; b < 256; ++b)
         direct_lab_lut[static_cast<std::size_t>(b)] = color_space::linear_to_oklab(
-            color_space::srgb_to_linear(srgb));
-    }
+            console_color::direct_color_linear(static_cast<std::uint8_t>(b)));
     auto unpack_direct = [&](std::uint8_t b) -> color_space::OKLab {
         return direct_lab_lut[b];
     };
@@ -556,12 +541,7 @@ Result<Mode7EncodedFrame> encode_snes_mode7(const Image& source,
     auto lab_to_byte = [&](color_space::OKLab lab) -> std::uint8_t {
         if (direct_color) {
             // Re-quantise the OKLab mean to a BBGGGRRR byte (3+3+2).
-            auto rgb = color_space::oklab_to_linear(lab);
-            auto srgb = color_space::linear_to_srgb(rgb);
-            int r3 = console_color::quantise_srgb_to_int(srgb.r, 3);
-            int g3 = console_color::quantise_srgb_to_int(srgb.g, 3);
-            int b2 = console_color::quantise_srgb_to_int(srgb.b, 2);
-            return static_cast<std::uint8_t>((b2 << 6) | (g3 << 3) | r3);
+            return console_color::direct_color_byte(color_space::oklab_to_linear(lab));
         }
         return static_cast<std::uint8_t>(oklab_simd::argmin(lab, pal_soa).index);
     };
@@ -888,15 +868,7 @@ Result<Mode7EncodedFrame> encode_snes_mode7(const Image& source,
                     auto byte = packed->tile_bytes[tile_off + row * kTile + col];
                     Color3f rgb;
                     if (direct_color) {
-                        int r3 = (byte >> 0) & 0x07;
-                        int g3 = (byte >> 3) & 0x07;
-                        int b2 = (byte >> 6) & 0x03;
-                        Color3f srgb{
-                            console_color::quantise_srgb_to_bits(static_cast<float>(r3) / 7.0f, 3),
-                            console_color::quantise_srgb_to_bits(static_cast<float>(g3) / 7.0f, 3),
-                            console_color::quantise_srgb_to_bits(static_cast<float>(b2) / 3.0f, 2),
-                        };
-                        rgb = color_space::srgb_to_linear(srgb);
+                        rgb = console_color::direct_color_linear(byte);
                     } else {
                         rgb = out.palette[byte];
                     }

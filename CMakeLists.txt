@@ -3128,6 +3128,11 @@ sys.exit(0 if ok else 1)")
         COMMAND ${PNG2AMIGA_PYTHON} ${CMAKE_SOURCE_DIR}/tools/check_smooth_dither.py
             --cli $<TARGET_FILE:png2amiga>)
 
+    # SNES Mode 7 output decodes, by hardware rules, to the preview.
+    add_test(NAME "snes-mode7-hardware-decode"
+        COMMAND ${PNG2AMIGA_PYTHON} ${CMAKE_SOURCE_DIR}/tools/check_snes_decode.py
+            --cli $<TARGET_FILE:png2amiga>)
+
 endif() # NOT EMSCRIPTEN
 
 # Mac-only convenience target: clang-tidy + cppcheck over src/ via tools/lint.sh.
