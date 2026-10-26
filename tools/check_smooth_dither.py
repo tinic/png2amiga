@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
 """Smooth dither on a generated gradient: less banding and a closer blurred
 tone than Floyd-Steinberg, in plain, sliced and strips modes; on strips no
-boundary column further off than Floyd-Steinberg's; rejected on HAM.
+boundary column further off than Floyd-Steinberg's, for Smooth and DBS;
+rejected on HAM.
 
 Prints key=value lines; exit status 0 on success.
 """
@@ -82,7 +83,7 @@ def main():
                  'ehb-strips': ['ehb', '--strips']}
         for name, flags in modes.items():
             result = {}
-            for d in ('floyd-steinberg', 'smooth'):
+            for d in ('floyd-steinberg', 'smooth') + (('dbs',) if 'strips' in name else ()):
                 out = tmp / f'{name}-{d}.png'
                 proc = subprocess.run([cli, str(src), '--mode', *flags,
                                        '--dither', d, '-o', str(out)],
@@ -97,8 +98,9 @@ def main():
                 failures.append(f'{name}: smooth bands as much as floyd-steinberg')
             if result['smooth'][0] >= result['floyd-steinberg'][0]:
                 failures.append(f'{name}: smooth tone no closer than floyd-steinberg')
-            if 'strips' in name and result['smooth'][2] > result['floyd-steinberg'][2] + 0.5:
-                failures.append(f'{name}: smooth strip boundary column worse than floyd-steinberg')
+            for d in ('smooth', 'dbs') if 'strips' in name else ():
+                if result[d][2] > result['floyd-steinberg'][2] + 0.5:
+                    failures.append(f'{name}: {d} strip boundary column worse than floyd-steinberg')
         proc = subprocess.run([cli, str(src), '--mode', 'ham6', '--dither', 'smooth',
                                '-o', str(tmp / 'ham.png')], capture_output=True, text=True)
         print(f'ham_rejected={int(proc.returncode != 0)}')

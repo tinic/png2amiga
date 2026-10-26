@@ -2840,12 +2840,13 @@ void apply_post_pass(Method method,
     if (method == Method::smooth)
         apply_smooth_post_pass(image, indices, palette_for_pixel, allowed);
     else
-        apply_dbs_post_pass(image, indices, palette_for_pixel);
+        apply_dbs_post_pass(image, indices, palette_for_pixel, allowed);
 }
 
 void apply_dbs_post_pass(const Image& image,
                          std::vector<std::uint8_t>& indices,
                          const PalettePerPixel& palette_for_pixel,
+                         const AllowedPerPixel& allowed,
                          int max_sweeps) {
 
     auto w = image.width();
@@ -2933,6 +2934,7 @@ void apply_dbs_post_pass(const Image& image,
                 std::uint8_t cur_idx = indices[pix];
                 auto pal = palette_for_pixel(x, y);
                 auto pal_b = get_pal_blur(pal);
+                const std::uint64_t may = allowed ? allowed(x, y) : ~std::uint64_t{0};
 
                 // Current cost over the 5×5 window.
                 float current_cost = 0.0f;
@@ -2950,7 +2952,7 @@ void apply_dbs_post_pass(const Image& image,
                 std::size_t best_idx = cur_idx;
                 float best_delta = 0.0f;
                 for (std::size_t pi = 0; pi < pal_b.size(); ++pi) {
-                    if (pi == cur_idx) continue;
+                    if (pi == cur_idx || (pi < 64 && !(may >> pi & 1))) continue;
                     OKLab old_pal = pal_b[cur_idx];
                     OKLab new_pal = pal_b[pi];
                     OKLab delta_h{

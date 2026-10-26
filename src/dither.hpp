@@ -426,27 +426,29 @@ std::uint8_t pick_tri_tone_index(const png2amiga::color_space::OKLab& target,
 using PalettePerPixel =
     std::function<std::span<const png2amiga::color_space::OKLab>(std::size_t x, std::size_t y)>;
 
-void apply_dbs_post_pass(const Image& image,
-                         std::vector<std::uint8_t>& indices,  // in/out, size w*h
-                         const PalettePerPixel& palette_for_pixel,
-                         int max_sweeps = 8);
-
 // Bit i set: palette index i may be used at (x, y). Indices 64+ are
 // always allowed.
 using AllowedPerPixel = std::function<std::uint64_t(std::size_t x, std::size_t y)>;
+
+// `allowed`, when set, keeps each pixel off indices it may not use
+// (Strips' boundary pixels).
+void apply_dbs_post_pass(const Image& image,
+                         std::vector<std::uint8_t>& indices,  // in/out, size w*h
+                         const PalettePerPixel& palette_for_pixel,
+                         const AllowedPerPixel& allowed = {},
+                         int max_sweeps = 8);
 
 // Smooth for tiled-palette modes: replaces `indices` with a Smooth dither
 // in which each pixel indexes palette_for_pixel(x, y). Pixels whose spans
 // share data and size share a palette; neighbours on different palettes
 // only swap colours both palettes hold. `allowed`, when set, keeps each
-// pixel off indices it may not use (Strips' boundary pixels).
+// pixel off indices it may not use.
 void apply_smooth_post_pass(const Image& image,
                             std::vector<std::uint8_t>& indices,  // out, size w*h
                             const PalettePerPixel& palette_for_pixel,
                             const AllowedPerPixel& allowed = {});
 
-// The tiled-palette refinement for `method`: DBS or Smooth. Only Smooth
-// reads `allowed`; DBS output still needs the caller's remap.
+// The tiled-palette refinement for `method`: DBS or Smooth.
 bool has_post_pass(Method method);
 void apply_post_pass(Method method,
                      const Image& image,
