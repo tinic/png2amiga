@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.28)
-project(png2amiga VERSION 1.117.0 LANGUAGES C CXX)
+project(png2amiga VERSION 1.118.0 LANGUAGES C CXX)
 
 if(EMSCRIPTEN OR MSVC)
     set(CMAKE_CXX_STANDARD 23)
@@ -1375,6 +1375,11 @@ sys.exit(0 if got==expect else (print(f'expected {expect}, got {got}') or 1))"
         "ste-low;ste_low"
         "ste-med;ste_med"
         "ste-hi;ste_hi"
+        "tandy-160;tandy_160"
+        "tandy-320;tandy_320"
+        "tandy-640;tandy_640"
+        "cga-160;cga_160"
+        "cga-160x200;cga_160x200"
         "cga-320;cga_320"
         "cga-640;cga_640"
         "cga-composite;cga_composite"
@@ -2654,6 +2659,18 @@ sys.exit(0 if ok else 1)")
                 --cli $<TARGET_FILE:png2amiga> --mode ${_mode}
                 --input ${CMAKE_SOURCE_DIR}/examples/${_image} --min-gain ${_gain})
     endforeach()
+
+    add_test(NAME "tandy-native-roundtrip" COMMAND api_pipeline_smoke --check-tandy)
+    foreach(_tandy IN ITEMS tandy-160 tandy-320 tandy-640)
+        add_test(NAME "api-equiv-${_tandy}"
+            COMMAND ${_equiv_chk} --in ${_pal_makena_in} -- --mode ${_tandy})
+    endforeach()
+    add_test(NAME "cga-160-pixel-art"
+        COMMAND api_pipeline_smoke --check-cga160)
+    add_test(NAME "api-equiv-cga-160x200"
+        COMMAND ${_equiv_chk} --in ${_pal_makena_in} -- --mode cga-160x200)
+    add_test(NAME "api-equiv-cga-160"
+        COMMAND ${_equiv_chk} --in ${_pal_makena_in} -- --mode cga-160)
 
     add_test(NAME "api-equiv-cga-text80x100"
         COMMAND ${_equiv_chk} --in ${_pal_makena_in} -- --mode cga-text80x100)

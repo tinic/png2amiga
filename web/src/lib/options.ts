@@ -1,6 +1,6 @@
 // Type-side declarations.
 
-export type Chipset = 'ocs' | 'aga' | 'stf' | 'ste' | 'vga' | 'ega' | 'cga' | 'snes' | 'genesis' | 'c64' | 'gba' | 'zx' | 'msx1' | 'msx2' | 'thomson' | 'ted' | 'sms' | 'cpc' | 'cpcplus'
+export type Chipset = 'ocs' | 'aga' | 'stf' | 'ste' | 'vga' | 'ega' | 'cga' | 'tandy' | 'snes' | 'genesis' | 'c64' | 'gba' | 'zx' | 'msx1' | 'msx2' | 'thomson' | 'ted' | 'sms' | 'cpc' | 'cpcplus'
 
 export interface ModeOption {
   value: string
@@ -169,10 +169,16 @@ const ALL_MODES: ModeOption[] = [
   { value: 'ega-320',          label: 'EGA 320x200 (16 colors)',       chipset: 'ega' },
   { value: 'ega-640',          label: 'EGA 640x200 (16 colors)',       chipset: 'ega' },
   { value: 'ega-hi',           label: 'EGA 640x350 (16 colors)',       chipset: 'ega' },
+  // Native Tandy 1000 graphics; DOS viewers require Tandy hardware.
+  { value: 'tandy-320', label: 'Tandy 320x200 (16 colors)', chipset: 'tandy' },
+  { value: 'tandy-160', label: 'Tandy 160x200 (16 colors)', chipset: 'tandy' },
+  { value: 'tandy-640', label: 'Tandy 640x200 (4 colors)', chipset: 'tandy' },
   // IBM PC CGA.
   { value: 'cga-320',          label: 'CGA 320x200',           chipset: 'cga' },
   { value: 'cga-640',          label: 'CGA 640x200 mono',      chipset: 'cga' },
   { value: 'cga-composite-hires', label: 'CGA Comp 640',       chipset: 'cga' },
+  { value: 'cga-160', label: 'CGA 160x100 (16 colors)', chipset: 'cga' },
+  { value: 'cga-160x200', label: 'CGA 160x200 (16 colors)', chipset: 'cga' },
   { value: 'cga-text80x200',   label: 'CGA Text 80x200', chipset: 'cga' },
   { value: 'cga-text80x100',   label: 'CGA Text 80x100', chipset: 'cga' },
   { value: 'cga-text80x50',    label: 'CGA Text 80x50',  chipset: 'cga' },
@@ -229,7 +235,7 @@ const ALL_MODES: ModeOption[] = [
 
 // Chipsets whose mode list is exactly `m.chipset === chipset`.
 const FIXED_CHIPSETS = new Set<Chipset>(
-  ['stf', 'ste', 'vga', 'ega', 'cga', 'snes', 'genesis', 'c64', 'gba', 'zx', 'msx1', 'msx2', 'thomson', 'ted', 'sms', 'cpc', 'cpcplus'])
+  ['stf', 'ste', 'vga', 'ega', 'cga', 'tandy', 'snes', 'genesis', 'c64', 'gba', 'zx', 'msx1', 'msx2', 'thomson', 'ted', 'sms', 'cpc', 'cpcplus'])
 
 // Filter modes available for a given chipset
 export function modesForChipset(chipset: Chipset): ModeOption[] {
@@ -263,6 +269,7 @@ export const CHIPSETS: ChipsetOption[] = [
   { value: 'vga',     label: 'IBM PC VGA (18-bit DAC)' },
   { value: 'ega',     label: 'IBM PC EGA (6-bit IrgbIRGB)' },
   { value: 'cga',     label: 'IBM PC CGA (fixed palette)' },
+  { value: 'tandy', label: 'Tandy 1000 (RGBI)' },
   { value: 'snes',    label: 'SNES Mode 7' },
   { value: 'sms',     label: 'Sega Master System / Game Gear' },
   { value: 'genesis', label: 'Sega Genesis / Mega Drive' },
@@ -370,7 +377,6 @@ export const DITHER_METHODS: DitherGroup[] = [
     { value: 'gilbert',         label: 'Gilbert' },
     { value: 'riemersma',       label: 'Riemersma' },
     { value: 'dbs',             label: 'DBS\n(slow)' },
-    { value: 'smooth',          label: 'Smooth' },
     { value: 'opt-checker',     label: 'Optimal\nChecker' },
     { value: 'opt-line',        label: 'Optimal\nLine' },
     { value: 'opt-line-checker',label: 'Optimal\nLine-Chk' },
@@ -391,6 +397,7 @@ export const DITHER_METHODS: DitherGroup[] = [
     { value: 'structure-fs',    label: 'Structure\nFS' },
     { value: 'contrast-fs',     label: 'Contrast\nFS' },
     { value: 'zhoufang',        label: 'Zhou–\nFang' },
+    { value: 'smooth',          label: 'Smooth' },
   ]},
   { group: 'Bayer', items: [
     { value: 'bayer2x2', label: 'Bayer 2×2' },
@@ -606,6 +613,10 @@ const IBM_EXAMPLES: Example[] = [
 // photos). Per-image tuning mirrors png2c64's EXAMPLES list.
 // ostromoukhov (used by png2c64's `alien`) was removed from png2amiga
 // in v1.58, so we substitute floyd-steinberg.
+const TANDY_EXAMPLES: Example[] = IBM_EXAMPLES.map(ex => ({
+  ...ex, opts: { chipset: 'tandy' as const, mode: 'tandy-320' },
+}))
+
 const C64_EXAMPLES: Example[] = [
   { name: 'alien',    file: 'c64/alien.png',     opts: { chipset: 'c64', mode: 'c64-multicolor', gamma: 1, contrast: 1.5, dither: 'floyd-steinberg', ditherStrength: 1, matchRange: false } },
   { name: 'dog',      file: 'c64/dog.png',       opts: { chipset: 'c64', mode: 'c64-multicolor', gamma: 1.5, ditherStrength: 1 } },
@@ -629,6 +640,7 @@ const EXAMPLES_BY_CHIPSET: Record<Chipset, Example[]> = {
   vga:     IBM_EXAMPLES,
   ega:     IBM_EXAMPLES,
   cga:     IBM_EXAMPLES,
+  tandy:   TANDY_EXAMPLES,
   c64:     C64_EXAMPLES,
   snes:    AMIGA_EXAMPLES,
   genesis: AMIGA_EXAMPLES,
@@ -766,9 +778,11 @@ export function isAtariMode(mode: string): boolean {
 
 export function isVgaMode(mode: string): boolean { return mode.startsWith('vga-') }
 export function isEgaMode(mode: string): boolean { return mode.startsWith('ega-') }
+export function isCgaPixels(mode: string): boolean { return mode === 'cga-160' || mode === 'cga-160x200' }
 export function isCgaMode(mode: string): boolean { return mode.startsWith('cga-') }
+export function isTandyMode(mode: string): boolean { return mode.startsWith('tandy-') }
 export function isDosMode(mode: string): boolean {
-  return isVgaMode(mode) || isEgaMode(mode) || isCgaMode(mode)
+  return isVgaMode(mode) || isEgaMode(mode) || isCgaMode(mode) || isTandyMode(mode)
 }
 export function isSnesMode(mode: string): boolean {
   return mode.startsWith('snes-')
@@ -807,6 +821,7 @@ export function isAmigaMode(mode: string): boolean {
 // Offering the picker for the last two groups is worse than useless: it
 // either silently does nothing or fails the convert.
 const NO_CUSTOM_PALETTE = [
+  isCgaPixels, isTandyMode,
   isAtariSpectrumMode, isC64Mode, isCgaText, isSnesMode, isGenesisMode, isZxMode, isMsxMode, isThomsonMode, isTedMode,
   isSmsMode, isCpcMode, isGbaDirectMode,
 ] as const
@@ -916,6 +931,9 @@ const MODE_PAR: Record<string, number> = {
   'ega-320':    0.833,
   'ega-640':    0.417,
   'ega-hi':     0.73,
+  'tandy-160': 5 / 3, 'tandy-320': 5 / 6, 'tandy-640': 5 / 12,
+  'cga-160':    5 / 6,
+  'cga-160x200': 5 / 3,
   'cga-320':    0.833,
   'cga-640':    0.417,
   'cga-composite-hires': 0.417,
@@ -1006,6 +1024,11 @@ export function isHiresMode(mode: string): boolean {
 // nearest-neighbor scale on-canvas with whole factors. 640-wide buffers
 // already fill most screen widths so don't double them; 320-wide ones do.
 const DOS_PREVIEW_SCALE: Record<string, PreviewScale> = {
+  'tandy-160': { sx: 4, sy: 2 },
+  'tandy-320': { sx: 2, sy: 2 },
+  'tandy-640': { sx: 1, sy: 2 },
+  'cga-160':         { sx: 4, sy: 4 },
+  'cga-160x200':      { sx: 4, sy: 2 },
   'cga-320':         { sx: 2, sy: 2 },
   'ega-320':         { sx: 2, sy: 2 },
   'vga-13h':         { sx: 2, sy: 2 },
@@ -1114,6 +1137,8 @@ const FIXED_DEFAULT_DEPTH: Record<string, number> = {
   'stf-low': 4, 'ste-low': 4,
   'stf-med': 2, 'ste-med': 2,
   'stf-hi':  1, 'ste-hi':  1,
+  'tandy-160': 4, 'tandy-320': 4, 'tandy-640': 2,
+  'cga-160': 4, 'cga-160x200': 4,
   'cga-640': 1,
   'cga-320': 2, 'cga-composite-hires': 1,
   'vga-13h': 8,

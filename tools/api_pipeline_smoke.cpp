@@ -31,6 +31,8 @@
 #include "check_thomson_k7.hpp"
 #include "check_msx.hpp"
 #include "check_retro.hpp"
+#include "check_cga160.hpp"
+#include "check_tandy.hpp"
 #include "ham.hpp"
 #include "png_io.hpp"
 #include <nlohmann/json.hpp>
@@ -122,6 +124,9 @@ int check_ham_beam() {
 }  // namespace
 
 int main(int argc, char** argv) {
+    if (argc == 2 && std::strcmp(argv[1], "--check-tandy") == 0) return check_tandy();
+    if (argc == 2 && std::strcmp(argv[1], "--check-cga160") == 0)
+        return check_cga160();
     if (argc == 3 && std::strcmp(argv[1], "--check-retro") == 0)
         return check_retro(argv[2]);
     if (argc == 3 && std::strcmp(argv[1], "--check-msx") == 0)

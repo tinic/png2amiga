@@ -16,6 +16,7 @@ import {
   isAtariMode,
   isCgaMode,
   isDosMode,
+  isFixedBufferMode,
   isEgaMode,
   isEhbMode,
   isErrorDiffusion,
@@ -397,5 +398,41 @@ describe('ZX and Atari Spectrum hardware modes', () => {
     expect(isAmigaMode(mode)).toBe(false)
     expect(supportsCustomPalette(mode)).toBe(false)
     expect(supportsCellRefine({ mode, cgaTextMetric: 'blur' })).toBe(false)
+  })
+})
+
+
+describe('CGA direct pixels', () => {
+  it.each([
+    { mode: 'cga-160', par: 5 / 6, sy: 4 },
+    { mode: 'cga-160x200', par: 5 / 3, sy: 2 },
+  ])('$mode uses fixed RGBI geometry without glyph or palette controls', ({ mode, par, sy }) => {
+    expect(modesForChipset('cga').map(m => m.value)).toContain(mode)
+    expect(defaultDepth(mode)).toBe(4)
+    expect(isDosMode(mode)).toBe(true)
+    expect(isFixedBufferMode(mode)).toBe(true)
+    expect(supportsCustomPalette(mode)).toBe(false)
+    expect(supportsCellRefine({ mode, cgaTextMetric: 'blur' })).toBe(false)
+    expect(modePar(mode)).toBeCloseTo(par)
+    expect(previewScale(mode)).toEqual({ sx: 4, sy })
+  })
+})
+
+
+describe('Tandy native modes', () => {
+  it.each([
+    { mode: 'tandy-160', depth: 4, par: 5 / 3, sx: 4 },
+    { mode: 'tandy-320', depth: 4, par: 5 / 6, sx: 2 },
+    { mode: 'tandy-640', depth: 2, par: 5 / 12, sx: 1 },
+  ])('$mode exposes fixed DOS geometry and palette controls', ({ mode, depth, par, sx }) => {
+    expect(modesForChipset('tandy').map(m => m.value)).toContain(mode)
+    expect(defaultDepth(mode)).toBe(depth)
+    expect(isDosMode(mode)).toBe(true)
+    expect(isFixedBufferMode(mode)).toBe(true)
+    expect(isAmigaMode(mode)).toBe(false)
+    expect(supportsCustomPalette(mode)).toBe(false)
+    expect(supportsCellRefine({ mode, cgaTextMetric: 'blur' })).toBe(false)
+    expect(modePar(mode)).toBeCloseTo(par)
+    expect(previewScale(mode)).toEqual({ sx, sy: 2 })
   })
 })

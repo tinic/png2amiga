@@ -15,6 +15,7 @@
 #include "console_color.hpp"
 #include "cga_composite.hpp"
 #include "cga_text.hpp"
+#include "tandy.hpp"
 #include "copper.hpp"
 #include "dither.hpp"
 #include "dither_tuning.hpp"
@@ -1228,7 +1229,8 @@ void print_usage() {
         "            ham6[-hires][-lace] | ham8[-hires][-lace] | ehb[-lace]\n"
         "    Atari:  stf-low | stf-med | stf-hi | ste-low | ste-med | ste-hi\n"
         "    DOS:    vga-13h | vga-10h | vga-12h | ega-320 | ega-640 | ega-hi |\n"
-        "            cga-320 | cga-640 | cga-composite-hires |\n"
+        "            tandy-160 | tandy-320 | tandy-640 |\n"
+        "            cga-160 | cga-160x200 | cga-320 | cga-640 | cga-composite-hires |\n"
         "            cga-text80x{{200,100,50,25}}\n"
         "    SNES:   snes-mode7-256 | snes-mode7-direct\n"
         "    Genesis: genesis-h32 | genesis-h40 | genesis-h32-sh | genesis-h40-sh\n"
@@ -2127,6 +2129,13 @@ Result<Config> parse_args(int argc, char* argv[]) {
                     config.mode = amiga::Mode::ega_640;
                 else if (v == "ega-hi" || v == "ega-640x350")
                     config.mode = amiga::Mode::ega_hi;
+                else if (v == "tandy-160") config.mode = amiga::Mode::tandy_160;
+                else if (v == "tandy-320") config.mode = amiga::Mode::tandy_320;
+                else if (v == "tandy-640") config.mode = amiga::Mode::tandy_640;
+                else if (v == "cga-160x200")
+                    config.mode = amiga::Mode::cga_160x200;
+                else if (v == "cga-160" || v == "cga-160x100")
+                    config.mode = amiga::Mode::cga_160;
                 else if (v == "cga" || v == "cga-320")
                     config.mode = amiga::Mode::cga_320;
                 else if (v == "cga-640" || v == "cga-mono")
@@ -2249,7 +2258,7 @@ Result<Config> parse_args(int argc, char* argv[]) {
                 // they use their own `par` for preview aspect and shouldn't
                 // go through Amiga's integer-scale preview path.
                 bool dos_mode = amiga::is_vga(config.mode) || amiga::is_ega(config.mode) ||
-                                amiga::is_cga(config.mode);
+                                (amiga::is_cga(config.mode) || amiga::is_tandy(config.mode));
                 if (!dos_mode) config.hires = config.hires || mp.is_hires;
             } else if (arg == "--score-vs") {
                 config.score_vs = std::string(val);
@@ -2511,7 +2520,7 @@ Result<Config> parse_args(int argc, char* argv[]) {
     if (config.copper || config.scap || config.dual_playfield) {
         auto m = config.mode;
         bool non_amiga = amiga::is_atari(m) || amiga::is_vga(m) || amiga::is_ega(m) ||
-                         amiga::is_cga(m) || amiga::is_c64(m) || amiga::is_snes(m) ||
+                         (amiga::is_cga(m) || amiga::is_tandy(m)) || amiga::is_c64(m) || amiga::is_snes(m) ||
                          amiga::is_genesis(m) || amiga::is_gba(m) || (amiga::is_thomson(m) || amiga::is_msx(m) || amiga::is_retro_raster(m)) ||
                          amiga::is_ted(m) || amiga::is_sms(m) || amiga::is_cpc(m);
         if (non_amiga) {
@@ -2960,6 +2969,13 @@ std::string_view mode_to_options_string(amiga::Mode m) {
         return "ega-640";
     case amiga::Mode::ega_hi:
         return "ega-hi";
+    case amiga::Mode::tandy_160: return "tandy-160";
+    case amiga::Mode::tandy_320: return "tandy-320";
+    case amiga::Mode::tandy_640: return "tandy-640";
+    case amiga::Mode::cga_160x200:
+        return "cga-160x200";
+    case amiga::Mode::cga_160:
+        return "cga-160";
     case amiga::Mode::cga_320:
         return "cga-320";
     case amiga::Mode::cga_640:
@@ -3788,9 +3804,17 @@ std::pair<std::size_t, std::size_t> preview_display_dims(
     // 1. Backing-canvas (sx, sy) — mirrors web's previewScale().
     std::size_t sx = 2, sy = 2;
 
-    if (amiga::is_cga(mode) || amiga::is_ega(mode) || amiga::is_vga(mode) || amiga::is_c64(mode)) {
+    if ((amiga::is_cga(mode) || amiga::is_tandy(mode)) || amiga::is_ega(mode) || amiga::is_vga(mode) || amiga::is_c64(mode)) {
         // DOS / C64 lookup, mirrors DOS_PREVIEW_SCALE in options.ts.
         switch (mode) {
+        case amiga::Mode::tandy_160:
+        case amiga::Mode::cga_160x200:
+            sx = 4; sy = 2;
+            break;
+        case amiga::Mode::cga_160:
+            sx = 4; sy = 4;
+            break;
+        case amiga::Mode::tandy_320:
         case amiga::Mode::cga_320:
         case amiga::Mode::ega_320:
         case amiga::Mode::vga_13h:
@@ -3807,6 +3831,7 @@ std::pair<std::size_t, std::size_t> preview_display_dims(
             sx = 4;
             sy = 2;
             break;
+        case amiga::Mode::tandy_640:
         case amiga::Mode::cga_640:
         case amiga::Mode::cga_composite_hires:
         case amiga::Mode::ega_640:
@@ -3928,7 +3953,7 @@ std::pair<std::size_t, std::size_t> preview_display_dims(
     //    fixed-buffer when at default size — this CLI helper has no
     //    "size-override" signal so apply PAR uniformly, which matches
     //    the web's freshly-opened-mode state.
-    if (amiga::is_cga(mode) || amiga::is_ega(mode) || amiga::is_vga(mode) || amiga::is_c64(mode) ||
+    if ((amiga::is_cga(mode) || amiga::is_tandy(mode)) || amiga::is_ega(mode) || amiga::is_vga(mode) || amiga::is_c64(mode) ||
         amiga::is_atari(mode) || amiga::is_snes(mode) || amiga::is_genesis(mode) ||
         (amiga::is_thomson(mode) || amiga::is_msx(mode) || amiga::is_retro_raster(mode)) || amiga::is_ted(mode) || amiga::is_sms(mode) ||
         amiga::is_cpc(mode)) {
@@ -5958,6 +5983,9 @@ int run_main(int argc, char* argv[]) {
                 "ega-320",
                 "ega-640",
                 "ega-hi",
+                "tandy-160", "tandy-320", "tandy-640",
+                "cga-160",
+                "cga-160x200",
                 "cga-320",
                 "cga-640",
                 "cga-composite-hires",
@@ -6011,8 +6039,9 @@ int run_main(int argc, char* argv[]) {
             cli_status("  Atari:    stf-low, stf-med, stf-hi, ste-low, ste-med, ste-hi,");
             cli_status("            stf-spectrum512, ste-spectrum4096");
             cli_status("  Sinclair: zx-spectrum");
-            cli_status("  IBM PC:   vga-13h/10h/12h, ega-320/640/hi, cga-320/640/composite, "
+            cli_status("  IBM PC:   vga-13h/10h/12h, ega-320/640/hi, cga-160/160x200/320/640/composite, "
                        "cga-text80x{{200,100,50,25}}");
+            cli_status("  Tandy:    tandy-160 (16c), tandy-320 (16c), tandy-640 (4c)");
             cli_status("  SNES:     snes-mode7-256, snes-mode7-direct");
             cli_status("  Genesis:  genesis-h32, genesis-h40 (+ -sh variants)");
             cli_status("  C64:      c64-multicolor, c64-hires, c64-fli, c64-afli, c64-petscii,");
@@ -6459,7 +6488,7 @@ int run_main(int argc, char* argv[]) {
         //  but for standard modes the user's depth must be valid)
         if (!amiga::is_ham(config->mode) && config->mode != amiga::Mode::ehb &&
             !amiga::is_atari(config->mode) && !amiga::is_vga(config->mode) &&
-            !amiga::is_ega(config->mode) && !amiga::is_cga(config->mode) &&
+            !amiga::is_ega(config->mode) && !(amiga::is_cga(config->mode) || amiga::is_tandy(config->mode)) &&
             !amiga::is_snes(config->mode) && !amiga::is_genesis(config->mode) &&
             !amiga::is_c64(config->mode) && !amiga::is_gba(config->mode) &&
             !(amiga::is_thomson(config->mode) || amiga::is_msx(config->mode) || amiga::is_retro_raster(config->mode)) && !amiga::is_ted(config->mode) &&
@@ -6494,7 +6523,7 @@ int run_main(int argc, char* argv[]) {
         // DPF: see api.cpp — PF1 is zeroed in the current implementation
         // (`expand_to_dpf_pf2`), so reserves on the depth-3/4 base
         // palette ARE PF2 reserves. Allow them through.
-        if (amiga::is_cga(config->mode) || amiga::is_cga_text(config->mode))
+        if ((amiga::is_cga(config->mode) || amiga::is_tandy(config->mode)) || amiga::is_cga_text(config->mode))
             return reject("not supported in CGA modes (palette is "
                           "hardware-fixed)");
     }
@@ -7070,7 +7099,7 @@ int run_main(int argc, char* argv[]) {
         bool is_fixed_buffer =
             params.screen_height > 0 &&
             (amiga::is_atari(config->mode) || amiga::is_vga(config->mode) ||
-             amiga::is_cga(config->mode) || amiga::is_ega(config->mode) ||
+             (amiga::is_cga(config->mode) || amiga::is_tandy(config->mode)) || amiga::is_ega(config->mode) ||
              amiga::is_snes(config->mode) || amiga::is_genesis(config->mode) ||
              amiga::is_c64(config->mode) || amiga::is_gba(config->mode) ||
              (amiga::is_thomson(config->mode) || amiga::is_msx(config->mode) || amiga::is_retro_raster(config->mode)) || amiga::is_ted(config->mode) ||
@@ -7098,6 +7127,11 @@ int run_main(int argc, char* argv[]) {
         }
     }
 
+    if (amiga::is_cga_pixels(config->mode)) { target_w = 160; target_h = params.screen_height; }
+
+    if (amiga::is_tandy(config->mode) && src_w == params.screen_width && src_h == params.screen_height) {
+        target_w = src_w; target_h = src_h;
+    }
     cli_print_input(image->width(), image->height());
 
     // Determine the effective source crop region BEFORE building the mask,
@@ -7299,7 +7333,7 @@ int run_main(int argc, char* argv[]) {
     else if (config->mode == amiga::Mode::ehb)
         actual_depth = 6;
     else if (amiga::is_atari(config->mode) || amiga::is_vga(config->mode) ||
-             amiga::is_ega(config->mode) || amiga::is_cga(config->mode) ||
+             amiga::is_ega(config->mode) || (amiga::is_cga(config->mode) || amiga::is_tandy(config->mode)) ||
              amiga::is_snes(config->mode) || amiga::is_genesis(config->mode) ||
              amiga::is_c64(config->mode) || amiga::is_gba(config->mode) ||
              (amiga::is_thomson(config->mode) || amiga::is_msx(config->mode) || amiga::is_retro_raster(config->mode)) || amiga::is_ted(config->mode) ||
@@ -7327,7 +7361,7 @@ int run_main(int argc, char* argv[]) {
     bool use_dpf_early = config->dual_playfield && !amiga::is_ham(config->mode) &&
                          config->mode != amiga::Mode::ehb && !amiga::is_atari(config->mode) &&
                          !amiga::is_vga(config->mode) && !amiga::is_ega(config->mode) &&
-                         !amiga::is_cga(config->mode);
+                         !(amiga::is_cga(config->mode) || amiga::is_tandy(config->mode));
     int print_depth = static_cast<int>(actual_depth);
     if (use_dpf_early) {
         auto early_chipset = effective_chipset(*config);
@@ -7361,7 +7395,9 @@ int run_main(int argc, char* argv[]) {
     if (image->width() != target_w || image->height() != target_h) {
         // Interlace needs even height. If only 1 row short, pad instead of
         // resampling the entire image (avoids blur from bicubic).
-        if (image->width() == target_w && target_h == image->height() + 1) {
+        if (amiga::is_cga_pixels(config->mode) || amiga::is_tandy(config->mode)) {
+            image = scale::nearest(*image, target_w, target_h);
+        } else if (image->width() == target_w && target_h == image->height() + 1) {
             Image padded(target_w, target_h);
             for (std::size_t y = 0; y < image->height(); ++y)
                 for (std::size_t x = 0; x < target_w; ++x)
@@ -7418,7 +7454,7 @@ int run_main(int argc, char* argv[]) {
     // Genesis have their own (Shifter, EGA/VGA chip, VIC-II, PPU, VDP) —
     // suppress the misleading "Chipset: OCS" line for those.
     bool amiga_chipset = !amiga::is_atari(config->mode) && !amiga::is_vga(config->mode) &&
-                         !amiga::is_ega(config->mode) && !amiga::is_cga(config->mode) &&
+                         !amiga::is_ega(config->mode) && !(amiga::is_cga(config->mode) || amiga::is_tandy(config->mode)) &&
                          !amiga::is_cga_text(config->mode) && !amiga::is_c64(config->mode) &&
                          !amiga::is_snes(config->mode) && !amiga::is_genesis(config->mode) &&
                          !amiga::is_gba(config->mode) && !(amiga::is_thomson(config->mode) || amiga::is_msx(config->mode) || amiga::is_retro_raster(config->mode)) &&
@@ -7433,7 +7469,7 @@ int run_main(int argc, char* argv[]) {
     bool use_dpf_std = config->dual_playfield && !amiga::is_ham(config->mode) &&
                        config->mode != amiga::Mode::ehb && !amiga::is_atari(config->mode) &&
                        !amiga::is_vga(config->mode) && !amiga::is_ega(config->mode) &&
-                       !amiga::is_cga(config->mode);
+                       !(amiga::is_cga(config->mode) || amiga::is_tandy(config->mode));
     if (use_dpf_std) {
         config->depth = (chipset == amiga::Chipset::aga) ? 4 : 3;
     }
@@ -8508,6 +8544,61 @@ int run_main(int argc, char* argv[]) {
             };
             write_depfile(config->depfile, config->output_path, inputs);
         }
+        return exit_code::ok;
+    }
+
+    // Dedicated pixel-art mode: the API supplies fixed half-block packing.
+    if (amiga::is_cga_pixels(config->mode) || amiga::is_tandy(config->mode)) {
+        auto opts = make_api_options(*config);
+        neutralize_preprocess(opts);
+        auto enc = api::encode_state_image(*image, opts);
+        if (!enc.ok()) {
+            std::println(stderr, "CGA pixel encode: {}", enc.error_msg);
+            return exit_code::internal;
+        }
+        auto& st = enc.state;
+        cli_status("Mode:     {} ({}x{}, {} RGBI colors)",
+                   mode_to_options_string(config->mode), st.rendered.width(), st.rendered.height(), st.palette.size());
+        if (!config->output_indexed_path.empty()) {
+            std::ofstream of(config->output_indexed_path, std::ios::binary);
+            of.write(reinterpret_cast<const char*>(st.indices.data()), static_cast<std::streamsize>(st.indices.size()));
+            if (!of) return exit_code::cant_create;
+        }
+        if (!config->output_path.empty()) {
+            if (ends_with(config->output_path, ".raw") || ends_with(config->output_path, ".bin")) {
+                std::ofstream of(config->output_path, std::ios::binary);
+                auto raw = amiga::is_tandy(config->mode)
+                    ? tandy::raw_export(st.raw_frame, st.palette) : st.raw_frame;
+                of.write(reinterpret_cast<const char*>(raw.data()), static_cast<std::streamsize>(raw.size()));
+                if (!of) return exit_code::cant_create;
+            } else if (ends_with(config->output_path, ".c")) {
+                cheader_dos_c::Options copts;
+                if (!config->symbol_name.empty()) copts.symbol_name = config->symbol_name;
+                std::vector<std::uint8_t> registers;
+                if (amiga::is_tandy(config->mode)) {
+                    auto regs = tandy::palette_registers(st.palette);
+                    registers.assign(regs.begin(), regs.end());
+                }
+                auto saved = cheader_dos_c::save(config->output_path, config->mode,
+                    st.rendered.width(), st.rendered.height(), st.raw_frame, registers, copts);
+                if (!saved) {
+                    std::println(stderr, "CGA DOS viewer: {}", saved.error().message);
+                    return exit_code::cant_create;
+                }
+            } else if (ends_with(config->output_path, ".png")) {
+                auto saved = png_io::save_palettized(
+                    config->output_path, st.indices, st.palette, st.rendered.width(), st.rendered.height());
+                if (!saved) return exit_code::cant_create;
+            } else {
+                std::println(stderr, "CGA pixel modes export .png, .raw, .bin or DOS viewer .c");
+                return exit_code::usage;
+            }
+        }
+        if (!config->depfile.empty() && !config->output_path.empty()) {
+            std::array<std::string_view, 1> inputs{config->input_path};
+            write_depfile(config->depfile, config->output_path, inputs);
+        }
+        if (config->preview) show_terminal_preview(st.rendered, config->mode);
         return exit_code::ok;
     }
 
@@ -10274,7 +10365,7 @@ int run_main(int argc, char* argv[]) {
 
     if (!plain_best_done) {
         // CGA: build the fixed 4- or 2-color palette (auto-select variant if asked).
-        if (amiga::is_cga(config->mode) && !user_pal_std) {
+        if ((amiga::is_cga(config->mode) || amiga::is_tandy(config->mode)) && !user_pal_std) {
             if (config->mode == amiga::Mode::cga_composite_hires) {
                 // Real CGA mode 06: 1bpp framebuffer, bg fixed at black,
                 // fg selectable from RGBI 0..15. Pick the FG whose
@@ -10621,7 +10712,7 @@ int run_main(int argc, char* argv[]) {
         //     64-entry gamut. Refinement's snap-to-gamut collapses them to ~11
         //     effective colors and drops PSNR 3+ dB.
         //   - CGA: hardware-fixed palettes can't be reprogrammed.
-        bool skip_refine = amiga::is_chunky(config->mode) || amiga::is_cga(config->mode) ||
+        bool skip_refine = amiga::is_chunky(config->mode) || (amiga::is_cga(config->mode) || amiga::is_tandy(config->mode)) ||
                            amiga::is_ega(config->mode) || amiga::is_atari_hi(config->mode);
         if (config->refine_iterations > 0 && config->palette_file.empty() && !skip_refine &&
             reserve_count_std == 0) {
@@ -11075,7 +11166,7 @@ int run_main(int argc, char* argv[]) {
         // routes through the unified write_amiga_output helper. DOS / Atari
         // modes have per-format dispatch below (Degas .pi*, cheader_dos_c
         // 16-bit C viewers, mode-specific .raw writers).
-        bool dos_or_atari = amiga::is_atari(config->mode) || amiga::is_cga(config->mode) ||
+        bool dos_or_atari = amiga::is_atari(config->mode) || (amiga::is_cga(config->mode) || amiga::is_tandy(config->mode)) ||
                             amiga::is_ega(config->mode) || amiga::is_vga(config->mode);
         if (!dos_or_atari) {
             AmigaOutputBundle out;
@@ -11172,7 +11263,7 @@ int run_main(int argc, char* argv[]) {
             //          all DOS modes including EGA/VGA).
             // Amiga modes use the existing AmigaOS viewer.
             bool want_c16 = ends_with(config->output_path, ".c");
-            if (want_c16 && amiga::is_cga(config->mode)) {
+            if (want_c16 && (amiga::is_cga(config->mode) || amiga::is_tandy(config->mode))) {
                 auto raw = cheader_dos_c::pack_cga_banked(
                     dither_result.indices, target_w, target_h, config->mode);
                 std::uint8_t ctrl2 = static_cast<std::uint8_t>((config->cga_palette & 0x3) << 4) |
@@ -11286,7 +11377,7 @@ int run_main(int argc, char* argv[]) {
                              "text80x100, EGA 320/640/hi, VGA 13h/10h/12h.");
                 return 1;
             } else if (amiga::is_vga(config->mode) || amiga::is_ega(config->mode) ||
-                       amiga::is_cga(config->mode)) {
+                       (amiga::is_cga(config->mode) || amiga::is_tandy(config->mode))) {
                 std::println(stderr,
                              "DOS viewer output: use .c extension "
                              "(ia16-elf-gcc, 16-bit real mode).");
@@ -11333,7 +11424,7 @@ int run_main(int argc, char* argv[]) {
                     config->output_path, planes.value(), used_palette, config->mode);
             } else if (amiga::is_ega(config->mode)) {
                 save_raw_ega(config->output_path, planes.value(), used_palette);
-            } else if (amiga::is_cga(config->mode)) {
+            } else if ((amiga::is_cga(config->mode) || amiga::is_tandy(config->mode))) {
                 save_raw_cga(
                     config->output_path, dither_result.indices, target_w, target_h, config->mode);
             } else {

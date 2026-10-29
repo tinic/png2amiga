@@ -268,6 +268,11 @@ Run `./build/png2amiga --help` for the full flag reference.
 
 | Mode | Resolution | Colors | Notes |
 |------|-----------|--------|-------|
+| `cga-160` | 160×100 | 16 | Fixed half-block pixels in 80×100 text cells; preserves pixel art without glyph matching |
+| `cga-160x200` | 160×200 | 16 | Single-scanline half-block cells; preview/raw only (32 KB exceeds 16 KB CGA VRAM) |
+| `tandy-160` | 160×200 | 16 | Native Tandy mode 08h; two 8 KB banks |
+| `tandy-320` | 320×200 | 16 | Native Tandy mode 09h; four 8 KB banks |
+| `tandy-640` | 640×200 | 4 of 16 | Native Tandy mode 0Ah; adjacent low/high bitplane bytes |
 | `cga-320` | 320×200 | 4 | Fixed palettes (`--cga-palette p0-low/p0-high/p1-low/p1-high`) |
 | `cga-640` | 640×200 | 2 | Monochrome |
 | `cga-composite` | 320×200 | 16 | Reenigne NTSC chroma multiplexer; `--cga-composite-card old`/`new` |
@@ -276,6 +281,38 @@ Run `./build/png2amiga --help` for the full flag reference.
 | `vga-13h` | 320×200 | 256 | 8bpp chunky, 18-bit DAC |
 | `vga-10h` | 640×350 | 16 | 4-plane planar, 18-bit DAC |
 | `vga-12h` | 640×480 | 16 | 4-plane planar, square pixels |
+
+`cga-160` (alias `cga-160x100`) maps each pair of pixels to a fixed
+`0xDE` right-half-block character: left pixel in the background nibble,
+right pixel in the foreground nibble. A 160×100 image using the 16 CGA
+RGBI colors retains its pixels and colors, regardless of PNG palette order.
+Other colors use the selected dithering method against the fixed RGBI palette
+(or nearest-color mapping with `--dither none`); resizing uses nearest neighbor. Native PAR and size overrides do not change its fixed
+logical grid. This is an RGBI mode; the preview does not simulate composite.
+
+Export `.raw` / `.bin` for the 16000-byte character/attribute buffer, `.c`
+for the DOS viewer, or `.png` for the 160×100 logical preview. The web UI also
+provides compiled DOS `.exe` and bootable `.img` exports through the compiler
+service. The viewer uses 80×100 two-scanline cells and disables blink so all
+16 background colors are available.
+
+`cga-160x200` uses the same direct pixel/dither pipeline at twice the
+height. PNG and raw exports are available, but its 32000-byte text buffer
+exceeds standard CGA VRAM. DOS viewer/EXE/disk-image export is disabled.
+It is separate from the NTSC artifact-color mode `cga-composite-hires`.
+
+The [Tandy technical reference](https://www.manualslib.com/manual/887518/Tandy-1000.html?page=53)
+describes the two/four-bank layouts used here. Tandy modes use the standard RGBI palette, with direct pixel encoding and
+all dithering methods. Native-size RGBI artwork retains its pixels and colors;
+640×200 selects four global colors from the 16-color gamut. Resizing uses
+nearest neighbor. The RGBI preview does not simulate composite output.
+
+Tandy `.raw` / `.bin` output contains 16384 bytes of banked VRAM for 160×200,
+or 32768 bytes for 320/640×200, followed by 16 one-byte RGBI palette registers.
+The DOS `.c` viewer uses BIOS modes 08h/09h/0Ah and loads the Tandy palette
+through ports 3DAh/3DEh; EXE and bootable disk-image exports use the same source.
+These viewers require Tandy hardware: PCjr register differences and later
+Tandy Video II 640×200 16-color modes are not implemented.
 
 `--native-par` letterboxes/pillarboxes the source into the fixed DOS
 buffer; the default is to stretch-fill.
@@ -902,7 +939,8 @@ Modes:
             ham6[-hires][-lace] | ham8[-hires][-lace] | ehb[-lace]
     Atari:  stf-low | stf-med | stf-hi | ste-low | ste-med | ste-hi
     DOS:    vga-13h | vga-10h | vga-12h | ega-320 | ega-640 | ega-hi |
-            cga-320 | cga-640 | cga-composite-hires |
+            tandy-160 | tandy-320 | tandy-640 |
+            cga-160 | cga-160x200 | cga-320 | cga-640 | cga-composite-hires |
             cga-text80x{200,100,50,25}
     SNES:   snes-mode7-256 | snes-mode7-direct
     Genesis: genesis-h32 | genesis-h40 | genesis-h32-sh | genesis-h40-sh

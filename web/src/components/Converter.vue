@@ -15,7 +15,7 @@ import {
   CHIPSETS, DITHER_METHODS, ALPHA_DITHER_METHODS, isNonSquareDither,
   SLIDERS, CGA_TEXT_METRICS, CGA_TEXT_KERNELS, C64_PALETTES, C64_METRICS, c64PaletteRgb, EXAMPLES, examplesForChipset,
   defaultOptions, isHamMode, hamType, isEhbMode, isAtariMode,
-  isZxMode, isAtariSpectrumMode, isDosMode, isVgaMode, isEgaMode, isSnesMode, isSnesDirectMode, isGenesisMode, isGbaMode, isGbaDirectMode, isC64Mode, isC64CharsetMode, isMsxMode, isThomsonMode, isTedMode, isSmsMode, isCpcMode, isCgaMode, isCgaText, isTileFreeformMode, isFixedBufferMode, isAmigaMode, supportsCustomPalette, isInterlaceMode, modePar,
+  isZxMode, isAtariSpectrumMode, isDosMode, isTandyMode, isVgaMode, isEgaMode, isSnesMode, isSnesDirectMode, isGenesisMode, isGbaMode, isGbaDirectMode, isC64Mode, isC64CharsetMode, isMsxMode, isThomsonMode, isTedMode, isSmsMode, isCpcMode, isCgaMode, isCgaPixels, isCgaText, isTileFreeformMode, isFixedBufferMode, isAmigaMode, supportsCustomPalette, isInterlaceMode, modePar,
   maxDepth, defaultDepth, effectiveChipset, previewScale,
   modesForChipset,
   supportsCellRefine,
@@ -628,7 +628,7 @@ const reservablePaletteSize = computed(() => {
 // rejects OCS-snapping onto reserved colors.
 function modeHasNoReservableClut(m: string): boolean {
   const fixedOrDynamic = [isHamMode, isGenesisMode, isSnesMode, isC64Mode,
-    isMsxMode, isThomsonMode, isTedMode, isSmsMode, isCpcMode, isCgaMode, isCgaText, isGbaDirectMode]
+    isMsxMode, isThomsonMode, isTedMode, isSmsMode, isCpcMode, isCgaMode, isTandyMode, isCgaText, isGbaDirectMode]
   return fixedOrDynamic.some(p => p(m))
 }
 const reservesSupported = computed(() => !modeHasNoReservableClut(options.mode))
@@ -800,7 +800,7 @@ const YLIL_FAMILY = new Set([
 // Smooth plans colour pairs from a palette: Amiga bitplane modes,
 // including Sliced and Strips, but not HAM (api.cpp).
 function smoothAvailable(): boolean {
-  return isAmigaMode(options.mode) && hamType(options.mode) === null
+  return isCgaPixels(options.mode) || isTandyMode(options.mode) || (isAmigaMode(options.mode) && hamType(options.mode) === null)
 }
 const groupedDitherOptions = computed(() => {
   const ht = hamType(options.mode)
@@ -1062,7 +1062,7 @@ function syncNativeParToMode(mode: string, oldMode: string): void {
   const fixedNew = isFixed(mode)
   const fixedOld = isFixed(oldMode)
   if (fixedNew && !fixedOld) options.nativePar = true
-  if (!fixedNew) options.nativePar = false
+  if (!fixedNew || isCgaPixels(mode)) options.nativePar = false
 }
 
 // Methods that don't dither in HAM — auto-fallback on mode change so
@@ -1311,7 +1311,7 @@ function buildWasmOptions(): WasmOptions {
     reserves: cleanReserves.map(r => ({
       index: r.index, r: r.r, g: r.g, b: r.b,
     })),
-    ...(paletteData ? { paletteData } : {}),
+    ...(paletteData && supportsCustomPalette(options.mode) ? { paletteData } : {}),
   }
   return out
 }
@@ -1365,6 +1365,7 @@ watch(() => supportsCellRefine(options), (supported) => {
 // would leave one, so the encoder forces the lock off (matches api.cpp).
 // The user's setting comes back when the override ends.
 const color0LockForcedOff = computed(() =>
+  isTandyMode(options.mode) || isCgaPixels(options.mode) ||
   options.scap && options.mode === 'lores' && !options.dualPlayfield && options.depth === 1)
 let lockColor0BeforeForce: boolean | null = null
 watch(color0LockForcedOff, (forced) => {
@@ -2282,6 +2283,8 @@ async function downloadIFF() {
   converting.value = false
 }
 
+const viewerExtension = computed(() => isDosMode(options.mode) ? '.c' : '.cpp')
+
 async function downloadViewer() {
   if (!imageBytes.value) return
   converting.value = true
@@ -2294,7 +2297,7 @@ async function downloadViewer() {
     if (result.error) { errorMsg.value = result.error; return }
     const payload: BlobPayload | undefined = result.header ?? result.data
     if (!payload) return
-    downloadBlob(payload, stem + '.cpp', 'text/plain')
+    downloadBlob(payload, stem + viewerExtension.value, 'text/plain')
     exportCount++
     track('export', { format: 'cpp', mode: options.mode, exportCount })
   } catch (error) { errorMsg.value = errorMessage(error) }
@@ -2907,7 +2910,7 @@ async function loadExample(example: typeof EXAMPLES[number]) {
                    pillarboxing the image inside the fixed frame instead of
                    stretching. Stays visible (grayed out) for tile-freeform
                    modes when Resize is on so the layout doesn't jump. -->
-              <div v-if="isFixedBufferMode(options.mode) || isTileFreeformMode(options.mode)"
+              <div v-if="!isCgaPixels(options.mode) && (isFixedBufferMode(options.mode) || isTileFreeformMode(options.mode))"
                    class="grid align-items-center">
                 <label class="col-4 text-xs text-color-secondary font-semibold" title="Preserve source aspect ratio on fixed-buffer hardware (DOS / SNES) by letterboxing (reduce height) or pillarboxing (reduce width). Off = stretch to fill the full buffer.">Native PAR</label>
                 <div class="col-8 flex align-items-center gap-2">
@@ -3017,6 +3020,18 @@ async function loadExample(example: typeof EXAMPLES[number]) {
             </div>
           </Panel>
 
+          <p v-if="isCgaPixels(options.mode)" class="text-xs text-color-secondary">
+            Fixed 160×{{ options.mode === 'cga-160x200' ? 200 : 100 }} pixels, 16 RGBI colors. Preserves CGA pixel art with
+            nearest-neighbor resizing and no glyph matching. Dithering applies when colors need conversion.
+          </p>
+          <p v-if="options.mode === 'cga-160x200'" class="text-xs text-color-secondary">
+            Preview/raw only: 32 KB exceeds standard CGA's 16 KB VRAM. Use
+            160×100 for DOS viewer export.
+          </p>
+          <p v-if="isTandyMode(options.mode)" class="text-xs text-color-secondary">
+            Native Tandy graphics with dithering and nearest-neighbor resizing.
+            DOS exports require Tandy 1000 hardware. Preview shows RGBI output.
+          </p>
           <!-- Export Actions -->
           <div class="flex flex-column gap-2">
             <div v-if="isZxMode(options.mode)" class="flex gap-2">
@@ -3050,19 +3065,23 @@ async function loadExample(example: typeof EXAMPLES[number]) {
             <div v-if="isDosMode(options.mode)" class="flex gap-2">
               <Button label="png" icon="pi pi-download" class="flex-1" :disabled="!imageBytes || converting" @click="downloadPNG"
                 title="Download the converted image as a PNG preview file." />
-              <Button label="img" icon="pi pi-download" class="flex-1" :disabled="!imageBytes || converting" @click="compileAndDownload('dos-img')"
+              <Button label="img" icon="pi pi-download" class="flex-1" :disabled="!imageBytes || converting || options.mode === 'cga-160x200'" @click="compileAndDownload('dos-img')"
                 title="Download a bootable 720KB FAT12 floppy image (FreeDOS kernel + COMMAND.COM + the viewer on AUTOEXEC). Drop into MartyPC or write to a real floppy and it runs." />
-              <Button label="exe" icon="pi pi-download" class="flex-1" severity="secondary" :disabled="!imageBytes || converting" @click="compileAndDownload('dos-exe')"
+              <Button label="exe" icon="pi pi-download" class="flex-1" severity="secondary" :disabled="!imageBytes || converting || options.mode === 'cga-160x200'" @click="compileAndDownload('dos-exe')"
                 title="Download a real-mode 16-bit MS-DOS .exe that displays the image. Builds server-side via ia16-elf-gcc; press any key to exit." />
             </div>
             <div v-if="isDosMode(options.mode)" class="flex gap-2">
-              <Button label="c" icon="pi pi-download" class="flex-1" severity="secondary" :disabled="!imageBytes || converting" @click="downloadViewer"
+              <Button label="c" icon="pi pi-download" class="flex-1" severity="secondary" :disabled="!imageBytes || converting || options.mode === 'cga-160x200'" @click="downloadViewer"
                 title="Download the freestanding 16-bit DOS C viewer source. Build locally: ia16-elf-gcc -march=i80286 -mcmodel=small -Os -o out.exe viewer.c" />
               <Button label="raw" icon="pi pi-download" class="flex-1" severity="secondary" :disabled="!imageBytes || converting" @click="downloadRaw"
-                :title="isEgaMode(options.mode)
+                :title="isTandyMode(options.mode)
+                  ? 'Download banked Tandy VRAM followed by 16 RGBI palette register bytes (16400 bytes for 160x200; 32784 for 320/640x200).'
+                  : isEgaMode(options.mode)
                   ? 'Download raw EGA planar data: 4 bitplanes + 16-byte IrgbIRGB palette (DMA-ready for 0xA0000).'
                   : isVgaMode(options.mode)
                   ? 'Download raw VGA planar data: 4 bitplanes + 16×3-byte 6-bit DAC palette (feed to 0x3C9).'
+                  : isCgaPixels(options.mode)
+                  ? 'Download fixed 0xDE half-block characters and RGBI attributes: 16000 bytes for 160×100, 32000 bytes for 160×200.'
                   : 'Download raw CGA banked planar data (cga-320: 4-color 2bpp; cga-640: 2-color 1bpp).'" />
             </div>
             <!-- C64 export buttons: PNG preview + .prg displayer + format-specific raw. -->

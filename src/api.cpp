@@ -4,6 +4,7 @@
 #include "bitplane.hpp"
 #include "cga_composite.hpp"
 #include "cga_text.hpp"
+#include "tandy.hpp"
 #include "cheader.hpp"
 #include "cheader_dos_c.hpp"
 #include "color_space.hpp"
@@ -96,6 +97,11 @@ amiga::Mode parse_mode(const std::string& s) {
     if (s == "vga-10h") return amiga::Mode::vga_10h;
     if (s == "vga-12h") return amiga::Mode::vga_12h;
     if (s == "vga-13h") return amiga::Mode::vga_13h;
+    if (s == "tandy-160") return amiga::Mode::tandy_160;
+    if (s == "tandy-320") return amiga::Mode::tandy_320;
+    if (s == "tandy-640") return amiga::Mode::tandy_640;
+    if (s == "cga-160x200") return amiga::Mode::cga_160x200;
+    if (s == "cga-160" || s == "cga-160x100") return amiga::Mode::cga_160;
     if (s == "cga-320") return amiga::Mode::cga_320;
     if (s == "cga-640") return amiga::Mode::cga_640;
     if (s == "cga-composite" || s == "cga-composite-hires")
@@ -478,7 +484,9 @@ Result<Image> load_and_preprocess(const std::uint8_t* input_data,
     if (image.width() != target_w || image.height() != target_h) {
         // Interlace needs even height. If only 1 row short, pad instead of
         // resampling the entire image (avoids blur from bicubic).
-        if (image.width() == target_w && target_h == image.height() + 1) {
+        if ((amiga::is_cga_pixels(parse_mode(options.mode)) || amiga::is_tandy(parse_mode(options.mode)))) {
+            image = scale::nearest(image, target_w, target_h);
+        } else if (image.width() == target_w && target_h == image.height() + 1) {
             Image padded(target_w, target_h);
             for (std::size_t y = 0; y < image.height(); ++y)
                 for (std::size_t x = 0; x < target_w; ++x)
@@ -541,6 +549,11 @@ TargetDims compute_target_dims(std::size_t src_w,
     bool interlace = options.interlace || params.is_interlaced;
     if (options.interlace && !params.is_interlaced) par *= 2.0;
 
+    if (amiga::is_cga_pixels(mode)) return {160, params.screen_height};
+    // Authored native Tandy pixel art must not be rescaled for display PAR.
+    if (amiga::is_tandy(mode) && src_w == params.screen_width && src_h == params.screen_height)
+        return {src_w, src_h};
+
     bool have_w = options.width > 0;
     bool have_h = options.height > 0;
 
@@ -557,7 +570,7 @@ TargetDims compute_target_dims(std::size_t src_w,
     // encoder receives those (rounded up to 8×8 / 4×8); otherwise the
     // fixed-buf default still applies.
     bool is_fixed_buf = amiga::is_atari(mode) || amiga::is_vga(mode) || amiga::is_ega(mode) ||
-                        amiga::is_cga(mode) || amiga::is_cga_text(mode) || amiga::is_snes(mode) ||
+                        (amiga::is_cga(mode) || amiga::is_tandy(mode)) || amiga::is_cga_text(mode) || amiga::is_snes(mode) ||
                         amiga::is_genesis(mode) || amiga::is_c64(mode) || amiga::is_gba(mode) ||
                         (amiga::is_thomson(mode) || amiga::is_msx(mode) || amiga::is_retro_raster(mode)) || amiga::is_ted(mode) ||
                         amiga::is_sms(mode) || amiga::is_cpc(mode);
@@ -663,7 +676,7 @@ TargetDims compute_target_dims(std::size_t src_w,
     auto mode_h = params.screen_height;
     bool is_fixed_buffer = mode_h > 0 &&
                            (amiga::is_atari(mode) || amiga::is_vga(mode) ||
-                            amiga::is_ega(mode) || amiga::is_cga(mode) ||
+                            amiga::is_ega(mode) || (amiga::is_cga(mode) || amiga::is_tandy(mode)) ||
                             amiga::is_cga_text(mode) || amiga::is_snes(mode) ||
                             amiga::is_genesis(mode) || amiga::is_c64(mode) ||
                             amiga::is_gba(mode) || (amiga::is_thomson(mode) || amiga::is_msx(mode) || amiga::is_retro_raster(mode)) ||
@@ -964,7 +977,7 @@ Result<PlainAutoTrial> encode_plain_auto(const Image& img,
         // pre-extraction non-best path. The locked_mask flow keeps slot 0
         // (when lock_color0 is true) at pure black across iterations.
         if (refine_iterations > 0 && dith.method != dither::Method::none && reserve_count == 0 &&
-            !amiga::is_cga(mode) && !amiga::is_chunky(mode) && !amiga::is_ega(mode) &&
+            !(amiga::is_cga(mode) || amiga::is_tandy(mode)) && !amiga::is_chunky(mode) && !amiga::is_ega(mode) &&
             !amiga::is_atari_hi(mode)) {
             auto refined = quantize::refine_with_dither(
                 img,
@@ -1167,6 +1180,10 @@ static Result<PipelineResult> run_pipeline_core(const std::uint8_t* input_data,
         options.palette_diversity = 5;
     }
 
+    if (amiga::is_tandy(mode) && has_user_palette(options))
+        return std::unexpected{Error{ErrorCode::unsupported_mode,
+            "Tandy modes use the fixed RGBI gamut; custom palettes are not supported"}};
+
     if (options.cell_refine &&
         (!amiga::is_thomson_formecouleur(mode) && mode != amiga::Mode::msx1_screen2 && !amiga::is_c64(mode) && !amiga::is_ted(mode) &&
          !(amiga::is_cga_text(mode) && options.cga_text_metric == "blur"))) {
@@ -1253,7 +1270,7 @@ static Result<PipelineResult> run_pipeline_core(const std::uint8_t* input_data,
         if ((amiga::is_thomson(mode) || amiga::is_msx(mode) || amiga::is_retro_raster(mode)))
             return reject("not supported in ZX/Atari Spectrum/MSX/Thomson modes (fixed or auto-quantized palette; "
                           "or auto-quantized TO8 palette)");
-        if (amiga::is_cga(mode) || amiga::is_cga_text(mode))
+        if ((amiga::is_cga(mode) || amiga::is_tandy(mode)) || amiga::is_cga_text(mode))
             return reject("not supported in CGA modes (palette is "
                           "hardware-fixed)");
         if (amiga::is_gba_direct(mode))
@@ -1300,7 +1317,7 @@ static Result<PipelineResult> run_pipeline_core(const std::uint8_t* input_data,
     // wrongly fall into the Amiga sliced path).
     if (options.copper || options.scap || options.dual_playfield) {
         bool non_amiga = amiga::is_atari(mode) || amiga::is_vga(mode) || amiga::is_ega(mode) ||
-                         amiga::is_cga(mode) || amiga::is_c64(mode) || amiga::is_snes(mode) ||
+                         (amiga::is_cga(mode) || amiga::is_tandy(mode)) || amiga::is_c64(mode) || amiga::is_snes(mode) ||
                          amiga::is_genesis(mode) || amiga::is_gba(mode) ||
                          (amiga::is_thomson(mode) || amiga::is_msx(mode) || amiga::is_retro_raster(mode)) || amiga::is_ted(mode) ||
                          amiga::is_sms(mode) || amiga::is_cpc(mode);
@@ -1354,7 +1371,7 @@ static Result<PipelineResult> run_pipeline_core(const std::uint8_t* input_data,
     if (amiga::is_atari(mode)) depth = amiga::get_mode_params(mode).bitplane_depth;
     // DOS + SNES + Genesis + GBA modes: depth also fixed by the hardware
     // buffer (GBA mode4 = 8bpp; the direct modes don't use depth at all).
-    if (amiga::is_vga(mode) || amiga::is_ega(mode) || amiga::is_cga(mode) || amiga::is_snes(mode) ||
+    if (amiga::is_vga(mode) || amiga::is_ega(mode) || (amiga::is_cga(mode) || amiga::is_tandy(mode)) || amiga::is_snes(mode) ||
         amiga::is_genesis(mode) || amiga::is_gba(mode) || (amiga::is_thomson(mode) || amiga::is_msx(mode) || amiga::is_retro_raster(mode)) ||
         amiga::is_ted(mode) || amiga::is_sms(mode) || amiga::is_cpc(mode))
         depth = amiga::get_mode_params(mode).bitplane_depth;
@@ -1366,7 +1383,7 @@ static Result<PipelineResult> run_pipeline_core(const std::uint8_t* input_data,
     // are zeroed and emitted as part of the final 6 / 8-plane output.
     bool use_dpf = options.dual_playfield && !amiga::is_ham(mode) && mode != amiga::Mode::ehb &&
                    !amiga::is_atari(mode) && !amiga::is_vga(mode) && !amiga::is_ega(mode) &&
-                   !amiga::is_cga(mode);
+                   !(amiga::is_cga(mode) || amiga::is_tandy(mode));
     if (use_dpf) {
         auto cs = (options.chipset == "aga") ? amiga::Chipset::aga : amiga::Chipset::ocs;
         depth = (cs == amiga::Chipset::aga) ? 4 : 3;
@@ -1432,7 +1449,7 @@ static Result<PipelineResult> run_pipeline_core(const std::uint8_t* input_data,
     auto mode_h = mparams.screen_height;
     auto mode_w_fixed = mparams.screen_width;
     bool is_fixed_buffer = amiga::is_atari(mode) || amiga::is_vga(mode) || amiga::is_ega(mode) ||
-                           amiga::is_cga(mode) || amiga::is_cga_text(mode) ||
+                           (amiga::is_cga(mode) || amiga::is_tandy(mode)) || amiga::is_cga_text(mode) ||
                            amiga::is_snes(mode) || amiga::is_genesis(mode) || amiga::is_gba(mode) ||
                            (amiga::is_thomson(mode) || amiga::is_msx(mode) || amiga::is_retro_raster(mode)) || amiga::is_ted(mode) ||
                            amiga::is_sms(mode) || amiga::is_cpc(mode);
@@ -1494,6 +1511,77 @@ static Result<PipelineResult> run_pipeline_core(const std::uint8_t* input_data,
         } else {
             depth = copper::min_exact_depth(*image, max_d, chipset, options.lock_color0);
         }
+    }
+
+    // CGA direct pixels: two independent RGBI pixels per text cell.
+    // 0xDE is the ROM right-half block: BG is left, FG is right.
+    // Keep the logical grid in the result; only the DOS viewer expands it.
+    if (amiga::is_cga_pixels(mode) || amiga::is_tandy(mode)) {
+        PipelineResult result;
+        result.mode = mode;
+        const auto params = amiga::get_mode_params(mode);
+        auto width = params.screen_width;
+        auto height = params.screen_height;
+        auto count = width * height;
+        if (image->width() != width || image->height() != height)
+            return std::unexpected{Error{ErrorCode::invalid_dimensions,
+                std::format("Direct RGBI mode requires {}x{} pixels", width, height)}};
+        result.rendered = Image(width, height);
+        if (has_transparency)
+            for (std::size_t i = 0; i < count; ++i)
+                if (tmask[i]) image->pixels()[i] = {0, 0, 0};
+        // Standard RGBI swatches, including the brown correction. Other
+        // CGA converters use calibrated display colours; this pixel-art
+        // mode must round-trip the conventional indexed CGA palette.
+        if (mode == amiga::Mode::tandy_640) result.palette = tandy::four_colors(*image);
+        else for (auto rgb : tandy::rgbi)
+            result.palette.push_back(color_space::srgb_hex_to_linear(rgb));
+        std::array<color_space::OKLab, 16> lab;
+        for (std::size_t i = 0; i < result.palette.size(); ++i)
+            lab[i] = color_space::linear_to_oklab(result.palette[i]);
+        result.indices.resize(count);
+        result.raw_frame.resize(count);
+        float error = 0;
+        bool exact = true;
+        for (std::size_t i = 0; i < count; ++i) {
+            auto pixel = image->pixels()[i];
+            auto target = color_space::linear_to_oklab(pixel);
+            float best = std::numeric_limits<float>::max();
+            std::uint8_t index = 0;
+            for (std::uint8_t k = 0; k < result.palette.size(); ++k) {
+                float d = color_space::fma_dist_sq(target.L - lab[k].L,
+                                                  target.a - lab[k].a,
+                                                  target.b - lab[k].b);
+                if (d < best) { best = d; index = k; }
+            }
+            result.indices[i] = index;
+            result.rendered.pixels()[i] = result.palette[index];
+            error += best;
+            exact = exact && best < 1e-12f;
+        }
+        // Valid RGBI pixel art needs no quantization. For other images,
+        // dither on the logical pixel grid before packing half-blocks.
+        if (!exact) {
+            auto dr = dither::apply(*image, result.palette, {
+                .method = parse_dither(options.dither),
+                .strength = options.dither_strength,
+                .error_clamp = options.error_clamp,
+            });
+            result.indices = std::move(dr.indices);
+            error = dr.total_error;
+            for (std::size_t i = 0; i < count; ++i)
+                result.rendered.pixels()[i] = result.palette[result.indices[i]];
+        }
+        if (amiga::is_tandy(mode)) result.raw_frame = tandy::pack(result.indices, mode);
+        else for (std::size_t i = 0; i < count; i += 2) {
+            result.raw_frame[i] = 0xDE;
+            result.raw_frame[i + 1] = static_cast<std::uint8_t>(
+                (result.indices[i] << 4) | result.indices[i + 1]);
+        }
+        result.planes.depth = params.bitplane_depth;
+        if (amiga::is_cga_pixels(mode)) result.text_cell_height = height == 100 ? 2 : 1;
+        result.finalize_psnr(*image, error);
+        return result;
     }
 
     // ---- IBM PC DOS: glyph-matched text modes ----
@@ -5441,7 +5529,7 @@ static Result<PipelineResult> run_pipeline_core(const std::uint8_t* input_data,
     //     the same gamut entry (reduces 16 slots → ~11 effective colors)
     //     and drops PSNR by 3+ dB.
     if (options.refine_iterations > 0 && !has_user_palette(options) &&
-        dith.method != dither::Method::none && reserve_count == 0 && !amiga::is_cga(mode) &&
+        dith.method != dither::Method::none && reserve_count == 0 && !(amiga::is_cga(mode) || amiga::is_tandy(mode)) &&
         !amiga::is_chunky(mode) && !amiga::is_ega(mode) && !amiga::is_atari_hi(mode)) {
         auto refined = quantize::refine_with_dither(
             *image,
@@ -5734,6 +5822,14 @@ ConvertResult make_result(std::vector<std::uint8_t> data, const PipelineResult& 
     r.copperBytes = sb.copper_bytes;
     r.diskBytes = sb.disk_bytes;
     r.chipBytes = sb.chip_bytes;
+    if (amiga::is_cga_pixels(p.mode)) {
+        // The RGBI palette lives in hardware; the payload is text VRAM.
+        r.planeBytes = r.diskBytes = r.chipBytes = r.width * r.height;
+    }
+    if (amiga::is_tandy(p.mode)) {
+        r.planeBytes = r.chipBytes = static_cast<int>(tandy::frame_size(p.mode));
+        r.diskBytes = r.planeBytes + 16;
+    }
     r.maxMovesPerLine = max_moves;
     r.quantError = p.quant_error;
     r.psnr = p.psnr;
@@ -6156,6 +6252,9 @@ ConvertResult convert_cheader(const std::uint8_t* input_data,
     auto result = run_pipeline(input_data, input_size, options);
     if (!result) return make_error(result.error().message);
 
+    if (amiga::is_tandy(result->mode))
+        return make_error("Tandy exports indexed PNG, banked raw data, or DOS viewer C source");
+
     auto sym = options.symbol_name.empty() ? std::string{"img"} : options.symbol_name;
 
     // C64 charset: route through the existing c64::charset_header writer.
@@ -6299,7 +6398,7 @@ ConvertResult convert_viewer(const std::uint8_t* input_data,
     // ia16-elf-gcc (real-mode 8088+; no DPMI, no 32-bit code).
     // Build the mode-specific raw bytes + palette bytes, then call
     // cheader_dos_c::generate which dispatches per mode.
-    if (amiga::is_vga(result->mode) || amiga::is_ega(result->mode) || amiga::is_cga(result->mode)) {
+    if (amiga::is_vga(result->mode) || amiga::is_ega(result->mode) || (amiga::is_cga(result->mode) || amiga::is_tandy(result->mode))) {
         using amiga::Mode;
         cheader_dos_c::Options opts;
         if (!options.symbol_name.empty()) opts.symbol_name = options.symbol_name;
@@ -6320,7 +6419,11 @@ ConvertResult convert_viewer(const std::uint8_t* input_data,
             if ((mode == Mode::cga_320 || mode == Mode::cga_composite_hires) &&
                 result->cga_mode_ctrl2 != 0xFF)
                 opts.cga_mode_ctrl2 = result->cga_mode_ctrl2;
-        } else if (amiga::is_cga_text(mode)) {
+        } else if (amiga::is_tandy(mode)) {
+            raw = result->raw_frame;
+            auto regs = tandy::palette_registers(result->palette);
+            palette_bytes.assign(regs.begin(), regs.end());
+        } else if (amiga::is_cga_pixels(mode) || amiga::is_cga_text(mode)) {
             raw = result->raw_frame;  // char+attr pairs
         } else if (mode == Mode::ega_320 || mode == Mode::ega_640 || mode == Mode::ega_hi) {
             raw = result->planes.data;
@@ -6440,6 +6543,9 @@ ConvertResult convert_raw(const std::uint8_t* input_data,
     auto chipset = resolve_chipset(options.chipset, result->mode);
     bool aga = (chipset == amiga::Chipset::aga);
 
+    if (amiga::is_tandy(result->mode))
+        return make_result(tandy::raw_export(result->raw_frame, result->palette), *result);
+
     // C64 + Genesis already pack their raw bytes into raw_frame
     // verbatim during run_pipeline (c64: bitmap+screen+color RAM,
     // genesis: tile_bytes + u16-BE tilemap + u16-BE palette). Hand
@@ -6462,7 +6568,7 @@ ConvertResult convert_raw(const std::uint8_t* input_data,
     //     (6-bit per channel).
     //   EGA: 4 bitplanes + 16-byte IrgbIRGB palette.
     //   VGA planar (Mode 10h / 12h): 4 planes + 16×3-byte DAC palette.
-    if (amiga::is_cga_text(result->mode) || amiga::is_chunky(result->mode)) {
+    if (amiga::is_cga_pixels(result->mode) || amiga::is_cga_text(result->mode) || amiga::is_chunky(result->mode)) {
         std::vector<std::uint8_t> raw = std::move(result->raw_frame);
         if (amiga::is_chunky(result->mode)) {
             for (auto& c : result->palette) {
@@ -6474,9 +6580,9 @@ ConvertResult convert_raw(const std::uint8_t* input_data,
         }
         return make_result(std::move(raw), *result);
     }
-    if (amiga::is_ega(result->mode) || amiga::is_vga(result->mode) || amiga::is_cga(result->mode)) {
+    if (amiga::is_ega(result->mode) || amiga::is_vga(result->mode) || (amiga::is_cga(result->mode) || amiga::is_tandy(result->mode))) {
         std::vector<std::uint8_t> raw;
-        if (amiga::is_cga(result->mode)) {
+        if ((amiga::is_cga(result->mode) || amiga::is_tandy(result->mode))) {
             // CGA 320/640: pack indices into the banked 16 KB CGAPIC
             // frame. Palette is hardware-fixed so we emit no palette bytes.
             raw = cheader_dos_c::pack_cga_banked(

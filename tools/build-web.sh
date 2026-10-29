@@ -9,7 +9,7 @@ echo "Building WASM..."
 emcmake cmake -B build-wasm -DCMAKE_BUILD_TYPE=Release -DCMAKE_CXX_SCAN_FOR_MODULES=OFF .
 # --parallel matters more since the SIMD and scalar variants are two full
 # LTO links of the same sources.
-cmake --build build-wasm --parallel
+cmake --build build-wasm --parallel "${CMAKE_BUILD_PARALLEL_LEVEL:-4}"
 
 echo "Building web..."
 cd web

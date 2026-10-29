@@ -45,9 +45,16 @@ enum class Mode : unsigned char {
     ega_640,  // EGA 640x200, 4 bitplanes, 16 colors
     ega_hi,   // EGA 640x350, 4 bitplanes, 16 colors
 
+    // Original Tandy 1000 native graphics (BIOS 08h / 09h / 0Ah).
+    tandy_160,       // 160x200, 16 RGBI colours, two 8 KB banks
+    tandy_320,       // 320x200, 16 RGBI colours, four 8 KB banks
+    tandy_640,       // 640x200, four of 16 RGBI colours, paired bitplanes
+
     // CGA (Color Graphics Adapter) — fixed palettes, two-bank memory.
     // 320x200 2bpp (4 colors), 640x200 1bpp (2 colors). --cga-palette
     // selects which of the fixed palette variants (0/1 × low/high intensity).
+    cga_160x200,     // 160x200 direct RGBI pixels; 32 KB, preview/raw only
+    cga_160,         // 160x100 RGBI pixels: fixed half-blocks in 80x100 text cells
     cga_320,         // CGA 320x200, 4 colors from palette 0/1 × low/high
     cga_640,         // CGA 640x200, monochrome (bg + 1 fg)
     cga_composite_hires, // CGA 640x200 mode 06: 1bpp + NTSC artifact decoding (8088 MPH-style)
@@ -326,7 +333,17 @@ constexpr ModeParams get_mode_params(Mode mode) noexcept {
         return {640, 200, 4, 16, false, false, true, false, 1, 2, 0.417f};
     case Mode::ega_hi:
         return {640, 350, 4, 16, false, false, true, false, 1, 1, 0.730f};
+    case Mode::tandy_160:
+        return {160, 200, 4, 16, false, false, false, false, 4, 2, 1.6666667f};
+    case Mode::tandy_320:
+        return {320, 200, 4, 16, false, false, false, false, 2, 2, 0.8333333f};
+    case Mode::tandy_640:
+        return {640, 200, 2, 4, false, false, true, false, 1, 2, 0.4166667f};
     // CGA: same 1.2 PAR as VGA 13h. cga_320 is 2bpp packed, cga_640 is 1bpp.
+    case Mode::cga_160x200:
+        return {160, 200, 4, 16, false, false, false, false, 4, 2, 1.6666667f};
+    case Mode::cga_160:
+        return {160, 100, 4, 16, false, false, false, false, 4, 4, 0.8333333f};
     case Mode::cga_320:
         return {320, 200, 2, 4, false, false, false, false, 1, 1, 0.833f};
     case Mode::cga_640:
@@ -550,9 +567,18 @@ constexpr bool is_ega(Mode mode) noexcept {
     return mode == Mode::ega_320 || mode == Mode::ega_640 || mode == Mode::ega_hi;
 }
 
+constexpr bool is_tandy(Mode mode) noexcept {
+    return mode == Mode::tandy_160 || mode == Mode::tandy_320 || mode == Mode::tandy_640;
+}
+
+// Direct half-block pixel modes, separate from glyph matching.
+constexpr bool is_cga_pixels(Mode mode) noexcept {
+    return mode == Mode::cga_160 || mode == Mode::cga_160x200;
+}
+
 // Check if a mode is an IBM PC / DOS CGA mode
 constexpr bool is_cga(Mode mode) noexcept {
-    return mode == Mode::cga_320 || mode == Mode::cga_640 ||
+    return is_cga_pixels(mode) || mode == Mode::cga_320 || mode == Mode::cga_640 ||
            mode == Mode::cga_composite_hires || mode == Mode::cga_text80x100 ||
            mode == Mode::cga_text80x50 || mode == Mode::cga_text80x25 ||
            mode == Mode::cga_text80x200 || mode == Mode::cga_text40x200 ||
