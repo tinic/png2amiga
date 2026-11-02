@@ -4,10 +4,20 @@
 #include "ssimulacra2.hpp"
 
 #include <algorithm>
+#include <array>
 #include <atomic>
 #include <cmath>
+#include <cstddef>
+#include <cstdint>
+#include <cstdlib>
+#include <functional>
+#include <memory>
 #include <mutex>
 #include <optional>
+#include <span>
+#include <string_view>
+#include <utility>
+#include <vector>
 
 namespace png2amiga::nibnib {
 
