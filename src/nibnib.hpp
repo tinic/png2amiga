@@ -40,6 +40,7 @@ struct Encoded {
     std::vector<std::uint8_t> file;      // the complete .nibnib file
     std::array<std::uint32_t, 256> palette{};
     Image rendered;                       // decoded, linear RGB
+    float quant_error = 0;                // summed OKLab² error vs the source
 };
 
 // `image` is linear RGB; its width must be even and at least 2.

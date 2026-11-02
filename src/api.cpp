@@ -1599,7 +1599,7 @@ static Result<PipelineResult> run_pipeline_core(const std::uint8_t* input_data,
         result.interlace = false;
         result.has_transparency = has_transparency;
         result.transparency_mask = tmask;
-        result.finalize_psnr(*image, 0.0f);
+        result.finalize_psnr(*image, enc->quant_error);
         result.raw_frame = std::move(enc->file);
         return result;
     }

@@ -380,6 +380,9 @@ Result<Encoded> encode(const Image& image, const Options& opts) {
             best_score = score;
         }
     }
+    for (std::size_t i = 0; i < w * h; ++i)
+        best->quant_error += dist(color_space::linear_to_oklab(image.pixels()[i]),
+                                  color_space::linear_to_oklab(best->rendered.pixels()[i]));
     report(1.0f, "done");
     return std::move(*best);
 }

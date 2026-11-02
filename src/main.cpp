@@ -8277,14 +8277,14 @@ int run_main(int argc, char* argv[]) {
         }
         pipeline::PipelineResult pr;
         pr.rendered = enc->rendered;
-        pr.finalize_psnr(*image, 0.0f);
+        pr.finalize_psnr(*image, enc->quant_error);
         cli_print_mode(std::format("nibnib ({}x{} RGB565, 4 bits per pixel)",
                                    pr.rendered.width(),
                                    pr.rendered.height()));
         cli_print_dither(config->dither_method, nopts.dither.strength);
         cli_print_encoded_other(std::format("{} bytes (nibnib)", enc->file.size()),
                                 static_cast<std::size_t>(count_unique_colors(pr.rendered)),
-                                0.0,
+                                static_cast<double>(enc->quant_error),
                                 pr.psnr,
                                 pr.ssimulacra2_score);
 
