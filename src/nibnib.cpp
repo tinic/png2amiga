@@ -342,26 +342,31 @@ Result<Encoded> encode(const Image& image, const Options& opts) {
         Encoded out;
         out.palette = pal;
         const std::size_t stride = line_stride(w);
-        // Written into a sized buffer: GCC 15 flags byte-wise push_back
-        // here as a free-nonheap-object (false positive, -Werror).
-        out.file.assign(kHeader + stride * h, 0);
-        std::size_t at = 0;
-        auto put16 = [&](std::uint16_t v) {
-            out.file[at++] = static_cast<std::uint8_t>(v & 0xff);
-            out.file[at++] = static_cast<std::uint8_t>(v >> 8);
+        // Bytes go through a raw pointer into a sized buffer: GCC 15 at
+        // -O3 flags both byte-wise push_back (free-nonheap-object) and
+        // vector operator[] (null-dereference) here, falsely; the null
+        // check lets it prove the pointer valid.
+        std::vector<std::uint8_t> file(kHeader + stride * h, 0);
+        std::uint8_t* const base = file.data();
+        if (base == nullptr)
+            return std::unexpected{Error{ErrorCode::write_failed, "nibnib: no output buffer"}};
+        auto put16 = [](std::uint8_t* d, std::uint16_t v) {
+            d[0] = static_cast<std::uint8_t>(v & 0xff);
+            d[1] = static_cast<std::uint8_t>(v >> 8);
         };
-        put16(static_cast<std::uint16_t>(w));
-        put16(static_cast<std::uint16_t>(h));
-        for (auto word : pal)
-            for (int b = 0; b < 4; ++b)
-                out.file[at++] = static_cast<std::uint8_t>(word >> (8 * b));
+        put16(base, static_cast<std::uint16_t>(w));
+        put16(base + 2, static_cast<std::uint16_t>(h));
+        for (std::size_t i = 0; i < 256; ++i)
+            for (std::size_t b = 0; b < 4; ++b)
+                base[4 + 4 * i + b] = static_cast<std::uint8_t>(pal[i] >> (8 * b));
         for (std::size_t y = 0; y < h; ++y) {
             const auto& r = enc.rows[y];
-            at = kHeader + y * stride;
-            put16(r.first[0]);
-            put16(r.first[1]);
-            std::ranges::copy(r.codes, out.file.begin() + static_cast<std::ptrdiff_t>(at));
+            std::uint8_t* const row = base + kHeader + y * stride;
+            put16(row, r.first[0]);
+            put16(row + 2, r.first[1]);
+            std::ranges::copy(r.codes, row + 4);
         }
+        out.file = std::move(file);
         auto dec = decode(out.file);
         if (!dec) return std::unexpected{dec.error()};
         out.rendered = std::move(*dec);
