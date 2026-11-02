@@ -3530,12 +3530,12 @@ async function loadExample(example: typeof EXAMPLES[number]) {
 .p-select-overlay .p-select-option-group {
   font-size: 0.75rem;
 }
-/* PrimeVue caps the list at ~200px which clipped the 8-entry chipset
-   dropdown (Amiga OCS / AGA / Atari STF / STE / VGA / EGA / CGA / SNES).
-   Bump the cap so the full list shows without scrolling. */
+/* PrimeVue caps the list at ~200px, which clipped the chipset dropdown.
+   Bump the cap so the whole chipset list (21 entries) shows without
+   scrolling, with room for two more; raise it again past that. */
 .p-select-overlay .p-select-list,
 .p-select-overlay .p-select-list-container {
-  max-height: 360px !important;
+  max-height: 420px !important;
 }
 .p-select-overlay .p-select-option-group {
   font-weight: 700;
