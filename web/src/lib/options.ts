@@ -1,6 +1,6 @@
 // Type-side declarations.
 
-export type Chipset = 'ocs' | 'aga' | 'stf' | 'ste' | 'vga' | 'ega' | 'cga' | 'tandy' | 'snes' | 'genesis' | 'c64' | 'gba' | 'zx' | 'msx1' | 'msx2' | 'thomson' | 'ted' | 'sms' | 'cpc' | 'cpcplus'
+export type Chipset = 'ocs' | 'aga' | 'stf' | 'ste' | 'vga' | 'ega' | 'cga' | 'tandy' | 'snes' | 'genesis' | 'c64' | 'gba' | 'zx' | 'msx1' | 'msx2' | 'thomson' | 'ted' | 'sms' | 'cpc' | 'cpcplus' | 'rp2350'
 
 export interface ModeOption {
   value: string
@@ -231,11 +231,15 @@ const ALL_MODES: ModeOption[] = [
   { value: 'cpc-plus-mode0', label: 'Mode 0 (160×200, 16 inks)', chipset: 'cpcplus' },
   { value: 'cpc-plus-mode1', label: 'Mode 1 (320×200, 4 inks)',  chipset: 'cpcplus' },
   { value: 'cpc-plus-mode2', label: 'Mode 2 (640×200, 2 inks)',  chipset: 'cpcplus' },
+  // nibnib (github.com/raphlinus/nibnib): RGB565 at 4 bits per pixel as
+  // pixel-pair deltas, for an RP2350. Free size like lores (default 320
+  // wide, even width); no palette of colours, no bitplanes.
+  { value: 'nibnib', label: 'nibnib (RGB565, 4 bits/pixel)', chipset: 'rp2350' },
 ]
 
 // Chipsets whose mode list is exactly `m.chipset === chipset`.
 const FIXED_CHIPSETS = new Set<Chipset>(
-  ['stf', 'ste', 'vga', 'ega', 'cga', 'tandy', 'snes', 'genesis', 'c64', 'gba', 'zx', 'msx1', 'msx2', 'thomson', 'ted', 'sms', 'cpc', 'cpcplus'])
+  ['stf', 'ste', 'vga', 'ega', 'cga', 'tandy', 'snes', 'genesis', 'c64', 'gba', 'zx', 'msx1', 'msx2', 'thomson', 'ted', 'sms', 'cpc', 'cpcplus', 'rp2350'])
 
 // Filter modes available for a given chipset
 export function modesForChipset(chipset: Chipset): ModeOption[] {
@@ -281,6 +285,7 @@ export const CHIPSETS: ChipsetOption[] = [
   { value: 'ted',     label: 'Commodore Plus/4 (TED)' },
   { value: 'cpc',     label: 'Amstrad CPC (27 colors)' },
   { value: 'cpcplus', label: 'Amstrad CPC Plus (4096 colors)' },
+  { value: 'rp2350',  label: 'RP2350: nibnib (RGB565)' },
 ]
 
 // VIC-II palette options — only meaningful when chipset is 'c64'.
@@ -617,6 +622,11 @@ const TANDY_EXAMPLES: Example[] = IBM_EXAMPLES.map(ex => ({
   ...ex, opts: { chipset: 'tandy' as const, mode: 'tandy-320' },
 }))
 
+// nibnib: the Amiga photo set, retargeted (no curated images yet).
+const NIBNIB_EXAMPLES: Example[] = AMIGA_EXAMPLES.map(ex => ({
+  ...ex, opts: { chipset: 'rp2350' as const, mode: 'nibnib' },
+}))
+
 const C64_EXAMPLES: Example[] = [
   { name: 'alien',    file: 'c64/alien.png',     opts: { chipset: 'c64', mode: 'c64-multicolor', gamma: 1, contrast: 1.5, dither: 'floyd-steinberg', ditherStrength: 1, matchRange: false } },
   { name: 'dog',      file: 'c64/dog.png',       opts: { chipset: 'c64', mode: 'c64-multicolor', gamma: 1.5, ditherStrength: 1 } },
@@ -653,6 +663,7 @@ const EXAMPLES_BY_CHIPSET: Record<Chipset, Example[]> = {
   sms:     AMIGA_EXAMPLES,
   cpc:     AMIGA_EXAMPLES,
   cpcplus: AMIGA_EXAMPLES,
+  rp2350:  NIBNIB_EXAMPLES,
 }
 
 export function examplesForChipset(chipset: Chipset): Example[] {
@@ -798,6 +809,12 @@ export function isGbaMode(mode: string): boolean {
 export function isGbaDirectMode(mode: string): boolean {
   return mode === 'gba-mode3' || mode === 'gba-mode5'
 }
+// nibnib: RGB565 pair deltas. Free size (Resize works as for lores) but
+// no palette of colours: palette-picking dithers, custom palettes,
+// reserves and locks do not apply.
+export function isNibnibMode(mode: string): boolean {
+  return mode === 'nibnib'
+}
 export function isC64Mode(mode: string): boolean {
   return mode.startsWith('c64-')
 }
@@ -817,13 +834,13 @@ export function isAmigaMode(mode: string): boolean {
 //   ignored  — C64 (VIC-II palette fixed in hardware), CGA text (fixed
 //              16-colour attribute set), SNES Mode 7, Genesis (per-tile
 //              palette lines)
-//   rejected — Thomson / TED / SMS / CPC / GBA direct (api.cpp returns unsupported_mode)
+//   rejected — Thomson / TED / SMS / CPC / GBA direct / nibnib (api.cpp returns unsupported_mode)
 // Offering the picker for the last two groups is worse than useless: it
 // either silently does nothing or fails the convert.
 const NO_CUSTOM_PALETTE = [
   isCgaPixels, isTandyMode,
   isAtariSpectrumMode, isC64Mode, isCgaText, isSnesMode, isGenesisMode, isZxMode, isMsxMode, isThomsonMode, isTedMode,
-  isSmsMode, isCpcMode, isGbaDirectMode,
+  isSmsMode, isCpcMode, isGbaDirectMode, isNibnibMode,
 ] as const
 export function supportsCustomPalette(mode: string): boolean {
   return NO_CUSTOM_PALETTE.every(p => !p(mode))
@@ -1122,7 +1139,7 @@ export function decomposeMode(uiMode: string): DecomposedMode {
 // constraints) report 0 to mean "no user-adjustable depth slider".
 const FIXED_DEPTH_PREDICATES = [
   isHamMode, isEhbMode, isAtariMode, isDosMode, isC64Mode, isGbaMode,
-  isZxMode, isMsxMode, isThomsonMode, isTedMode, isSmsMode, isCpcMode,
+  isZxMode, isMsxMode, isThomsonMode, isTedMode, isSmsMode, isCpcMode, isNibnibMode,
 ] as const
 export function maxDepth(mode: string, chipset: Chipset): number {
   for (const p of FIXED_DEPTH_PREDICATES) if (p(mode)) return 0
@@ -1157,6 +1174,8 @@ const FIXED_DEFAULT_DEPTH: Record<string, number> = {
   // CPC: 16 / 4 / 2 inks.
   'cpc-mode0': 4, 'cpc-mode1': 2, 'cpc-mode2': 1,
   'cpc-plus-mode0': 4, 'cpc-plus-mode1': 2, 'cpc-plus-mode2': 1,
+  // nibnib: RGB565, 16 bits per pixel (conceptual, as GBA direct).
+  'nibnib': 16,
 }
 
 // Family-level fallbacks for defaultDepth. Tried in order after the
@@ -1191,6 +1210,8 @@ export function numColors(mode: string, depth: number): string {
   }
   // GBA direct color: 16bpp BGR555 → 32768-color gamut (not 1<<16).
   if (isGbaDirectMode(mode)) return '32768'
+  // nibnib: RGB565 → 65536-color gamut.
+  if (isNibnibMode(mode)) return '65536'
   // TED: fixed 121-color palette; the per-cell color count is the depth.
   if (isTedMode(mode)) return `${1 << depth}/cell (121 palette)`
   return FIXED_COLOR_LABELS[mode] ?? String(1 << depth)

@@ -238,6 +238,11 @@ enum class Mode : unsigned char {
     cpc_plus_mode0,  // Plus: 160×200, 16 of 4096
     cpc_plus_mode1,  // Plus: 320×200, 4 of 4096
     cpc_plus_mode2,  // Plus: 640×200, 2 of 4096
+
+    // nibnib (github.com/raphlinus/nibnib): RGB565 with a 256-entry
+    // pixel-pair delta palette, 4 bits per pixel. Any size, even width;
+    // the CLI keeps the source size by default.
+    nibnib,
 };
 
 // ---------------------------------------------------------------------------
@@ -506,6 +511,12 @@ constexpr ModeParams get_mode_params(Mode mode) noexcept {
     case Mode::cpc_mode2:
     case Mode::cpc_plus_mode2:
         return {640, 200, 1, 2, false, false, false, false, 1, 2, 0.5f};
+    // Not a buffer. screen_width is the web/api default width (the height
+    // follows the source aspect; the api does not upscale). The CLI does
+    // not read it: without --width/--height it keeps the source size.
+    // bitplane_depth is bits per pixel, as for the GBA direct modes.
+    case Mode::nibnib:
+        return {320, 0, 16, 65536, false, false, false, false, 1, 1, 1.0f};
     }
     std::unreachable();
 }
@@ -698,6 +709,8 @@ constexpr bool is_gba(Mode mode) noexcept {
     return mode == Mode::gba_mode3 || mode == Mode::gba_mode4 || mode == Mode::gba_mode5;
 }
 
+constexpr bool is_nibnib(Mode mode) noexcept { return mode == Mode::nibnib; }
+
 // GBA direct-color modes (16bpp BGR555 per pixel, no palette).
 constexpr bool is_gba_direct(Mode mode) noexcept {
     return mode == Mode::gba_mode3 || mode == Mode::gba_mode5;
@@ -819,7 +832,7 @@ constexpr std::size_t max_user_depth(Mode mode, Chipset chipset) noexcept {
     if (is_atari(mode)) return get_mode_params(mode).bitplane_depth;
     // GBA buffers are fixed: mode4 = 8bpp paletted, direct modes = 16bpp.
     // --depth is a no-op for all three.
-    if (is_gba(mode)) return get_mode_params(mode).bitplane_depth;
+    if (is_gba(mode) || is_nibnib(mode)) return get_mode_params(mode).bitplane_depth;
     // Thomson / TED buffers are fixed by the hardware video mode.
     if (is_thomson(mode) || is_ted(mode)) return get_mode_params(mode).bitplane_depth;
     if (is_sms(mode) || is_cpc(mode)) return get_mode_params(mode).bitplane_depth;

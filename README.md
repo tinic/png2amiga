@@ -229,6 +229,9 @@ release — same features, somewhat slower. Building one on any platform:
 ./build/png2amiga --mode gba-mode4 input.png output.bin        # 8bpp indices + companion .pal
 ./build/png2amiga --mode gba-mode5 input.png output.png        # 160×128 preview
 
+# nibnib (RGB565, 4 bits per pixel; the CLI keeps the source size)
+./build/png2amiga --mode nibnib input.png output.nibnib
+
 # Sega Master System / Game Gear
 ./build/png2amiga --mode sms-mode4 input.png output.h          # devkitSMS header
 ./build/png2amiga --mode gg-mode4 input.png output.bin         # tiles + tilemap + CRAM
@@ -535,6 +538,38 @@ Array bytes, or Plus `0x0GRB` words and ASIC bytes).
 
 SMS / GG + CPC: `--depth` / `--chipset` are no-ops; reserve / lock /
 external-palette flags and `.iff` / viewer outputs are rejected.
+
+## nibnib
+
+[nibnib](https://github.com/raphlinus/nibnib) is an RGB565 image format
+at 4 bits per pixel, built to decode at a few cycles per pixel on an
+RP2350. Each byte selects one of 256 palette words. The decoder adds
+that word to the previous pixel, doubled into both halves of a 32-bit
+value, which gives the next two pixels. The palette therefore holds
+pixel-pair deltas, not colours.
+
+| Mode | Size | Output |
+|------|------|--------|
+| `nibnib` | CLI: source size by default; web: 320 wide by default; width must be even | `.nibnib`, `.png` preview |
+
+The decoder is fixed, so all of the quality comes from the encoder:
+
+1. The image is dithered to RGB565 with the selected `--dither` method
+   (error-diffusion and ordered methods; palette-picking methods such as
+   `yliluoma` or `dbs` are rejected).
+2. All 256 palette entries are fitted to the image. Each entry moves to
+   the mean delta of the pixel pairs that use it, and the least-used
+   entries move to the pairs that are coded worst.
+3. Each row is encoded with a beam search over the codes (256 states).
+   The search state is the last decoded pixel, and the cost is the
+   OKLab error of both pixels of each pair.
+
+`--best` fits the palette from four starting points and keeps the
+result with the highest SSIMULACRA2 (about 4x the time).
+
+On six test images, mean SSIMULACRA2 is 78.9, against 60.2 for the
+reference encoder. The file size is the same, because the format fixes
+it. In the web app, pick the "RP2350: nibnib (RGB565)" chipset.
 
 ## Sliced palette (per-line copper swaps)
 
@@ -928,9 +963,9 @@ hashing.
 -->
 
 ```
-png2amiga 1.117.0
+png2amiga 1.118.0
 
-Usage: png2amiga [options] input.[png|jpg|webp] [-o output.[png|iff|h|raw|pal|pi1|pi2|pi3]]
+Usage: png2amiga [options] input.[png|jpg|webp] [-o output.[png|iff|h|raw|pal|pi1|pi2|pi3|nibnib]]
 
 
 Modes:
@@ -955,6 +990,7 @@ Modes:
     Sega:   sms-mode4 | gg-mode4
     CPC:    cpc-mode0 | cpc-mode1 | cpc-mode2 |
             cpc-plus-mode0 | cpc-plus-mode1 | cpc-plus-mode2
+    Other:  nibnib (RGB565 pair-delta format, .nibnib)
   --depth <1-8|auto>              Bitplane depth (default: 5); auto = fewest
                                   planes that keep the image 1:1, with
                                   --sliced per horizontal zone
@@ -996,8 +1032,8 @@ Palette index pinning (indexed-palette modes):
 Search quality:
   --best                          Multi-restart search (~20–30× slower).
                                   Works with plain HAM/EHB/lores/hires,
-                                  --sliced / --strips, and Thomson
-                                  320x16 modes.
+                                  --sliced / --strips, Thomson 320x16
+                                  and nibnib (4 restarts, ~4× slower).
 
 Image processing:
   --brightness <float>            -1.0..1.0 (default: 0.0)

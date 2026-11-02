@@ -15,7 +15,7 @@ import {
   CHIPSETS, DITHER_METHODS, ALPHA_DITHER_METHODS, isNonSquareDither,
   SLIDERS, CGA_TEXT_METRICS, CGA_TEXT_KERNELS, C64_PALETTES, C64_METRICS, c64PaletteRgb, EXAMPLES, examplesForChipset,
   defaultOptions, isHamMode, hamType, isEhbMode, isAtariMode,
-  isZxMode, isAtariSpectrumMode, isDosMode, isTandyMode, isVgaMode, isEgaMode, isSnesMode, isSnesDirectMode, isGenesisMode, isGbaMode, isGbaDirectMode, isC64Mode, isC64CharsetMode, isMsxMode, isThomsonMode, isTedMode, isSmsMode, isCpcMode, isCgaMode, isCgaPixels, isCgaText, isTileFreeformMode, isFixedBufferMode, isAmigaMode, supportsCustomPalette, isInterlaceMode, modePar,
+  isZxMode, isAtariSpectrumMode, isDosMode, isTandyMode, isVgaMode, isEgaMode, isSnesMode, isSnesDirectMode, isGenesisMode, isGbaMode, isGbaDirectMode, isNibnibMode, isC64Mode, isC64CharsetMode, isMsxMode, isThomsonMode, isTedMode, isSmsMode, isCpcMode, isCgaMode, isCgaPixels, isCgaText, isTileFreeformMode, isFixedBufferMode, isAmigaMode, supportsCustomPalette, isInterlaceMode, modePar,
   maxDepth, defaultDepth, effectiveChipset, previewScale,
   modesForChipset,
   supportsCellRefine,
@@ -628,7 +628,8 @@ const reservablePaletteSize = computed(() => {
 // rejects OCS-snapping onto reserved colors.
 function modeHasNoReservableClut(m: string): boolean {
   const fixedOrDynamic = [isHamMode, isGenesisMode, isSnesMode, isC64Mode,
-    isMsxMode, isThomsonMode, isTedMode, isSmsMode, isCpcMode, isCgaMode, isTandyMode, isCgaText, isGbaDirectMode]
+    isMsxMode, isThomsonMode, isTedMode, isSmsMode, isCpcMode, isCgaMode, isTandyMode, isCgaText, isGbaDirectMode,
+    isNibnibMode]
   return fixedOrDynamic.some(p => p(m))
 }
 const reservesSupported = computed(() => !modeHasNoReservableClut(options.mode))
@@ -811,10 +812,14 @@ const groupedDitherOptions = computed(() => {
   // GBA direct modes (mode3/mode5) are gated exactly like SNES Mode 7
   // Direct: 16bpp BGR555 grid, no palette table → yliluoma has nothing
   // to mix and DBS has no indices to sweep.
-  const hide_yliluoma = isSnesDirectMode(options.mode) || isGbaDirectMode(options.mode)
+  // nibnib (RGB565 pair deltas) has no palette of colours either: every
+  // dither::needs_discrete_palette method (yliluoma family, DBS, smooth)
+  // is rejected by api.cpp. smoothAvailable() already excludes it.
+  const nib = isNibnibMode(options.mode)
+  const hide_yliluoma = isSnesDirectMode(options.mode) || isGbaDirectMode(options.mode) || nib
   // DBS sweeps palette indices and so doesn't apply in HAM (no fixed
   // palette) or the direct grid modes (BGR555 / RGB443 grid quantisation).
-  const hide_dbs = ht !== null || isSnesDirectMode(options.mode) || isGbaDirectMode(options.mode)
+  const hide_dbs = ht !== null || isSnesDirectMode(options.mode) || isGbaDirectMode(options.mode) || nib
   return DITHER_METHODS
     .map(g => ({
       label: g.group,
@@ -1098,6 +1103,15 @@ function maybeFallbackGbaDirectDither(mode: string): void {
   }
 }
 
+// nibnib rejects every palette-picking dither (dither::needs_discrete_palette:
+// the yliluoma family, DBS and smooth). Snap to F-S on entry.
+function maybeFallbackNibnibDither(mode: string): void {
+  if (!isNibnibMode(mode)) return
+  if (YLIL_FAMILY.has(options.dither) || options.dither === 'dbs' || options.dither === 'smooth') {
+    options.dither = 'floyd-steinberg'
+  }
+}
+
 // Genesis prefers opt-checker by default: its 2×2-phase threshold aligns
 // with 8-pixel tile boundaries so tile dedup survives (~40% on photos).
 // Error-diffusion methods (FS, atkinson, etc.) destroy dedup → blow the
@@ -1116,6 +1130,7 @@ watch(() => options.mode, (mode, oldMode) => {
   maybeFallbackHamDither(mode)
   maybeFallbackSnesDirectDither(mode)
   maybeFallbackGbaDirectDither(mode)
+  maybeFallbackNibnibDither(mode)
   maybeSelectGenesisDither(mode, oldMode)
   syncNativeParToMode(mode, oldMode)
   // Resize toggle is only meaningful for non-fixed-buffer modes (Amiga
@@ -1267,7 +1282,16 @@ function widthHeightRatio(): number {
   return imageHeight.value / imageWidth.value
 }
 
+// nibnib decodes pixel pairs: snap an odd width down to even (api.cpp
+// rejects an explicit odd width, as the CLI does).
+function snapNibnibWidth(): void {
+  if (isNibnibMode(options.mode) && options.width % 2 !== 0) {
+    options.width = Math.max(2, options.width - 1)
+  }
+}
+
 function onWidthCommit() {
+  snapNibnibWidth()
   if (!aspectLocked.value) return
   if (!options.width) return
   const r = widthHeightRatio()
@@ -2304,6 +2328,13 @@ async function downloadViewer() {
   converting.value = false
 }
 
+// File extension for the raw_frame download, per mode.
+function rawExtension(mode: string): string {
+  if (isNibnibMode(mode)) return '.nibnib'
+  if (isAtariSpectrumMode(mode)) return '.spu'
+  return isSmsMode(mode) || isCpcMode(mode) ? '.bin' : '.raw'
+}
+
 async function downloadRaw() {
   if (!imageBytes.value) return
   converting.value = true
@@ -2311,9 +2342,7 @@ async function downloadRaw() {
     const result = await convertRaw(imageBytes.value, buildWasmOptions())
     if (result.error) { errorMsg.value = result.error; return }
     if (!result.data) return
-    let ext = isSmsMode(options.mode) || isCpcMode(options.mode) ? '.bin' : '.raw'
-    if (isAtariSpectrumMode(options.mode)) ext = '.spu'
-    downloadBlob(result.data, baseStem() + ext, 'application/octet-stream')
+    downloadBlob(result.data, baseStem() + rawExtension(options.mode), 'application/octet-stream')
     exportCount++
     track('export', { format: 'raw', mode: options.mode, exportCount })
   } catch (error) { errorMsg.value = errorMessage(error) }
@@ -2940,7 +2969,7 @@ async function loadExample(example: typeof EXAMPLES[number]) {
                 <div class="resize-fields" :class="{ unlinked: !aspectLocked }">
                   <label class="resize-label text-xs text-color-secondary font-semibold" title="Output width in pixels. Must be multiple of 16.">Width</label>
                   <div class="resize-input">
-                    <InputNumber v-model="options.width" :min="16" :step="16"
+                    <InputNumber v-model="options.width" :min="16" :step="isNibnibMode(options.mode) ? 2 : 16"
                                  @blur="() => onWidthCommit()"
                                  @keyup.enter="() => onWidthCommit()"
                                  class="w-full input-sm" />
@@ -3171,8 +3200,15 @@ async function loadExample(example: typeof EXAMPLES[number]) {
               <Button label="bin" icon="pi pi-download" class="flex-1" severity="secondary" :disabled="!imageBytes || converting" @click="downloadRaw"
                 title="Download the raw 16 KB screen (no header)." />
             </div>
+            <!-- nibnib export: PNG preview + the .nibnib file (raw_frame). -->
+            <div v-if="isNibnibMode(options.mode)" class="flex gap-2">
+              <Button label="png" icon="pi pi-download" class="flex-1" :disabled="!imageBytes || converting" @click="downloadPNG"
+                title="Download the converted image as a PNG preview file." />
+              <Button label="nibnib" icon="pi pi-download" class="flex-1" :disabled="!imageBytes || converting" @click="downloadRaw"
+                title="Download the .nibnib file: u16 width, u16 height, 256 × u32 pair-delta palette, then per row two RGB565 pixels and one code byte per following pixel pair, padded to 4 bytes." />
+            </div>
             <!-- Amiga export buttons -->
-            <div v-if="!isZxMode(options.mode) && !isAtariMode(options.mode) && !isDosMode(options.mode) && !isSnesMode(options.mode) && !isGenesisMode(options.mode) && !isC64Mode(options.mode) && !isGbaMode(options.mode) && !isMsxMode(options.mode) && !isThomsonMode(options.mode) && !isTedMode(options.mode) && !isSmsMode(options.mode) && !isCpcMode(options.mode)" class="flex gap-2">
+            <div v-if="isAmigaMode(options.mode)" class="flex gap-2">
               <Button label="png" icon="pi pi-download" class="flex-1" :disabled="!imageBytes || converting" @click="downloadPNG"
                 title="Download the converted image as a PNG preview file." />
               <Button label="iff" icon="pi pi-download" class="flex-1" :disabled="!imageBytes || converting" @click="downloadIFF"
@@ -3182,7 +3218,7 @@ async function loadExample(example: typeof EXAMPLES[number]) {
               <Button label="adf" icon="pi pi-download" class="flex-1" :disabled="!imageBytes || converting" @click="compileAndDownload('adf')"
                 title="Download bootable Amiga floppy disk image (ADF)." />
             </div>
-            <div v-if="!isZxMode(options.mode) && !isAtariMode(options.mode) && !isDosMode(options.mode) && !isSnesMode(options.mode) && !isGenesisMode(options.mode) && !isC64Mode(options.mode) && !isGbaMode(options.mode) && !isMsxMode(options.mode) && !isThomsonMode(options.mode) && !isTedMode(options.mode) && !isSmsMode(options.mode) && !isCpcMode(options.mode)" class="flex gap-2">
+            <div v-if="isAmigaMode(options.mode)" class="flex gap-2">
               <Button label="exe" icon="pi pi-download" class="flex-1" severity="secondary" :disabled="!imageBytes || converting" @click="compileAndDownload('exe')"
                 title="Download compiled AmigaOS executable. Click left mouse button to exit." />
               <Button label="cpp" icon="pi pi-download" class="flex-1" severity="secondary" :disabled="!imageBytes || converting" @click="downloadViewer"
@@ -3237,8 +3273,8 @@ async function loadExample(example: typeof EXAMPLES[number]) {
                 </div>
               </div>
 
-              <!-- Reserve color 0 -->
-              <div class="pt-3 mt-3 border-top-1 surface-border">
+              <!-- Reserve color 0 (nibnib has no palette slot to reserve) -->
+              <div v-if="!isNibnibMode(options.mode)" class="pt-3 mt-3 border-top-1 surface-border">
                 <div class="flex align-items-center gap-2">
                   <input type="checkbox" v-model="options.lockColor0" id="lockColor0" :disabled="color0LockForcedOff" />
                   <label for="lockColor0" class="text-xs text-color-secondary" title="Reserve palette index 0 for black (Amiga border/background color). Disable to use all palette slots for image colors.">Reserve color 0 for black</label>

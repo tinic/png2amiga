@@ -126,6 +126,7 @@ src/
   degas.hpp/.cpp      Atari Degas .pi1/.pi2/.pi3 writer (STF low/med/hi)
   cga_font.hpp        IBM CGA 8x8 font (viler CGA.F08, public-domain ROM reconstruction)
   cga_text.hpp/.cpp   CGA text-mode glyph-matching encoder (80x100 super-chunky)
+  nibnib.hpp/.cpp     nibnib RGB565 pair-delta format: fitted palette + row beam search
   cheader_dos_c.*     16-bit DOS C viewer generator (ia16-elf-gcc, real-mode 8088+)
 ```
 
@@ -265,6 +266,19 @@ AMSDOS header; `.pal` = Gate Array bytes (classic) or ASIC `R<<4|B, G` (Plus).
 SMS / CPC: fixed-buffer; `--depth` / `--chipset` no-ops; reserve / lock /
 external-palette and `.iff` / viewer outputs rejected. Round-trip ctest:
 `tools/check_sms_cpc_roundtrip.py` decodes the raw output independently.
+
+## nibnib
+
+`--mode nibnib` writes github.com/raphlinus/nibnib files (`.nibnib`; `.png`
+preview). The CLI dispatches it in `main.cpp`; the web app goes through
+`api.cpp` (`raw_frame` = the file). The CLI keeps the source size unless
+`--width` / `--height` is given; the web defaults to 320 wide (ModeParams
+screen_width); the width must be even. Target = source dithered to RGB565
+via `diffuse_raw_buffer`; all 256 palette entries fitted (Lloyd on wanted
+pair deltas, least-used reseeded at worst pairs; upstream's fixed cube
+cost 2.6 S2); rows = beam search (256), state = last pixel, OKLab² cost.
+`--best` = 4 fit restarts, best SSIMULACRA2 kept. `tools/check_nibnib.py` (ctest `nibnib-decode`) decodes by the
+format's rules and must match the preview pixel for pixel.
 
 ## Architecture Notes
 

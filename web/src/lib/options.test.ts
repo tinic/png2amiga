@@ -23,6 +23,7 @@ import {
   isHamMode,
   isHiresMode,
   isInterlaceMode,
+  isNibnibMode,
   isVgaMode,
   maxDepth,
   modePar,
@@ -434,5 +435,33 @@ describe('Tandy native modes', () => {
     expect(supportsCellRefine({ mode, cgaTextMetric: 'blur' })).toBe(false)
     expect(modePar(mode)).toBeCloseTo(par)
     expect(previewScale(mode)).toEqual({ sx, sy: 2 })
+  })
+})
+
+describe('nibnib mode', () => {
+  it('has its own chipset group and nothing else in it', () => {
+    expect(modesForChipset('rp2350').map(m => m.value)).toEqual(['nibnib'])
+    expect(CHIPSETS.some(c => c.value === 'rp2350')).toBe(true)
+    expect(modesForChipset('ocs').some(m => m.value === 'nibnib')).toBe(false)
+  })
+
+  it('is free size (Resize like lores), not a fixed buffer or Amiga mode', () => {
+    expect(isNibnibMode('nibnib')).toBe(true)
+    expect(isNibnibMode('lores')).toBe(false)
+    expect(isFixedBufferMode('nibnib')).toBe(false)
+    expect(isAmigaMode('nibnib')).toBe(false)
+  })
+
+  it('has no depth slider, custom palette or bitplane depth choice', () => {
+    expect(maxDepth('nibnib', 'rp2350')).toBe(0)
+    expect(defaultDepth('nibnib')).toBe(16)
+    expect(supportsCustomPalette('nibnib')).toBe(false)
+    expect(numColors('nibnib', 16)).toBe('65536')
+  })
+
+  it('previews with square pixels and passes through decomposeMode', () => {
+    expect(modePar('nibnib')).toBe(1)
+    expect(previewScale('nibnib')).toEqual({ sx: 2, sy: 2 })
+    expect(decomposeMode('nibnib')).toEqual({ mode: 'nibnib', width: 0, interlace: false })
   })
 })

@@ -24,6 +24,7 @@
 #include "c64_prg.hpp"
 #include "thomson.hpp"
 #include "msx.hpp"
+#include "nibnib.hpp"
 #include "retro.hpp"
 #include "thomson_palette_refine.hpp"
 #include "ted.hpp"
@@ -151,6 +152,7 @@ amiga::Mode parse_mode(const std::string& s) {
     if (s == "cpc-plus-mode0") return amiga::Mode::cpc_plus_mode0;
     if (s == "cpc-plus-mode1") return amiga::Mode::cpc_plus_mode1;
     if (s == "cpc-plus-mode2") return amiga::Mode::cpc_plus_mode2;
+    if (s == "nibnib") return amiga::Mode::nibnib;
     return amiga::Mode::lores;
 }
 
@@ -550,6 +552,32 @@ TargetDims compute_target_dims(std::size_t src_w,
     if (options.interlace && !params.is_interlaced) par *= 2.0;
 
     if (amiga::is_cga_pixels(mode)) return {160, params.screen_height};
+
+    // nibnib: free size, square pixels, like lores but without the PAR
+    // terms. Default = screen_width (320), never upscaled; the height
+    // follows the source aspect. Pixel pairs need an even width, so a
+    // derived odd width rounds down (an explicit odd --width is rejected
+    // in run_pipeline_core, as the CLI does).
+    if (amiga::is_nibnib(mode)) {
+        bool nw = options.width > 0, nh = options.height > 0;
+        std::size_t w, h;
+        if (nw && nh) {
+            w = static_cast<std::size_t>(options.width);
+            h = static_cast<std::size_t>(options.height);
+        } else if (nw) {
+            w = static_cast<std::size_t>(options.width);
+            h = static_cast<std::size_t>(std::lround(static_cast<double>(w) / src_aspect));
+        } else if (nh) {
+            h = static_cast<std::size_t>(options.height);
+            w = static_cast<std::size_t>(std::lround(static_cast<double>(h) * src_aspect));
+        } else {
+            w = std::min(mode_w, src_w);
+            h = static_cast<std::size_t>(std::lround(static_cast<double>(w) / src_aspect));
+        }
+        if (w % 2 != 0 && !nw) w = std::max<std::size_t>(2, w - 1);
+        return {w, std::max<std::size_t>(1, h)};
+    }
+
     // Authored native Tandy pixel art must not be rescaled for display PAR.
     if (amiga::is_tandy(mode) && src_w == params.screen_width && src_h == params.screen_height)
         return {src_w, src_h};
@@ -1108,8 +1136,9 @@ Result<void> check_best_supported(const Options& options, amiga::Mode mode, bool
     bool scap_best = options.scap;
     bool snes_best = (mode == amiga::Mode::snes_mode7_256);
     bool thomson_fc_best = amiga::is_thomson_formecouleur(mode);
+    bool nibnib_best = amiga::is_nibnib(mode);
     if (ham_best || ehb_best || plain_best || copper_best || scap_best || snes_best ||
-        thomson_fc_best)
+        thomson_fc_best || nibnib_best)
         return {};
     return std::unexpected{Error{ErrorCode::unsupported_mode,
                                  "--best is not supported in this configuration. "
@@ -1117,7 +1146,8 @@ Result<void> check_best_supported(const Options& options, amiga::Mode mode, bool
                                  "plain lores/hires (no --copper, no --scap, no --dpf, "
                                  "no --tile, no --palette), sliced (--copper), strips "
                                  "(--scap), snes-mode7-256, and Thomson forme-couleur "
-                                 "(thomson-to7-320x16 / thomson-to8-320x16). Drop --best "
+                                 "(thomson-to7-320x16 / thomson-to8-320x16), and nibnib. "
+                                 "Drop --best "
                                  "or change one of those options."}};
 }
 
@@ -1164,7 +1194,8 @@ static Result<PipelineResult> run_pipeline_core(const std::uint8_t* input_data,
                                                            : amiga::Chipset::ocs;
         auto tune = dither_tuning::defaults_for(dither_tuning::Context{
             .mode = mode,
-            .depth = std::clamp(options.depth, 1, 8),
+            // nibnib: 16 bits per pixel, as the CLI passes it.
+            .depth = amiga::is_nibnib(mode) ? 16 : std::clamp(options.depth, 1, 8),
             .dpf = options.dual_playfield,
             .scap = options.scap,
             .copper = options.copper,
@@ -1225,6 +1256,33 @@ static Result<PipelineResult> run_pipeline_core(const std::uint8_t* input_data,
                     "' is palette-aware but "
                     "Mode 7 Direct has no palette table. Use a non-yliluoma "
                     "method (atkinson, floyd-steinberg, ordered).",
+            }};
+        }
+    }
+
+    // nibnib codes pixel-pair deltas: there is no palette of colours for
+    // a palette-picking dither to choose from (same rule as the CLI), and
+    // no palette slot to reserve, lock or load.
+    if (amiga::is_nibnib(mode)) {
+        if (auto dm = parse_dither(options.dither); dither::needs_discrete_palette(dm)) {
+            return std::unexpected{Error{
+                ErrorCode::unsupported_mode,
+                "Dither '" + options.dither + "' needs a palette of colours; nibnib codes "
+                "pixel-pair deltas. Use an error-diffusion or ordered method.",
+            }};
+        }
+        if (!options.reserves.empty() || !options.locks.empty() || !options.pins.empty() ||
+            has_user_palette(options)) {
+            return std::unexpected{Error{
+                ErrorCode::unsupported_mode,
+                "--reserve-range / --lock-index / --pin-index-at / --palette: not supported "
+                "in nibnib (RGB565 pair deltas; there is no palette of colours)",
+            }};
+        }
+        if (options.width > 0 && options.width % 2 != 0) {
+            return std::unexpected{Error{
+                ErrorCode::invalid_dimensions,
+                std::format("nibnib needs an even width (got {})", options.width),
             }};
         }
     }
@@ -1320,7 +1378,7 @@ static Result<PipelineResult> run_pipeline_core(const std::uint8_t* input_data,
                          (amiga::is_cga(mode) || amiga::is_tandy(mode)) || amiga::is_c64(mode) || amiga::is_snes(mode) ||
                          amiga::is_genesis(mode) || amiga::is_gba(mode) ||
                          (amiga::is_thomson(mode) || amiga::is_msx(mode) || amiga::is_retro_raster(mode)) || amiga::is_ted(mode) ||
-                         amiga::is_sms(mode) || amiga::is_cpc(mode);
+                         amiga::is_sms(mode) || amiga::is_cpc(mode) || amiga::is_nibnib(mode);
         if (non_amiga) {
             std::string which;
             if (options.copper) which += "--sliced/--copper ";
@@ -1511,6 +1569,39 @@ static Result<PipelineResult> run_pipeline_core(const std::uint8_t* input_data,
         } else {
             depth = copper::min_exact_depth(*image, max_d, chipset, options.lock_color0);
         }
+    }
+
+    // --- nibnib (RGB565 pair-delta format) ---
+    // nibnib::encode does the RGB565 dither, palette fit and row search;
+    // raw_frame is the complete .nibnib file. Same steps as the CLI's
+    // nibnib block in main.cpp.
+    if (amiga::is_nibnib(mode)) {
+        if (has_transparency) {
+            for (std::size_t i = 0; i < tmask.size(); ++i)
+                if (tmask[i]) image->pixels()[i] = Color3f{0, 0, 0};
+        }
+        nibnib::Options nopts;
+        nopts.dither.method = parse_dither(options.dither);
+        nopts.dither.strength = options.dither_strength;
+        nopts.dither.error_clamp = options.error_clamp;
+        nopts.best = options.best;
+        nopts.on_progress = options.on_progress;
+        auto enc = nibnib::encode(*image, nopts);
+        if (!enc) return std::unexpected{enc.error()};
+
+        PipelineResult result;
+        result.rendered = std::move(enc->rendered);
+        result.palette.clear();  // pair deltas, not colours
+        result.indices.clear();
+        result.planes.depth = 16;  // conceptual: bits per pixel, not planes
+        result.mode = mode;
+        result.hires = false;
+        result.interlace = false;
+        result.has_transparency = has_transparency;
+        result.transparency_mask = tmask;
+        result.finalize_psnr(*image, 0.0f);
+        result.raw_frame = std::move(enc->file);
+        return result;
     }
 
     // CGA direct pixels: two independent RGBI pixels per text cell.
@@ -5720,6 +5811,7 @@ ConvertResult make_result(std::vector<std::uint8_t> data, const PipelineResult& 
     // report the effective 32768-color gamut so status / web show it
     // consistently with the SNES/Genesis convention.
     if (amiga::is_gba_direct(p.mode)) r.colors = 32768;
+    if (amiga::is_nibnib(p.mode)) r.colors = 65536;  // RGB565
     // Pack the final palette as sRGB bytes (3 per entry) for the web
     // tool's palette swatch view. Empty when palette is empty.
     //
@@ -6552,7 +6644,8 @@ ConvertResult convert_raw(const std::uint8_t* input_data,
     // them straight back.
     if (amiga::is_c64(result->mode) || amiga::is_genesis(result->mode) ||
         (amiga::is_msx(result->mode) || amiga::is_retro_raster(result->mode)) || amiga::is_thomson(result->mode) || amiga::is_ted(result->mode) ||
-        amiga::is_sms(result->mode) || amiga::is_cpc(result->mode)) {
+        amiga::is_sms(result->mode) || amiga::is_cpc(result->mode) ||
+        amiga::is_nibnib(result->mode)) {  // nibnib: the complete .nibnib file
         std::vector<std::uint8_t> raw = std::move(result->raw_frame);
         return make_result(std::move(raw), *result);
     }

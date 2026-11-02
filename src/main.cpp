@@ -2,6 +2,7 @@
 #include "api.hpp"
 #include "thomson_k7.hpp"
 #include "msx.hpp"
+#include "nibnib.hpp"
 #include "retro.hpp"
 #include "smol-atlas.h"
 #include "c64.hpp"
@@ -1215,7 +1216,7 @@ void print_usage() {
                  "png2amiga {}\n"
                  "\n"
                  "Usage: png2amiga [options] input.[png|jpg|webp] [-o "
-                 "output.[png|iff|h|raw|pal|pi1|pi2|pi3]]\n"
+                 "output.[png|iff|h|raw|pal|pi1|pi2|pi3|nibnib]]\n"
                  "\n",
                  png2amiga::version);
     // Description column starts at byte 34 (32-char flag field + 2-space lead).
@@ -1245,6 +1246,7 @@ void print_usage() {
         "    Sega:   sms-mode4 | gg-mode4\n"
         "    CPC:    cpc-mode0 | cpc-mode1 | cpc-mode2 |\n"
         "            cpc-plus-mode0 | cpc-plus-mode1 | cpc-plus-mode2\n"
+        "    Other:  nibnib (RGB565 pair-delta format, .nibnib)\n"
         "  --depth <1-8|auto>              Bitplane depth (default: 5); auto = fewest\n"
         "                                  planes that keep the image 1:1, with\n"
         "                                  --sliced per horizontal zone\n"
@@ -1286,8 +1288,8 @@ void print_usage() {
         "Search quality:\n"
         "  --best                          Multi-restart search (~20–30× slower).\n"
         "                                  Works with plain HAM/EHB/lores/hires,\n"
-        "                                  --sliced / --strips, and Thomson\n"
-        "                                  320x16 modes.\n"
+        "                                  --sliced / --strips, Thomson 320x16\n"
+        "                                  and nibnib (4 restarts, ~4× slower).\n"
         "\n"
         "Image processing:\n"
         "  --brightness <float>            -1.0..1.0 (default: 0.0)\n"
@@ -2191,6 +2193,8 @@ Result<Config> parse_args(int argc, char* argv[]) {
                     config.mode = amiga::Mode::gba_mode4;
                 else if (v == "gba-mode5" || v == "gba-5")
                     config.mode = amiga::Mode::gba_mode5;
+                else if (v == "nibnib")
+                    config.mode = amiga::Mode::nibnib;
                 else if (v == "zx-spectrum")
                     config.mode = amiga::Mode::zx_spectrum;
                 else if (v == "stf-spectrum512")
@@ -2522,7 +2526,8 @@ Result<Config> parse_args(int argc, char* argv[]) {
         bool non_amiga = amiga::is_atari(m) || amiga::is_vga(m) || amiga::is_ega(m) ||
                          (amiga::is_cga(m) || amiga::is_tandy(m)) || amiga::is_c64(m) || amiga::is_snes(m) ||
                          amiga::is_genesis(m) || amiga::is_gba(m) || (amiga::is_thomson(m) || amiga::is_msx(m) || amiga::is_retro_raster(m)) ||
-                         amiga::is_ted(m) || amiga::is_sms(m) || amiga::is_cpc(m);
+                         amiga::is_ted(m) || amiga::is_sms(m) || amiga::is_cpc(m) ||
+                         amiga::is_nibnib(m);
         if (non_amiga) {
             std::string which;
             if (config.copper) which += "--sliced/--copper ";
@@ -3055,6 +3060,7 @@ std::string_view mode_to_options_string(amiga::Mode m) {
         return "cpc-plus-mode1";
     case amiga::Mode::cpc_plus_mode2:
         return "cpc-plus-mode2";
+    case amiga::Mode::nibnib: return "nibnib";
     default:
         return "lores";
     }
@@ -3802,6 +3808,7 @@ void save_raw_vga(std::string_view path,
 std::pair<std::size_t, std::size_t> preview_display_dims(
     std::size_t w, std::size_t h, amiga::Mode mode, bool hires, bool interlace) {
     // 1. Backing-canvas (sx, sy) — mirrors web's previewScale().
+    if (amiga::is_nibnib(mode)) return {w, h};  // free size, square pixels
     std::size_t sx = 2, sy = 2;
 
     if ((amiga::is_cga(mode) || amiga::is_tandy(mode)) || amiga::is_ega(mode) || amiga::is_vga(mode) || amiga::is_c64(mode)) {
@@ -5921,6 +5928,10 @@ int run_main(int argc, char* argv[]) {
             return exit_code::cant_create;
         }
     }
+    if (ends_with(config->output_path, ".nibnib") && !amiga::is_nibnib(config->mode)) {
+        std::println(stderr, "Error: .nibnib output requires --mode nibnib");
+        return exit_code::usage;
+    }
     if (ends_with(config->output_path, ".k7") &&
         config->mode != amiga::Mode::thomson_to7_320x16) {
         std::println(stderr, "Error: K7 export requires thomson-to7-320x16 (TO7/70) mode");
@@ -6011,6 +6022,7 @@ int run_main(int argc, char* argv[]) {
                 "gba-mode3",
                 "gba-mode4",
                 "gba-mode5",
+                "nibnib",
                 "zx-spectrum",
                 "stf-spectrum512",
                 "ste-spectrum4096",
@@ -6047,6 +6059,7 @@ int run_main(int argc, char* argv[]) {
             cli_status("  C64:      c64-multicolor, c64-hires, c64-fli, c64-afli, c64-petscii,");
             cli_status("            c64-charset-hires, c64-charset-multicolor");
             cli_status("  GBA:      gba-mode3, gba-mode4, gba-mode5");
+            cli_status("  Other:    nibnib");
             cli_status("  MSX:      msx1-screen2, msx2-screen5, msx2-screen6, msx2-screen7, msx2-screen8");
             cli_status("  Thomson:  thomson-to7-320x16, thomson-to8-320x16, "
                        "thomson-to8-160x16,");
@@ -6492,7 +6505,8 @@ int run_main(int argc, char* argv[]) {
             !amiga::is_snes(config->mode) && !amiga::is_genesis(config->mode) &&
             !amiga::is_c64(config->mode) && !amiga::is_gba(config->mode) &&
             !(amiga::is_thomson(config->mode) || amiga::is_msx(config->mode) || amiga::is_retro_raster(config->mode)) && !amiga::is_ted(config->mode) &&
-            !amiga::is_sms(config->mode) && !amiga::is_cpc(config->mode)) {
+            !amiga::is_sms(config->mode) && !amiga::is_cpc(config->mode) &&
+            !amiga::is_nibnib(config->mode)) {
             auto max_d = amiga::max_user_depth(config->mode, cs);
             // --depth auto / --zones resolve the depth from the image later.
             if (config->depth_auto || !config->zones.empty()) config->depth = max_d;
@@ -7072,7 +7086,7 @@ int run_main(int argc, char* argv[]) {
         // the encoder-frame-aspect formula (target_h ≈ screen_width *
         // par / src_aspect) which keeps target_h pinned at the mode's
         // default-canonical height regardless of --width.
-        if (amiga::is_cga_text(config->mode)) {
+        if (amiga::is_cga_text(config->mode) || amiga::is_nibnib(config->mode)) {
             target_h = round_h(static_cast<double>(target_w) / src_aspect);
         } else {
             auto w_par = (target_w != params.screen_width && params.screen_width > 0)
@@ -7083,7 +7097,7 @@ int run_main(int argc, char* argv[]) {
         }
     } else if (config->height) {
         target_h = *config->height;
-        if (amiga::is_cga_text(config->mode)) {
+        if (amiga::is_cga_text(config->mode) || amiga::is_nibnib(config->mode)) {
             target_w = static_cast<std::size_t>(
                 std::lround(static_cast<double>(target_h) * src_aspect));
         } else {
@@ -7128,6 +7142,20 @@ int run_main(int argc, char* argv[]) {
     }
 
     if (amiga::is_cga_pixels(config->mode)) { target_w = 160; target_h = params.screen_height; }
+
+    // nibnib has no screen: by default the output is the input's size.
+    if (amiga::is_nibnib(config->mode) && !config->width && !config->height) {
+        target_w = src_w;
+        target_h = src_h;
+    }
+    // nibnib decodes pixel pairs: the width must be even.
+    if (amiga::is_nibnib(config->mode) && target_w % 2 != 0) {
+        if (config->width || config->no_scale) {
+            std::println(stderr, "Error: nibnib needs an even width (got {})", target_w);
+            return exit_code::usage;
+        }
+        target_w = std::max<std::size_t>(2, target_w - 1);
+    }
 
     if (amiga::is_tandy(config->mode) && src_w == params.screen_width && src_h == params.screen_height) {
         target_w = src_w; target_h = src_h;
@@ -7337,7 +7365,8 @@ int run_main(int argc, char* argv[]) {
              amiga::is_snes(config->mode) || amiga::is_genesis(config->mode) ||
              amiga::is_c64(config->mode) || amiga::is_gba(config->mode) ||
              (amiga::is_thomson(config->mode) || amiga::is_msx(config->mode) || amiga::is_retro_raster(config->mode)) || amiga::is_ted(config->mode) ||
-             amiga::is_sms(config->mode) || amiga::is_cpc(config->mode)) {
+             amiga::is_sms(config->mode) || amiga::is_cpc(config->mode) ||
+             amiga::is_nibnib(config->mode)) {
         // Atari/DOS/SNES/Genesis/C64 modes have their bitplane depth baked
         // into the hardware (ST Low=4, VGA 13h=8, EGA=4, CGA 320=2,
         // cga-text80x100=4 attribute, SNES Mode 7=8 chunky, Genesis tiles=4,
@@ -7386,6 +7415,10 @@ int run_main(int argc, char* argv[]) {
                    static_cast<std::size_t>(target_w),
                    static_cast<std::size_t>(target_h),
                    amiga::is_gba_paletted(config->mode) ? "8bpp" : "16bpp BGR555");
+    } else if (amiga::is_nibnib(config->mode)) {
+        cli_status("Target:   {}x{} @ RGB565, 4 bits per pixel",
+                   static_cast<std::size_t>(target_w),
+                   static_cast<std::size_t>(target_h));
     } else {
         cli_print_target(
             static_cast<std::size_t>(target_w), static_cast<std::size_t>(target_h), print_depth);
@@ -7459,7 +7492,7 @@ int run_main(int argc, char* argv[]) {
                          !amiga::is_snes(config->mode) && !amiga::is_genesis(config->mode) &&
                          !amiga::is_gba(config->mode) && !(amiga::is_thomson(config->mode) || amiga::is_msx(config->mode) || amiga::is_retro_raster(config->mode)) &&
                          !amiga::is_ted(config->mode) && !amiga::is_sms(config->mode) &&
-                         !amiga::is_cpc(config->mode);
+                         !amiga::is_cpc(config->mode) && !amiga::is_nibnib(config->mode);
     if (amiga_chipset) cli_print_chipset(chipset);
 
     // Dual playfield: encoded image lives in PF2 of a 2N-plane display, with
@@ -8195,6 +8228,101 @@ int run_main(int argc, char* argv[]) {
                 return exit_code::internal;
             }
             cli_status("PNG:      {}", config->output_path);
+        }
+
+        if (!config->depfile.empty() && !config->output_path.empty()) {
+            std::array<std::string_view, 2> inputs{
+                config->input_path,
+                config->palette_file,
+            };
+            write_depfile(config->depfile, config->output_path, inputs);
+        }
+        return exit_code::ok;
+    }
+
+    // --- nibnib (RGB565 pair-delta format, CLI only) ---
+    if (amiga::is_nibnib(config->mode)) {
+        if (dither::needs_discrete_palette(config->dither_method)) {
+            std::println(stderr,
+                         "Error: dither '{}' needs a palette of colours; nibnib codes "
+                         "pixel-pair deltas. Use an error-diffusion or ordered method.",
+                         dither_name(config->dither_method));
+            return exit_code::usage;
+        }
+        if (has_transparency) {
+            for (std::size_t i = 0; i < transparency_mask.size(); ++i)
+                if (transparency_mask[i]) image->pixels()[i] = Color3f{0, 0, 0};
+        }
+        nibnib::Options nopts;
+        nopts.dither.method = config->dither_method;
+        const auto tune = dither_tuning::defaults_for(dither_tuning::Context{
+            .mode = config->mode,
+            .depth = 16,
+            .dpf = false,
+            .scap = false,
+            .copper = false,
+            .chipset = chipset,
+            .method = config->dither_method,
+        });
+        nopts.dither.strength =
+            config->dither_strength_explicit ? config->dither_strength : tune.strength;
+        nopts.dither.error_clamp =
+            config->error_clamp_explicit ? config->error_clamp : tune.error_clamp;
+        nopts.best = config->best;
+        nopts.on_progress = make_cli_progress_reporter();
+        auto enc = nibnib::encode(*image, nopts);
+        if (!enc) {
+            std::println(stderr, "nibnib encode error: {}", enc.error().message);
+            return exit_code::internal;
+        }
+        pipeline::PipelineResult pr;
+        pr.rendered = enc->rendered;
+        pr.finalize_psnr(*image, 0.0f);
+        cli_print_mode(std::format("nibnib ({}x{} RGB565, 4 bits per pixel)",
+                                   pr.rendered.width(),
+                                   pr.rendered.height()));
+        cli_print_dither(config->dither_method, nopts.dither.strength);
+        cli_print_encoded_other(std::format("{} bytes (nibnib)", enc->file.size()),
+                                static_cast<std::size_t>(count_unique_colors(pr.rendered)),
+                                0.0,
+                                pr.psnr,
+                                pr.ssimulacra2_score);
+
+        if (config->preview)
+            show_terminal_preview(pr.rendered,
+                                  config->mode,
+                                  /*hires=*/false,
+                                  /*interlace=*/false,
+                                  has_transparency,
+                                  transparency_mask);
+
+        if (config->output_path.empty()) {
+            // No -o (e.g. `--preview` only). Skip output writing.
+        } else if (ends_with(config->output_path, ".nibnib")) {
+            std::ofstream of(config->output_path, std::ios::binary);
+            of.write(reinterpret_cast<const char*>(enc->file.data()),
+                     static_cast<std::streamsize>(enc->file.size()));
+            if (!of) {
+                std::println(stderr, "nibnib write error: {}", config->output_path);
+                return exit_code::internal;
+            }
+            cli_status("nibnib:   {} ({} bytes)", config->output_path, enc->file.size());
+        } else if (ends_with(config->output_path, ".png")) {
+            auto r = save_preview(config->output_path,
+                                  pr.rendered,
+                                  has_transparency,
+                                  transparency_mask,
+                                  config->mode);
+            if (!r) {
+                std::println(stderr, "PNG write error: {}", r.error().message);
+                return exit_code::internal;
+            }
+            cli_status("PNG:      {}", config->output_path);
+        } else {
+            std::println(stderr,
+                         "nibnib supports .nibnib and .png output (got '{}').",
+                         config->output_path);
+            return exit_code::cant_create;
         }
 
         if (!config->depfile.empty() && !config->output_path.empty()) {

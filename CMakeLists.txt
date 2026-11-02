@@ -87,6 +87,7 @@ set(PNG2AMIGA_CORE_SOURCES
     src/tile_merge.cpp
     src/sms.cpp
     src/cpc.cpp
+    src/nibnib.cpp
     src/pipeline.cpp
     src/ssimulacra2.cpp
     src/api.cpp
@@ -1930,6 +1931,7 @@ sys.exit(0 if ok else 1)")
         "gba-mode3|--mode gba-mode3"
         "gba-mode4|--mode gba-mode4"
         "gba-mode5|--mode gba-mode5"
+        "nibnib|--mode nibnib --width 64"
     )
     foreach(spec ${no_output_modes})
         string(REPLACE "|" ";" parts ${spec})
@@ -2545,6 +2547,13 @@ sys.exit(0 if ok else 1)")
         COMMAND ${_equiv_chk} --in ${_pal_makena_in} -- --mode gba-mode4)
     add_test(NAME "api-equiv-gba-mode5"
         COMMAND ${_equiv_chk} --in ${_pal_makena_in} -- --mode gba-mode5)
+    # nibnib: the web path (api.cpp branch) matches the CLI's main.cpp
+    # block. --width is explicit: without it the CLI keeps the source
+    # size and the api defaults to 320.
+    add_test(NAME "api-equiv-nibnib"
+        COMMAND ${_equiv_chk} --in ${_pal_makena_in} -- --mode nibnib --width 128)
+    add_test(NAME "api-equiv-nibnib-atkinson"
+        COMMAND ${_equiv_chk} --in ${_pal_makena_in} -- --mode nibnib --width 96 --dither atkinson)
     add_test(NAME "api-equiv-c64-multicolor"
         COMMAND ${_equiv_chk} --in ${_pal_makena_in} -- --mode c64-multicolor)
     add_test(NAME "api-equiv-c64-hires"
@@ -3144,6 +3153,24 @@ sys.exit(0 if ok else 1)")
     add_test(NAME "dither-smooth-gradient"
         COMMAND ${PNG2AMIGA_PYTHON} ${CMAKE_SOURCE_DIR}/tools/check_smooth_dither.py
             --cli $<TARGET_FILE:png2amiga>)
+
+    # nibnib output decodes, by the format's rules, to the preview.
+    add_test(NAME "nibnib-decode"
+        COMMAND ${PNG2AMIGA_PYTHON} ${CMAKE_SOURCE_DIR}/tools/check_nibnib.py
+            --cli $<TARGET_FILE:png2amiga>)
+    # .nibnib is only written by --mode nibnib; nibnib needs an even width
+    # and a dither that does not pick from a palette.
+    add_test(NAME "nibnib-reject-other-mode"
+        COMMAND png2amiga --mode lores ${PNG2AMIGA_TEST_INPUT}
+                ${CMAKE_BINARY_DIR}/reject.nibnib)
+    add_test(NAME "nibnib-reject-odd-width"
+        COMMAND png2amiga --mode nibnib --width 101 ${PNG2AMIGA_TEST_INPUT}
+                ${CMAKE_BINARY_DIR}/reject-odd.nibnib)
+    add_test(NAME "nibnib-reject-palette-dither"
+        COMMAND png2amiga --mode nibnib --width 64 --dither yliluoma ${PNG2AMIGA_TEST_INPUT}
+                ${CMAKE_BINARY_DIR}/reject-yl.nibnib)
+    set_tests_properties("nibnib-reject-other-mode" "nibnib-reject-odd-width"
+                         "nibnib-reject-palette-dither" PROPERTIES WILL_FAIL TRUE)
 
     # SNES Mode 7 output decodes, by hardware rules, to the preview.
     add_test(NAME "snes-mode7-hardware-decode"

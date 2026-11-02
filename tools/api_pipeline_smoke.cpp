@@ -16,6 +16,7 @@
 //   --error-clamp <f>
 //   --lock-color0 / --no-lock-color0
 //   --interlace
+//   --width <W> / --height <H>  output size (0 = mode default)
 //   --slice-changes <K>
 //   --raw-out <path>       also write EncodeState::raw_frame
 //   --pal-out <path>       also write the CPC companion .pal bytes
@@ -190,6 +191,8 @@ int main(int argc, char** argv) {
         else if (a == "--cga-text-metric")
             opts.cga_text_metric = std::string(next(a));
         else if (a == "--interlace") opts.interlace = true;
+        else if (a == "--width") opts.width = std::atoi(std::string(next(a)).c_str());
+        else if (a == "--height") opts.height = std::atoi(std::string(next(a)).c_str());
         else if (a == "--chipset") opts.chipset = std::string(next(a));
         else if (a == "--lock-color0") opts.lock_color0 = true;
         else if (a == "--no-lock-color0") opts.lock_color0 = false;
