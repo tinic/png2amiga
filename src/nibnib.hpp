@@ -23,16 +23,18 @@
 //
 // The decoder is fixed; everything here is encoder search: a palette
 // fitted to the image and a beam search over each row's codes, scored
-// in OKLab against the RGB565 target dithered with the chosen method.
+// in OKLab against the source or the dithered RGB565 target.
 // ---------------------------------------------------------------------------
 
 namespace png2amiga::nibnib {
 
 struct Options {
     dither::Settings dither;
-    // Sweep four RGB565 fits, an original-image-scored fit, an earlier
-    // palette checkpoint and decoder-aware palette refinement. Keep the
-    // encode with the highest SSIMULACRA2.
+    // Normal: diverse source-scored palette fit and 64-state row search.
+    // Best: sweep four RGB565 fits, an original-image-scored fit, an earlier
+    // palette checkpoint and decoder-aware palette refinement, then try
+    // a distance-weighted diverse seed fit. Keep the encode with the
+    // highest SSIMULACRA2.
     bool best = false;
     std::function<void(float, std::string_view)> on_progress;
 };

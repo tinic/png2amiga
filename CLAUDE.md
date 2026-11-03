@@ -276,10 +276,14 @@ preview). The CLI dispatches it in `main.cpp`; the web app goes through
 screen_width); the width must be even. Target = source dithered to RGB565
 via `diffuse_raw_buffer`; all 256 palette entries fitted (Lloyd on wanted
 pair deltas, least-used reseeded at worst pairs; upstream's fixed cube
-cost 2.6 S2); rows = beam search (256), state = last pixel, OKLab² cost.
+cost 2.6 S2); state = last pixel, OKLab² cost. Normal mode uses a
+deterministic distance-weighted diverse seed, source-scored fitting with
+the lowest-error checkpoint retained, and a 64-state final row search.
 `--best` = four RGB565 fit restarts, a source-scored fit and an intermediate
 palette checkpoint, then a decoder-aware coordinate refinement of the current
 winner's palette; best SSIMULACRA2 kept using a cached source reference.
+It includes the normal diverse-seed result and refines it with a 256-state
+search only when that result improves the incumbent.
 Identical target/objective rows share their search; duplicate-heavy palettes
 are compacted and unchanged palette fits stop early without changing output.
 `tools/check_nibnib.py` (ctest `nibnib-decode`) decodes by the

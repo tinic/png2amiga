@@ -560,9 +560,15 @@ The decoder is fixed, so all of the quality comes from the encoder:
 2. All 256 palette entries are fitted to the image. Each entry moves to
    the mean delta of the pixel pairs that use it, and the least-used
    entries move to the pairs that are coded worst.
-3. Each row is encoded with a beam search over the codes (256 states).
+3. Each row is encoded with a beam search over the codes (64 states in
+   normal mode; 256 for Best's wider searches).
    The search state is the last decoded pixel, and the cost is the
    OKLab error of both pixels of each pair.
+
+Normal mode starts from a distance-weighted palette seed that covers
+distinct color changes, fits against the original image, and retains the
+lowest-error fitting checkpoint. Its 64-state final search reduces encoding
+work compared with the previous 256-state normal search.
 
 `--best` sweeps four RGB565-target palette fits, a fit scored against the
 original image, an earlier palette checkpoint, and decoder-aware palette
@@ -570,14 +576,19 @@ refinement. The refinement tests small changes to each packed word against
 the colors it actually decodes, including carries and wraparound, then runs
 the row search again. It keeps the result
 with the highest SSIMULACRA2, including the normal encode as a fallback.
+It also includes the normal mode's diverse-seed result; only an improvement
+earns another refinement and full 256-state search. The complete earlier
+Best result remains a fallback.
 
 The encoder reuses identical rows, skips duplicate-heavy palette entries,
 and stops fitting when a palette no longer changes. These shortcuts preserve
 the encoded result; repeated backgrounds and pixel art benefit most.
 
-On six test images, mean SSIMULACRA2 is 78.9, against 60.2 for the
-reference encoder. The file size is the same, because the format fixes
-it. In the web app, pick the "RP2350: nibnib (RGB565)" chipset.
+Across eight native photo, pixel-art and gradient comparisons, normal mode
+encoded 1.5–2.1× faster than the previous normal encoder, with higher
+SSIMULACRA2 in every case ([measurements](experiments/nibnib-encoder/normal-results.json)).
+The file size stays the same because the format fixes it. In the web app,
+pick the "RP2350: nibnib (RGB565)" chipset.
 
 ## Sliced palette (per-line copper swaps)
 
@@ -971,7 +982,7 @@ hashing.
 -->
 
 ```
-png2amiga 1.120.0.1328
+png2amiga 1.121.0.1330
 
 Usage: png2amiga [options] input.[png|jpg|webp] [-o output.[png|iff|h|raw|pal|pi1|pi2|pi3|nibnib]]
 

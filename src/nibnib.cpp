@@ -218,6 +218,57 @@ struct Encoding {
     double cost = 0;
 };
 
+// Deterministic k-means++ coverage of the target's pair deltas. Starting
+// from zero retains the common hold operation; distance-weighted sampling
+// covers distinct moves rather than nearby positions in raster order.
+// Green has twice as many field levels, so scale it before comparing.
+std::array<std::uint32_t, 256> diverse_palette(std::span<const std::array<int, 6>> seeds) {
+    std::array<std::uint32_t, 256> palette{};
+    if (seeds.empty()) return palette;
+    std::vector<double> nearest(seeds.size(), 1e100);
+    std::array<int, 6> center{};
+    std::uint32_t random = 0x8D12E5A3u;
+    for (std::size_t c = 0; c < palette.size(); ++c) {
+        if (c > 0) {
+            double total = 0;
+            for (auto distance : nearest)
+                total += distance;
+            if (total == 0) {
+                // All distinct deltas are covered. The remaining rounds
+                // would only repeat the last word, including on flat art.
+                std::fill(palette.begin() + static_cast<std::ptrdiff_t>(c),
+                          palette.end(),
+                          palette[c - 1]);
+                break;
+            }
+            if (total > 0) {
+                random ^= random << 13;
+                random ^= random >> 17;
+                random ^= random << 5;
+                double threshold = static_cast<double>(random) / 4294967296.0 * total;
+                for (std::size_t i = 0; i < seeds.size(); ++i) {
+                    threshold -= nearest[i];
+                    if (threshold <= 0) {
+                        center = seeds[i];
+                        break;
+                    }
+                }
+            }
+        }
+        palette[c] = pack({center[0], center[1], center[2]}, {center[3], center[4], center[5]});
+        for (std::size_t i = 0; i < seeds.size(); ++i) {
+            double distance = 0;
+            for (std::size_t j = 0; j < center.size(); ++j) {
+                const double error = static_cast<double>(seeds[i][j] - center[j]) *
+                                     (j % 3 == 1 ? 0.5 : 1.0);
+                distance += error * error;
+            }
+            nearest[i] = std::min(nearest[i], distance);
+        }
+    }
+    return palette;
+}
+
 struct RowGroups {
     std::vector<std::size_t> unique;
     std::vector<std::size_t> representative;
@@ -443,34 +494,37 @@ Result<Encoded> encode(const Image& image, const Options& opts) {
     // 2.6 S2 lower: the fit finds the safe moves an image needs). Each
     // round encodes with a narrow beam, moves every code to the mean
     // delta its pairs wanted, and moves the least-used codes to the pairs
-    // coded worst. The final encode uses a wide beam. --best repeats it
-    // from other seeds and keeps the highest SSIMULACRA2.
+    // coded worst. Normal mode uses a diverse source-scored fit and a
+    // 64-state final search. --best also tries raster seeds, RGB565
+    // objectives and 256-state searches, keeping the highest SSIMULACRA2.
     constexpr int kFitIters = 12;
     constexpr std::size_t kFitBeam = 8;
     constexpr std::size_t kReseed = 24;
     constexpr std::size_t kBeam = 256;
+    constexpr std::size_t kScreenBeam = 64;
     // Preserve all four existing RGB565 fits. Add a source-scored fit
     // and the best intermediate palette from the default fit to --best.
     const bool sweep = opts.best && w > 2;
     const std::size_t restarts = sweep ? 5 : 1;
+    const auto baseline_work =
+        sweep ? restarts * (static_cast<std::size_t>(kFitIters) * kFitBeam + kBeam) + 2 * kBeam
+              : (static_cast<std::size_t>(kFitIters) + 1) * kFitBeam + kScreenBeam;
+    const auto diverse_work = sweep ? (static_cast<std::size_t>(kFitIters) + 1) * kFitBeam +
+                                          kScreenBeam + kBeam
+                                    : 0;
     // Progress: each pass costs about its beam width per row.
-    const float pass_share = 1.0f / static_cast<float>(
-                                        restarts * (static_cast<std::size_t>(kFitIters) * kFitBeam +
-                                                    kBeam) +
-                                        (sweep ? 2 * kBeam : 0));
+    const float pass_share = 1.0f / static_cast<float>(baseline_work + diverse_work);
     const auto& lab = lab565();
 
     std::vector<OKLab> source_lab;
-    if (sweep) {
-        source_lab.reserve(w * h);
-        for (auto c : image.pixels())
-            source_lab.push_back(color_space::linear_to_oklab(c));
-    }
-    const auto target_rows = group_rows(target, {}, w, h);
-    const auto source_rows = sweep ? group_rows(target, source_lab, w, h) : RowGroups{};
+    source_lab.reserve(w * h);
+    for (auto c : image.pixels())
+        source_lab.push_back(color_space::linear_to_oklab(c));
+    const auto target_rows = sweep ? group_rows(target, {}, w, h) : RowGroups{};
+    const auto source_rows = group_rows(target, source_lab, w, h);
     std::array<std::uint32_t, 256> checkpoint{};
     double checkpoint_cost = 0;
-    auto fit = [&](std::size_t restart, std::span<const OKLab> objective) {
+    auto fit = [&](std::size_t restart, std::span<const OKLab> objective, bool diverse = false) {
         std::array<std::uint32_t, 256> pal{};
         // A two-pixel row contains only its initial literal pair.
         if (seeds.empty()) return pal;
@@ -480,12 +534,16 @@ Result<Encoded> encode(const Image& image, const Options& opts) {
             const auto& d = seeds[std::min(seeds.size() - 1, c * stride + offset)];
             pal[c] = pack({d[0], d[1], d[2]}, {d[3], d[4], d[5]});
         }
-        for (int it = 0; it < kFitIters; ++it) {
+        if (diverse) pal = diverse_palette(seeds);
+        auto best_fit = pal;
+        double best_fit_cost = 0;
+        const auto fit_start = diverse ? (sweep ? baseline_work : 0)
+                                       : restart * (static_cast<std::size_t>(kFitIters) * kFitBeam +
+                                                    kBeam);
+        for (int it = 0; it < kFitIters + (diverse ? 1 : 0); ++it) {
             const auto previous_palette = pal;
-            const float lo = (static_cast<float>(restart) *
-                                  static_cast<float>(kFitIters * static_cast<int>(kFitBeam) +
-                                                     static_cast<int>(kBeam)) +
-                              static_cast<float>(it * static_cast<int>(kFitBeam))) *
+            const float lo = static_cast<float>(fit_start +
+                                                static_cast<std::size_t>(it) * kFitBeam) *
                              pass_share;
             std::vector<std::array<int, 6>> wants;
             auto enc = encode_rows(target,
@@ -504,6 +562,11 @@ Result<Encoded> encode(const Image& image, const Options& opts) {
                 checkpoint = pal;
                 checkpoint_cost = enc.cost;
             }
+            if (diverse && (it == 0 || enc.cost < best_fit_cost)) {
+                best_fit = pal;
+                best_fit_cost = enc.cost;
+            }
+            if (it == kFitIters) break;
             std::array<std::array<double, 6>, 256> sum{};
             std::array<double, 256> count{};
             std::vector<std::pair<float, std::size_t>> worst;
@@ -550,7 +613,7 @@ Result<Encoded> encode(const Image& image, const Options& opts) {
             // identical too. There is no benefit in repeating it.
             if (pal == previous_palette) break;
         }
-        return pal;
+        return diverse ? best_fit : pal;
     };
 
     auto build = [&](const std::array<std::uint32_t, 256>& pal,
@@ -594,26 +657,33 @@ Result<Encoded> encode(const Image& image, const Options& opts) {
     float best_score = 0;
     ssimulacra2::PrecomputedSource reference;
     if (sweep) reference.prepare(image.pixels(), w, h);
-    std::vector<std::pair<std::array<std::uint32_t, 256>, bool>> considered;
+    struct Considered {
+        std::array<std::uint32_t, 256> palette;
+        bool source_scored;
+        std::size_t beam;
+    };
+    std::vector<Considered> considered;
     auto consider = [&](const std::array<std::uint32_t, 256>& pal,
                         std::span<const OKLab> objective,
-                        float lo) -> Result<bool> {
+                        float lo,
+                        std::size_t beam) -> Result<bool> {
         const bool source_scored = !objective.empty();
         if (std::ranges::any_of(considered, [&](const auto& entry) {
-                return entry.first == pal && entry.second == source_scored;
+                return entry.palette == pal && entry.source_scored == source_scored &&
+                       entry.beam == beam;
             }))
-            return true;
-        considered.emplace_back(pal, source_scored);
+            return false;
+        considered.push_back({pal, source_scored, beam});
         auto enc = encode_rows(target,
                                objective,
                                objective.empty() ? target_rows : source_rows,
                                w,
                                h,
                                pal,
-                               kBeam,
+                               beam,
                                nullptr,
                                [&](float f) {
-                                   report(lo + f * static_cast<float>(kBeam) * pass_share,
+                                   report(lo + f * static_cast<float>(beam) * pass_share,
                                           "encoding rows");
                                });
         auto out = build(pal, enc);
@@ -622,11 +692,22 @@ Result<Encoded> encode(const Image& image, const Options& opts) {
         if (!best || score > best_score) {
             best = std::move(*out);
             best_score = score;
+            return true;
         }
-        return true;
+        return false;
     };
     std::array<std::uint32_t, 256> default_palette{};
-    for (std::size_t restart = 0; restart < restarts; ++restart) {
+    if (!sweep) {
+        // Normal mode inherits Best's diverse source-scored fit, but
+        // spends only 64 states on the final row search. Best considers
+        // this same candidate before its optional wide refinement.
+        const auto pal = fit(0, source_lab, true);
+        const float lo = static_cast<float>((static_cast<std::size_t>(kFitIters) + 1) * kFitBeam) *
+                         pass_share;
+        if (auto r = consider(pal, source_lab, lo, kScreenBeam); !r)
+            return std::unexpected{r.error()};
+    }
+    for (std::size_t restart = 0; sweep && restart < restarts; ++restart) {
         const std::span<const OKLab> objective = restart == 4 ? std::span(source_lab)
                                                               : std::span<const OKLab>{};
         const auto pal = fit(restart, objective);
@@ -636,11 +717,11 @@ Result<Encoded> encode(const Image& image, const Options& opts) {
                                                  static_cast<int>(kBeam)) +
                           static_cast<float>(kFitIters * static_cast<int>(kFitBeam))) *
                          pass_share;
-        if (auto r = consider(pal, objective, lo); !r) return std::unexpected{r.error()};
+        if (auto r = consider(pal, objective, lo, kBeam); !r) return std::unexpected{r.error()};
     }
     if (sweep && checkpoint != default_palette) {
         const float lo = static_cast<float>(restarts * (kFitIters * kFitBeam + kBeam)) * pass_share;
-        if (auto r = consider(checkpoint, {}, lo); !r) return std::unexpected{r.error()};
+        if (auto r = consider(checkpoint, {}, lo, kBeam); !r) return std::unexpected{r.error()};
     }
     if (sweep) {
         const float lo = static_cast<float>(restarts * (kFitIters * kFitBeam + kBeam) + kBeam) *
@@ -648,11 +729,32 @@ Result<Encoded> encode(const Image& image, const Options& opts) {
         report(lo, "refining palette");
         const auto refined = refine_palette(*best, source_lab, w, h);
         if (refined != best->palette) {
-            if (auto r = consider(refined, source_lab, lo); !r) return std::unexpected{r.error()};
+            if (auto r = consider(refined, source_lab, lo, kBeam); !r)
+                return std::unexpected{r.error()};
+        }
+        // Finish the original Best sweep first so its complete result,
+        // including refinement, remains available as a quality floor.
+        // A distinct source-scored fit explores moves the raster seeds
+        // missed. Refine it only when it improves the decoded S2 score.
+        const auto diversified = fit(restarts, source_lab, true);
+        const auto diverse_fit_work = (static_cast<std::size_t>(kFitIters) + 1) * kFitBeam;
+        const float diverse_lo = static_cast<float>(baseline_work + diverse_fit_work) * pass_share;
+        // Screen the new fit before spending a wide search on it. The
+        // decoded screen result is itself a valid candidate; only an S2
+        // improvement earns refinement and the full 256-state search.
+        const auto screened = consider(diversified, source_lab, diverse_lo, kScreenBeam);
+        if (!screened) return std::unexpected{screened.error()};
+        if (*screened) {
+            const auto proposal = refine_palette(*best, source_lab, w, h);
+            const float refine_lo = static_cast<float>(baseline_work + diverse_fit_work +
+                                                       kScreenBeam) *
+                                    pass_share;
+            if (auto r = consider(proposal, source_lab, refine_lo, kBeam); !r)
+                return std::unexpected{r.error()};
         }
     }
     for (std::size_t i = 0; i < w * h; ++i)
-        best->quant_error += dist(color_space::linear_to_oklab(image.pixels()[i]),
+        best->quant_error += dist(source_lab[i],
                                   color_space::linear_to_oklab(best->rendered.pixels()[i]));
     report(1.0f, "done");
     return std::move(*best);
