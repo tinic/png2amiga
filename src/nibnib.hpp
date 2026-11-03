@@ -30,17 +30,18 @@ namespace png2amiga::nibnib {
 
 struct Options {
     dither::Settings dither;
-    // Fit the palette from four starting points and keep the encode with
-    // the highest SSIMULACRA2 (about 4x the time).
+    // Sweep four RGB565 fits, an original-image-scored fit, an earlier
+    // palette checkpoint and decoder-aware palette refinement. Keep the
+    // encode with the highest SSIMULACRA2.
     bool best = false;
     std::function<void(float, std::string_view)> on_progress;
 };
 
 struct Encoded {
-    std::vector<std::uint8_t> file;      // the complete .nibnib file
+    std::vector<std::uint8_t> file;  // the complete .nibnib file
     std::array<std::uint32_t, 256> palette{};
-    Image rendered;                       // decoded, linear RGB
-    float quant_error = 0;                // summed OKLab² error vs the source
+    Image rendered;         // decoded, linear RGB
+    float quant_error = 0;  // summed OKLab² error vs the source
 };
 
 // `image` is linear RGB; its width must be even and at least 2.

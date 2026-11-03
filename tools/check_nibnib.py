@@ -10,6 +10,7 @@ Prints key=value lines; exit status 0 on success.
 """
 import argparse
 from pathlib import Path
+import re
 import subprocess
 import sys
 import tempfile
@@ -70,21 +71,46 @@ def main():
         failed = False
         # Ordered offsets have a fixed size, coarse on a grid as fine as
         # RGB565, so the bound for bayer is looser.
-        for dither, bound in (('floyd-steinberg', 2.0), ('none', 2.0), ('bayer4x4', 12.0)):
-            base = Path(td) / dither
+        scores = {}
+        for label, dither, bound, flags in (
+                ('floyd-steinberg', 'floyd-steinberg', 2.0, []),
+                ('none', 'none', 2.0, []),
+                ('bayer4x4', 'bayer4x4', 12.0, []),
+                ('best', 'floyd-steinberg', 2.0, ['--best'])):
+            base = Path(td) / label
             for ext in ('nibnib', 'png'):
-                subprocess.run([args.cli, str(src), '--mode', 'nibnib', '--no-scale',
+                result = subprocess.run([args.cli, str(src), '--mode', 'nibnib', '--no-scale', *flags,
                                 '--dither', dither, '-o', f'{base}.{ext}'],
-                               check=True, capture_output=True)
+                               check=True, capture_output=True, text=True)
+                scores[label] = float(re.findall(r'S2:\s*(-?\d+(?:\.\d+)?)',
+                                                 result.stdout + result.stderr)[-1])
             dec = decode((base.with_suffix('.nibnib')).read_bytes())
             prev = np.asarray(Image.open(base.with_suffix('.png')).convert('RGB'))
             source = np.asarray(Image.open(src).convert('RGB')).astype(float)
             mismatch = int(np.any(dec != prev, axis=-1).sum())
             err = float(np.abs(dec.astype(float) - source).mean())
-            print(f'{dither}_mismatched_pixels={mismatch}')
-            print(f'{dither}_mean_abs_vs_source={err:.2f}')
+            print(f'{label}_mismatched_pixels={mismatch}')
+            print(f'{label}_mean_abs_vs_source={err:.2f}')
             if mismatch or err > bound:
                 failed = True
+        if scores['best'] < scores['floyd-steinberg']:
+            print(f'best regressed: {scores}')
+            failed = True
+        # Literal-only rows and all row-padding phases. Width 2 used to
+        # crash while seeding an empty delta palette, including --best.
+        for width in (2, 4, 6, 8, 10):
+            pixels = np.zeros((8, width, 3), dtype=np.uint8)
+            pixels[:, ::2, 0] = 255
+            pixels[:, 1::2, 1] = 255
+            Image.fromarray(pixels).save(src)
+            for flags in ([], ['--best']):
+                path = Path(td) / 'tiny.nibnib'
+                subprocess.run([args.cli, str(src), '--mode', 'nibnib', '--no-scale',
+                                '--dither', 'none', *flags, '-o', str(path)],
+                               check=True, capture_output=True)
+                if not np.array_equal(decode(path.read_bytes()), pixels):
+                    print(f'literal/padding mismatch: width={width}, flags={flags}')
+                    failed = True
         return 1 if failed else 0
 
 

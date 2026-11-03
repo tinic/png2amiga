@@ -564,8 +564,16 @@ The decoder is fixed, so all of the quality comes from the encoder:
    The search state is the last decoded pixel, and the cost is the
    OKLab error of both pixels of each pair.
 
-`--best` fits the palette from four starting points and keeps the
-result with the highest SSIMULACRA2 (about 4x the time).
+`--best` sweeps four RGB565-target palette fits, a fit scored against the
+original image, an earlier palette checkpoint, and decoder-aware palette
+refinement. The refinement tests small changes to each packed word against
+the colors it actually decodes, including carries and wraparound, then runs
+the row search again. It keeps the result
+with the highest SSIMULACRA2, including the normal encode as a fallback.
+
+The encoder reuses identical rows, skips duplicate-heavy palette entries,
+and stops fitting when a palette no longer changes. These shortcuts preserve
+the encoded result; repeated backgrounds and pixel art benefit most.
 
 On six test images, mean SSIMULACRA2 is 78.9, against 60.2 for the
 reference encoder. The file size is the same, because the format fixes
@@ -963,7 +971,7 @@ hashing.
 -->
 
 ```
-png2amiga 1.119.1
+png2amiga 1.120.0.1328
 
 Usage: png2amiga [options] input.[png|jpg|webp] [-o output.[png|iff|h|raw|pal|pi1|pi2|pi3|nibnib]]
 
@@ -1033,7 +1041,7 @@ Search quality:
   --best                          Multi-restart search (~20–30× slower).
                                   Works with plain HAM/EHB/lores/hires,
                                   --sliced / --strips, Thomson 320x16
-                                  and nibnib (4 restarts, ~4× slower).
+                                  and nibnib (palette/objective sweep).
 
 Image processing:
   --brightness <float>            -1.0..1.0 (default: 0.0)
@@ -1168,7 +1176,6 @@ Build integration:
 
 Exit codes (sysexits.h):
   0 ok    1 internal    64 usage    66 no input    73 cannot create
-
 ```
 
 ## License

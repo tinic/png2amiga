@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.28)
-project(png2amiga VERSION 1.119.1 LANGUAGES C CXX)
+project(png2amiga VERSION 1.120.0 LANGUAGES C CXX)
 
 if(EMSCRIPTEN OR MSVC)
     set(CMAKE_CXX_STANDARD 23)
@@ -2554,6 +2554,8 @@ sys.exit(0 if ok else 1)")
         COMMAND ${_equiv_chk} --in ${_pal_makena_in} -- --mode nibnib --width 128)
     add_test(NAME "api-equiv-nibnib-atkinson"
         COMMAND ${_equiv_chk} --in ${_pal_makena_in} -- --mode nibnib --width 96 --dither atkinson)
+    add_test(NAME "api-equiv-nibnib-best"
+        COMMAND ${_equiv_chk} --in ${_pal_makena_in} -- --mode nibnib --width 96 --best)
     add_test(NAME "api-equiv-c64-multicolor"
         COMMAND ${_equiv_chk} --in ${_pal_makena_in} -- --mode c64-multicolor)
     add_test(NAME "api-equiv-c64-hires"

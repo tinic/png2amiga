@@ -995,7 +995,8 @@ const depthAutoAvailable = computed(() =>
 const depthAutoActive = computed(() => options.depthAuto && depthAutoAvailable.value)
 const depthZonesActive = computed(() => depthAutoActive.value && options.copper)
 
-const bestEligible = computed(() => !depthZonesActive.value && bestEligibleForMode())
+const bestEligible = computed(() => !depthZonesActive.value &&
+  (isNibnibMode(options.mode) || bestEligibleForMode()))
 function bestEligibleForMode(): boolean {
   const m = options.mode
   if (options.copper || options.scap) return true
@@ -2921,10 +2922,11 @@ async function loadExample(example: typeof EXAMPLES[number]) {
                    for: HAM+sliced (centroid refinement), plain sliced, EHB+sliced,
                    strips DPF, strips EHB. -->
               <div v-if="bestEligible" class="grid align-items-center">
-                <label class="col-4 text-xs text-color-secondary font-semibold" title="Best-quality search. Spends ~20–30× the encode time but searches many more candidates (jittered base palettes × dither strengths × diversities) and picks the one that looks best.">Best</label>
+                <label for="best-quality" class="col-4 text-xs text-color-secondary font-semibold"
+                  :title="isNibnibMode(options.mode) ? 'Search additional palette fits and scoring objectives, then refine the palette against its actual decoded colors. Keep the result with the highest perceptual quality.' : 'Best-quality search. Spends ~20–30× the encode time but searches many more candidates (jittered base palettes × dither strengths × diversities) and picks the one that looks best.'">Best</label>
                 <div class="col-8 flex align-items-center gap-2">
-                  <ToggleSwitch v-model="options.best" />
-                  <span style="color: #888; font-size: 0.625rem;">~20–30× slower, parallel</span>
+                  <ToggleSwitch v-model="options.best" inputId="best-quality" />
+                  <span style="color: #888; font-size: 0.625rem;">{{ isNibnibMode(options.mode) ? 'palette / objective sweep' : '~20–30× slower, parallel' }}</span>
                 </div>
               </div>
               <div v-if="supportsCellRefine(options)" class="grid align-items-center">

@@ -1289,7 +1289,7 @@ void print_usage() {
         "  --best                          Multi-restart search (~20–30× slower).\n"
         "                                  Works with plain HAM/EHB/lores/hires,\n"
         "                                  --sliced / --strips, Thomson 320x16\n"
-        "                                  and nibnib (4 restarts, ~4× slower).\n"
+        "                                  and nibnib (palette/objective sweep).\n"
         "\n"
         "Image processing:\n"
         "  --brightness <float>            -1.0..1.0 (default: 0.0)\n"
