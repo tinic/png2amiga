@@ -15,9 +15,11 @@ import {
   CHIPSETS, DITHER_METHODS, ALPHA_DITHER_METHODS, isNonSquareDither,
   SLIDERS, CGA_TEXT_METRICS, CGA_TEXT_KERNELS, C64_PALETTES, C64_METRICS, c64PaletteRgb, EXAMPLES, examplesForChipset,
   defaultOptions, isHamMode, hamType, isEhbMode, isAtariMode,
-  isDosMode, isVgaMode, isEgaMode, isSnesMode, isSnesDirectMode, isGenesisMode, isC64Mode, isC64CharsetMode, isCgaMode, isCgaText, isTileFreeformMode, isFixedBufferMode, isInterlaceMode, modePar,
+  isZxMode, isAtariSpectrumMode, isDosMode, isTandyMode, isVgaMode, isEgaMode, isSnesMode, isSnesDirectMode, isGenesisMode, isGbaMode, isGbaDirectMode, isNibnibMode, isC64Mode, isC64CharsetMode, isMsxMode, isThomsonMode, isTedMode, isSmsMode, isCpcMode, isCgaMode, isCgaPixels, isCgaText, isTileFreeformMode, isFixedBufferMode, isAmigaMode, supportsCustomPalette, isInterlaceMode, modePar,
   maxDepth, defaultDepth, effectiveChipset, previewScale,
   modesForChipset,
+  supportsCellRefine,
+  requiresCellRefineDiffusion, isErrorDiffusion,
 } from '../lib/options.js'
 import { track } from '../lib/analytics.js'
 import { useImageUpload } from '../composables/useImageUpload.js'
@@ -25,7 +27,7 @@ import { useWasm } from '../composables/useWasm.js'
 
 import DitherGallery from './DitherGallery.vue'
 
-const { loading: wasmLoading, error: wasmError, abort: abortWasm, convertRGBA, convertPNG, convertIFF, convertHeader, convertViewer, convertDegas, convertRaw, convertPRG, convertKoa, convertHir, convertMask, convertMaskRaw } = useWasm()
+const { loading: wasmLoading, error: wasmError, abort: abortWasm, convertRGBA, convertPNG, convertIFF, convertHeader, convertViewer, convertDegas, convertRaw, convertPRG, convertMSX, convertK7, convertKoa, convertScr, convertHir, convertMask, convertMaskRaw } = useWasm()
 
 function onStopEncode(): void {
   abortWasm()
@@ -59,7 +61,13 @@ function onStopEncode(): void {
   }
   resultInfo.value = 'stopped'
 }
-const { imageBytes, imageName, imageUrl, imageWidth, imageHeight, dragOver, uploadTimestamp, onDrop, onDragOver, onDragLeave, openPicker } = useImageUpload()
+const { imageBytes, imageName, imageUrl, imageWidth, imageHeight, dragOver, uploadTimestamp, onDrop, onDragOver, onDragLeave, openPicker, pasteFromClipboard } = useImageUpload()
+
+async function pasteImage(): Promise<void> {
+  dismissHint()
+  const ok = await pasteFromClipboard()
+  if (!ok) errorMsg.value = 'No image in the clipboard — copy an image first, or press Ctrl/Cmd+V.'
+}
 
 const showUploadHint = ref(true)
 
@@ -98,13 +106,67 @@ const crtCanvasRef = useTemplateRef<HTMLCanvasElement>('crtCanvasRef')  // WebGL
 const charsetCanvasRef = useTemplateRef<HTMLCanvasElement>('charsetCanvasRef')
 const genesisTilesCanvasRef = useTemplateRef<HTMLCanvasElement>('genesisTilesCanvasRef')
 const snesTilesCanvasRef = useTemplateRef<HTMLCanvasElement>('snesTilesCanvasRef')
+const smsTilesCanvasRef = useTemplateRef<HTMLCanvasElement>('smsTilesCanvasRef')
 // Sliced / strips / copper-HAM modes evolve their palette per scanline.
 // We render the per-row base palette as a vertical strip beside the
 // preview: backing is N×H pixels (one column per slot, one row per
 // scanline) and CSS-scaled to align with the preview canvas vertically.
 const scanlinePaletteCanvasRef = useTemplateRef<HTMLCanvasElement>('scanlinePaletteCanvasRef')
+const rowMarkCanvasRef = useTemplateRef<HTMLCanvasElement>('rowMarkCanvasRef')
+// Advanced → "Mark rows that are not 1:1": red ticks right of the preview on
+// every scanline whose pixels differ from the source at the chipset's colour
+// precision. Display-only, so toggling it repaints without re-encoding.
+const markRows = ref(false)
+const lastRowMismatch = ref<Uint32Array | null>(null)
+const lastRowMarkCssH = ref(0)
+const rowMismatchCount = computed(() => lastRowMismatch.value?.filter(n => n > 0).length ?? 0)
+// Sliced depth zones of the last result, drawn as alternating grey bands in
+// the same strip (red row marks go on top).
+const lastZones = ref<{ start: number; end: number; depth: number }[]>([])
+const zonesText = computed(() =>
+  lastZones.value.map(z => `${z.start}-${z.end - 1}: ${z.depth}bpl`).join(', '))
+const rowStripTitle = computed(() => [
+  zonesText.value ? `Depth zones (grey bands): ${zonesText.value}.` : '',
+  markRows.value ? "Red: this scanline is not 1:1 with the source at the chipset's colour precision." : '',
+].filter(Boolean).join(' '))
+const rowStripVisible = computed(() =>
+  lastZones.value.length > 0 || (markRows.value && lastRowMismatch.value !== null))
 const hasScanlinePalette = ref(false)
 const crtEnabled = ref(false)
+
+// Split compare view: original image overlaid on the converted preview,
+// clipped at a draggable divider. The original is CSS-stretched to the
+// preview's display size so content lines up 1:1. Native PAR letterboxes
+// the source inside the hardware buffer, so the overlay switches to
+// object-fit: contain there to land on the same rect.
+const splitView = ref(false)
+const splitPos = ref(0.5)
+// True when the source image is pixel-1:1 with the encoded buffer. The
+// overlay then renders nearest-neighbour so it stays crisp under the 4x
+// loupe like the preview canvases; scaled sources keep smooth sampling.
+const splitOriginal1to1 = ref(false)
+const previewStackRef = useTemplateRef<HTMLDivElement>('previewStackRef')
+
+function splitToggle(): void {
+  splitView.value = !splitView.value
+  track('split-toggle', { enabled: splitView.value })
+}
+function splitDragMove(e: PointerEvent): void {
+  if (e.buttons === 0) return
+  const rect = previewStackRef.value?.getBoundingClientRect()
+  if (!rect || rect.width === 0) return
+  splitPos.value = Math.min(1, Math.max(0, (e.clientX - rect.left) / rect.width))
+}
+function splitDragStart(e: PointerEvent): void {
+  ;(e.currentTarget as HTMLElement).setPointerCapture(e.pointerId)
+  splitDragMove(e)
+}
+function splitKeydown(e: KeyboardEvent): void {
+  if (e.key === 'ArrowLeft') splitPos.value = Math.max(0, splitPos.value - 0.02)
+  else if (e.key === 'ArrowRight') splitPos.value = Math.min(1, splitPos.value + 0.02)
+  else return
+  e.preventDefault()
+}
 const converting = ref(false)
 const progress = ref(0)         // 0..100 — encoder progress for slow paths
 const progressStage = ref('')
@@ -150,7 +212,7 @@ function renderCrt() {
   //      filter can address every source pixel (don't OVERshoot it
   //      though — backing > CSS×DPR forces a browser downsample which
   //      aliases the mask back into giant fringes).
-  const DPR = globalThis.window.devicePixelRatio || 1
+  const DPR = window.devicePixelRatio || 1
   const isInterlace = isInterlaceMode(options.mode)
   const minDw = lastSrc.w
   const minDh = lastSrc.h * (isInterlace ? 2 : 4)
@@ -349,6 +411,48 @@ function paintScanlinePaletteStrip(result: ConvertResult, cssH: number) {
   ctx.putImageData(img, 0, 0)
 }
 
+function paintZoneBands(data: Uint8ClampedArray) {
+  for (const [i, z] of lastZones.value.entries()) {
+    const shade = i % 2 ? 150 : 90
+    for (let y = z.start; y < z.end; ++y) data.set([shade, shade, shade, 255], y * 4)
+  }
+}
+function paintMismatchedRows(data: Uint8ClampedArray, rows: Uint32Array) {
+  for (const [y, n] of rows.entries()) {
+    if (n > 0) data.set([255, 40, 40, 255], y * 4)
+  }
+}
+// Rows the strip covers: the result height, from either source.
+const rowStripHeight = computed(() =>
+  lastRowMismatch.value?.length ?? lastZones.value.at(-1)?.end ?? 0)
+function paintRowMarks() {
+  const canvas = rowMarkCanvasRef.value
+  const rows = lastRowMismatch.value
+  const height = rowStripHeight.value
+  const ctx = canvas?.getContext('2d')
+  if (!canvas || !ctx || !height) return
+  canvas.width = 1
+  canvas.height = height
+  canvas.style.height = `${lastRowMarkCssH.value}px`
+  const img = ctx.createImageData(1, height)
+  paintZoneBands(img.data)
+  if (markRows.value) paintMismatchedRows(img.data, rows ?? new Uint32Array())
+  ctx.putImageData(img, 0, 0)
+}
+function updateRowMarks(result: ConvertResult, cssH: number) {
+  lastRowMismatch.value = result.rowMismatch ?? null
+  lastRowMarkCssH.value = cssH
+  const starts = result.zoneRows ?? []
+  const depths = result.zoneDepths ?? []
+  lastZones.value = starts.map((start, i) => ({
+    start,
+    end: starts[i + 1] ?? result.height,
+    depth: depths[i] ?? 0,
+  }))
+  if (rowStripVisible.value) void nextTick(paintRowMarks)
+}
+watch(markRows, () => { void nextTick(paintRowMarks) })
+
 // Custom floating tooltip that tracks the cursor while it's over a
 // palette swatch. Native `title=` would only fire after a long pause,
 // and only on the swatch the cursor entered first — bad UX for a 32-
@@ -396,10 +500,10 @@ function paletteHitAt(clientX: number, clientY: number): PaletteHit | null {
 }
 // When a palette swatch is hovered, the preview canvas is repainted
 // with all pixels NOT matching the swatch hidden (alpha=0). When the
-// encoder emits a per-pixel index map (lastIndices, non-HAM modes)
-// the filter uses index equality — distinguishes slots that resolve
-// to the same RGB (e.g. EHB's slot 0 black-base vs slot 32 black-
-// halfbrite). For HAM and other modes without indices we fall back
+// encoder emits a per-pixel index map (lastIndices — all indexed
+// modes including sliced/strips, where the slot is the stable
+// identity and its RGB varies per scanline) the filter uses index
+// equality. For HAM and other modes without indices we fall back
 // to RGB-equality. Cleared on mouseleave.
 const hoveredPaletteHit = ref<PaletteHit | null>(null)
 function paletteHover(ev: MouseEvent) {
@@ -436,9 +540,11 @@ function paletteHoverLeave() {
 // Build a copy of lastRgba where pixels NOT matching `target` are
 // turned transparent (alpha=0). When lastIndices is available we use
 // per-pixel INDEX equality (so two slots with the same RGB still
-// distinguish — EHB slot 0 vs 32 are both black but different idx).
-// When indices are absent (HAM / sliced / strips / tile modes) we
-// fall back to RGB equality. Returns rgba unchanged when target=null.
+// distinguish — EHB slot 0 vs 32 are both black but different idx,
+// and sliced/strips slots keep their identity as the copper changes
+// their RGB per scanline). When indices are absent (HAM / tile
+// modes) we fall back to RGB equality. Returns rgba unchanged when
+// target=null.
 function maskByIndex(rgba: Uint8Array, indices: Uint8Array,
                      targetIdx: number, n: number): Uint8ClampedArray {
   const out = new Uint8ClampedArray(n * 4)
@@ -514,19 +620,19 @@ const reservablePaletteSize = computed(() => {
 // option (HAM dynamic palette, DPF split, multi-palette tile modes,
 // fixed hardware-palette modes). Hide the panel in those cases —
 // surfacing it would just cause the convert call to error.
-const reservesSupported = computed(() => {
-  const m = options.mode
-  if (isHamMode(m)) return false
-  if (isGenesisMode(m) || isSnesMode(m)) return false
-  if (isC64Mode(m)) return false
-  if (isCgaMode(m) || isCgaText(m)) return false
-  // DPF and DPF+sliced: the CLI gate at main.cpp:5704 explicitly
-  // allows reserves through ("PF1 is zeroed in the current
-  // implementation, so reserves on the depth-3/4 base palette ARE
-  // PF2 reserves"), and copper.cpp's find_best_swap already rejects
-  // OCS-snapping onto reserved colors. No special-case needed.
-  return true
-})
+// Modes whose palette is fixed in hardware, dynamic, auto-quantized, or
+// split into multiple lines — none expose a single reservable CLUT.
+// (HAM dynamic, Genesis/SNES multi-line, C64/Thomson/TED fixed-or-auto,
+// CGA hardware-fixed, GBA direct = no palette.) DPF / DPF+sliced are NOT
+// here: the CLI lets reserves through (PF2 base palette) and copper.cpp
+// rejects OCS-snapping onto reserved colors.
+function modeHasNoReservableClut(m: string): boolean {
+  const fixedOrDynamic = [isHamMode, isGenesisMode, isSnesMode, isC64Mode,
+    isMsxMode, isThomsonMode, isTedMode, isSmsMode, isCpcMode, isCgaMode, isTandyMode, isCgaText, isGbaDirectMode,
+    isNibnibMode]
+  return fixedOrDynamic.some(p => p(m))
+}
+const reservesSupported = computed(() => !modeHasNoReservableClut(options.mode))
 const numReserveRows = computed(() => {
   if (!reservesSupported.value) return 0
   return Math.max(0, Math.ceil(reservablePaletteSize.value / 16))
@@ -627,9 +733,9 @@ function reserveCellEnter(idx: number) {
   else if (reserveDragMode.value === 'clear') clearReserve(idx)
 }
 function endReserveDrag() { reserveDragMode.value = null }
-globalThis.addEventListener('mouseup', endReserveDrag)
+addEventListener('mouseup', endReserveDrag)
 onBeforeUnmount(() => {
-  globalThis.removeEventListener('mouseup', endReserveDrag)
+  removeEventListener('mouseup', endReserveDrag)
 })
 // CSS background fill for one reserve-grid cell — reads the palette
 // byte triple. Returns transparent for indices beyond the palette.
@@ -684,30 +790,45 @@ let exportCount = 0
 const YLIL_FAMILY = new Set([
   'yliluoma', 'yliluoma2', 'opt-checker', 'knoll', 'tri-tone',
   'yliluoma1', 'opt-line', 'opt-line-checker',
-  'opt-vline', 'opt-vline-checker',
+  'opt-vline', 'opt-vline-checker', 'opt-rowdot', 'opt-rowdot-aligned',
+  'opt-rowdot-checker',
 ])
 // SNES Mode 7 Direct quantises every pixel directly to the RGB443 grid
 // — there is no palette table, so the yliluoma family (palette-aware
 // pattern dithers) has nothing to mix and is hidden. All other ordered
 // + ED methods route through dither::diffuse_raw_buffer.
 
+// Smooth plans colour pairs from a palette: Amiga bitplane modes,
+// including Sliced and Strips, but not HAM (api.cpp).
+function smoothAvailable(): boolean {
+  return isCgaPixels(options.mode) || isTandyMode(options.mode) || (isAmigaMode(options.mode) && hamType(options.mode) === null)
+}
 const groupedDitherOptions = computed(() => {
   const ht = hamType(options.mode)
   const hide_nonsquare = ht !== null
   // SNES Mode 7 Direct has no palette table at all → yliluoma family
   // has nothing to mix. HAM does support the family (ham.cpp's per-
   // pixel reachable set), so only Mode 7 Direct hides it now.
-  const hide_yliluoma = isSnesDirectMode(options.mode)
+  // GBA direct modes (mode3/mode5) are gated exactly like SNES Mode 7
+  // Direct: 16bpp BGR555 grid, no palette table → yliluoma has nothing
+  // to mix and DBS has no indices to sweep.
+  // nibnib (RGB565 pair deltas) has no palette of colours either: every
+  // dither::needs_discrete_palette method (yliluoma family, DBS, smooth)
+  // is rejected by api.cpp. smoothAvailable() already excludes it.
+  const nib = isNibnibMode(options.mode)
+  const hide_yliluoma = isSnesDirectMode(options.mode) || isGbaDirectMode(options.mode) || nib
   // DBS sweeps palette indices and so doesn't apply in HAM (no fixed
-  // palette) or SNES Mode 7 Direct (RGB443 grid quantisation).
-  const hide_dbs = ht !== null || isSnesDirectMode(options.mode)
+  // palette) or the direct grid modes (BGR555 / RGB443 grid quantisation).
+  const hide_dbs = ht !== null || isSnesDirectMode(options.mode) || isGbaDirectMode(options.mode) || nib
   return DITHER_METHODS
     .map(g => ({
       label: g.group,
       items: g.items
+        .filter(d => !requiresCellRefineDiffusion(options) || isErrorDiffusion(d.value))
         .filter(d => !(hide_nonsquare && isNonSquareDither(d.value)))
         .filter(d => !(hide_yliluoma && YLIL_FAMILY.has(d.value)))
         .filter(d => !(hide_dbs && d.value === 'dbs'))
+        .filter(d => d.value !== 'smooth' || smoothAvailable())
         .map(d => ({ value: d.value, label: d.label }))
     }))
     .filter(g => g.items.length > 0)
@@ -724,9 +845,12 @@ const showDepthSlider = computed(() => {
   // Sega Genesis (4bpp tiles), and c64 charset (1bpp/2bpp fixed by
   // mode). Tile-freeform modes left isFixedBufferMode in the recent
   // refactor but their depth is still hardware-fixed.
-  return !isHamMode(options.mode) && !isEhbMode(options.mode) &&
-         !isAtariMode(options.mode) && !isFixedBufferMode(options.mode) &&
-         !isTileFreeformMode(options.mode)
+  // Positive gate: depth means bitplanes, which is an Amiga concept. The old
+  // negation chain relied on every non-Amiga family being classified as
+  // fixed-buffer or tile-freeform — true today, but it silently opens up for
+  // any family added later that isn't.
+  return isAmigaMode(options.mode) && !isHamMode(options.mode) &&
+         !isEhbMode(options.mode)
 })
 
 // Raw export tooltip with format layout (HTML for fixed-width font).
@@ -820,46 +944,69 @@ const isEffectiveFixedBuffer = computed(() =>
 // 320×400 with two 8-color playfields fine, even though the
 // combination flickers on consumer monitors without scan-doubling.
 // AGA hires + DPF (depth=4 → 4+4) is also fine.
+// Sliced palette — Amiga copper only, and meaningless with a user-supplied
+// palette (the per-line variants are derived from the encoder's own).
+const slicedAvailable = computed(() => isAmigaMode(options.mode) && !paletteData.value)
+
 const dpfAvailable = computed(() => {
   const m = options.mode
-  if (isHamMode(m) || isEhbMode(m) || isAtariMode(m) || isFixedBufferMode(m)) return false
+  // Amiga-only, same reason as the Sliced toggle: isFixedBufferMode() lets
+  // the tile-freeform modes (c64-charset, Genesis, SNES) through.
+  if (!isAmigaMode(m)) return false
+  if (isHamMode(m) || isEhbMode(m) || isAtariMode(m)) return false
   const cs = effectiveChipset(m, options.chipset)
   if (cs === 'aga') return options.depth === 4
   return options.depth === 3 && !m.includes('hires')
 })
 
-// strips — mid-line palette swaps. Two flavours, both OCS lores only:
+// strips — mid-line palette swaps, OCS only:
+//   * lores (depth 1-4, no DPF): 2-16 base colors, 8-px slot grid.
 //   * DPF + lores (depth=3): 3-plane PF2, 8 base colors.
 //   * EHB (mode=ehb): 32 base + 32 hardware-derived half-brites.
+//   * HAM6 (mode=ham6, lores, no interlace): 16 base colours.
 // strips is an extension to sliced (per-line palette evolution); enabling
 // strips turns sliced on too, and turning sliced off cascades strips off.
 const scapAvailable = computed(() => {
-  const cs = effectiveChipset(options.mode, options.chipset)
-  if (cs !== 'ocs') return false
-  // DPF lores at depth=3
-  if (options.dualPlayfield && options.mode === 'lores' &&
-      options.depth === 3) return true
-  // EHB (depth is fixed at 6 for EHB; mode string identifies it)
-  if (options.mode === 'ehb') return true
-  return false
+  if (effectiveChipset(options.mode, options.chipset) !== 'ocs') return false
+  // EHB and HAM6 have fixed depth; the mode string identifies them.
+  if (options.mode === 'ehb' || options.mode === 'ham6') return true
+  if (options.mode !== 'lores') return false
+  // DPF lores at depth=3, plain lores at depth 1-4
+  return options.dualPlayfield ? options.depth === 3 : options.depth <= 4
 })
 
 // --best multi-restart sweep eligibility. Mirrors the C++ eligibility
 // gates in src/api.cpp: lores/hires plain, EHB plain (no copper/scap/dpf),
-// HAM6/HAM8 (any depth that maps to those modes), and any sliced/strips
-// mode (copper or scap on).
+// HAM6/HAM8 (any depth that maps to those modes), any sliced/strips
+// mode (copper or scap on), and Thomson forme-couleur (pair-weight grid
+// sweep).
 const PLAIN_INDEXED_MODES = new Set([
   'lores', 'lores-lace', 'hires', 'hires-lace',
 ])
-const bestEligible = computed(() => {
+const FORMECOULEUR_MODES = new Set([
+  'thomson-to7-320x16', 'thomson-to8-320x16',
+])
+// Depth "Auto" (lores/hires): fewest planes that keep the image 1:1, per
+// horizontal zone with Sliced. Zones are progressive only and plan exactly,
+// so Best has nothing to search there.
+const depthAutoAvailable = computed(() =>
+  ['lores', 'hires', 'lores-lace', 'hires-lace'].includes(options.mode) &&
+  !options.dualPlayfield && !options.scap && !(options.copper && isInterlaceMode(options.mode)))
+const depthAutoActive = computed(() => options.depthAuto && depthAutoAvailable.value)
+const depthZonesActive = computed(() => depthAutoActive.value && options.copper)
+
+const bestEligible = computed(() => !depthZonesActive.value &&
+  (isNibnibMode(options.mode) || bestEligibleForMode()))
+function bestEligibleForMode(): boolean {
   const m = options.mode
   if (options.copper || options.scap) return true
   const t = hamType(m)
   if (t === 'ham6' || t === 'ham8') return true
   if (options.dualPlayfield) return false
   if (isEhbMode(m)) return true
+  if (FORMECOULEUR_MODES.has(m)) return true
   return PLAIN_INDEXED_MODES.has(m)
-})
+}
 
 // Available modes for current chipset
 const availableModes = computed(() => modesForChipset(options.chipset))
@@ -921,7 +1068,7 @@ function syncNativeParToMode(mode: string, oldMode: string): void {
   const fixedNew = isFixed(mode)
   const fixedOld = isFixed(oldMode)
   if (fixedNew && !fixedOld) options.nativePar = true
-  if (!fixedNew) options.nativePar = false
+  if (!fixedNew || isCgaPixels(mode)) options.nativePar = false
 }
 
 // Methods that don't dither in HAM — auto-fallback on mode change so
@@ -948,6 +1095,24 @@ function maybeFallbackSnesDirectDither(mode: string): void {
   }
 }
 
+function maybeFallbackGbaDirectDither(mode: string): void {
+  // GBA direct modes (mode3/mode5) are 16bpp BGR555 with no palette
+  // table — same gating as SNES Mode 7 Direct. Snap any yliluoma
+  // selection back to F-S.
+  if (isGbaDirectMode(mode) && YLIL_FAMILY.has(options.dither)) {
+    options.dither = 'floyd-steinberg'
+  }
+}
+
+// nibnib rejects every palette-picking dither (dither::needs_discrete_palette:
+// the yliluoma family, DBS and smooth). Snap to F-S on entry.
+function maybeFallbackNibnibDither(mode: string): void {
+  if (!isNibnibMode(mode)) return
+  if (YLIL_FAMILY.has(options.dither) || options.dither === 'dbs' || options.dither === 'smooth') {
+    options.dither = 'floyd-steinberg'
+  }
+}
+
 // Genesis prefers opt-checker by default: its 2×2-phase threshold aligns
 // with 8-pixel tile boundaries so tile dedup survives (~40% on photos).
 // Error-diffusion methods (FS, atkinson, etc.) destroy dedup → blow the
@@ -965,6 +1130,8 @@ watch(() => options.mode, (mode, oldMode) => {
   clampDepthForMode(mode)
   maybeFallbackHamDither(mode)
   maybeFallbackSnesDirectDither(mode)
+  maybeFallbackGbaDirectDither(mode)
+  maybeFallbackNibnibDither(mode)
   maybeSelectGenesisDither(mode, oldMode)
   syncNativeParToMode(mode, oldMode)
   // Resize toggle is only meaningful for non-fixed-buffer modes (Amiga
@@ -975,7 +1142,12 @@ watch(() => options.mode, (mode, oldMode) => {
   if (sizeOverride.value && isFixedBufferMode(mode)) {
     sizeOverride.value = false
   }
-  // DPF and strips both require chipset-/depth-specific shapes.
+  // Sliced / DPF / strips all require chipset-/depth-specific shapes. Clear
+  // any that the new mode can't express — otherwise the flag stays set in the
+  // options dict and api.cpp rejects the convert outright ("--sliced/--copper
+  // ... not supported"), which surfaces as a failed encode rather than a
+  // hidden toggle.
+  if (!slicedAvailable.value) options.copper = false
   if (!dpfAvailable.value) options.dualPlayfield = false
   if (!scapAvailable.value) options.scap = false
   track('mode-change', { from: oldMode, to: mode })
@@ -1011,7 +1183,7 @@ watch(bestEligible, (eligible) => {
 })
 
 // Depth changes can invalidate DPF (requires depth=3 OCS / 4 AGA) and
-// strips (depth=3 OCS lores only). Mode/dpf watchers above don't fire
+// strips (OCS lores depth 1-4, DPF depth 3). Mode/dpf watchers above don't fire
 // when only the depth slider moves, so reset here too.
 watch(() => options.depth, () => {
   if (!dpfAvailable.value) options.dualPlayfield = false
@@ -1111,7 +1283,16 @@ function widthHeightRatio(): number {
   return imageHeight.value / imageWidth.value
 }
 
+// nibnib decodes pixel pairs: snap an odd width down to even (api.cpp
+// rejects an explicit odd width, as the CLI does).
+function snapNibnibWidth(): void {
+  if (isNibnibMode(options.mode) && options.width % 2 !== 0) {
+    options.width = Math.max(2, options.width - 1)
+  }
+}
+
 function onWidthCommit() {
+  snapNibnibWidth()
   if (!aspectLocked.value) return
   if (!options.width) return
   const r = widthHeightRatio()
@@ -1147,11 +1328,15 @@ function buildWasmOptions(): WasmOptions {
     !(r.index === 0 && options.lockColor0))
   const out: WasmOptions = {
     ...rest,
+    cellRefine: options.cellRefine && supportsCellRefine(options),
+    dither: requiresCellRefineDiffusion(options) && !isErrorDiffusion(options.dither)
+      ? 'floyd-steinberg' : options.dither,
     alphaDither: alphaDither === 'none' ? '' : alphaDither,
+    depthAuto: depthAutoActive.value,
     reserves: cleanReserves.map(r => ({
       index: r.index, r: r.r, g: r.g, b: r.b,
     })),
-    ...(paletteData ? { paletteData } : {}),
+    ...(paletteData && supportsCustomPalette(options.mode) ? { paletteData } : {}),
   }
   return out
 }
@@ -1195,6 +1380,33 @@ watch(() => options.cgaTextMetric, (val) => {
   if (val !== 'mse' && options.dither !== 'none') options.dither = 'none'
   if (tweakTimer) clearTimeout(tweakTimer)
   tweakTimer = setTimeout(() => { track('setting-tweak', { key: 'cgaTextMetric', value: val }); }, 500)
+})
+
+watch(() => supportsCellRefine(options), (supported) => {
+  if (!supported) options.cellRefine = false
+})
+
+// Lores strips at depth 1 has two colours; reserving colour 0 for black
+// would leave one, so the encoder forces the lock off (matches api.cpp).
+// The user's setting comes back when the override ends.
+const color0LockForcedOff = computed(() =>
+  isTandyMode(options.mode) || isCgaPixels(options.mode) ||
+  options.scap && options.mode === 'lores' && !options.dualPlayfield && options.depth === 1)
+let lockColor0BeforeForce: boolean | null = null
+watch(color0LockForcedOff, (forced) => {
+  if (forced) {
+    lockColor0BeforeForce = options.lockColor0
+    options.lockColor0 = false
+  } else if (lockColor0BeforeForce !== null) {
+    options.lockColor0 = lockColor0BeforeForce
+    lockColor0BeforeForce = null
+  }
+}, { immediate: true })
+
+watch(() => [requiresCellRefineDiffusion(options), options.dither], () => {
+  if (requiresCellRefineDiffusion(options) && !isErrorDiffusion(options.dither)) {
+    options.dither = 'floyd-steinberg'
+  }
 })
 
 // Session duration on page unload
@@ -1253,6 +1465,13 @@ function formatTileStatsCgaText(result: ConvertResult): string {
   return `${t} cells (${cols}×${rows})`
 }
 
+// Hard VRAM tile caps: SNES Mode 7 256, SMS / Game Gear 448.
+function vramTileBudget(mode: string): number {
+  if (isSnesMode(mode)) return 256
+  if (isSmsMode(mode)) return SMS_TILE_BUDGET
+  return 0
+}
+
 function formatTileStatsTiled(result: ConvertResult, mode: string): string {
   if (!result.genesisTotalCells || result.genesisUniqueTiles == null) return ''
   const u = result.genesisUniqueTiles
@@ -1265,9 +1484,8 @@ function formatTileStatsTiled(result: ConvertResult, mode: string): string {
       (options.tileBudget || 256) - (options.tileReserve || 0))
     return formatTileStatsBudget(u, t, ram_kb, budget, 'charset')
   }
-  if (isSnesMode(mode)) {
-    return formatTileStatsBudget(u, t, ram_kb, 256, 'VRAM')
-  }
+  const vram = vramTileBudget(mode)
+  if (vram) return formatTileStatsBudget(u, t, ram_kb, vram, 'VRAM')
   return formatTileStatsGenesis(u, t, ram_kb)
 }
 
@@ -1739,6 +1957,98 @@ function paintGenesisTilesCanvas(result: ConvertResult): void {
 }
 
 // ---------------------------------------------------------------------------
+// SMS / Game Gear tile diagnostic (VDP mode 4).
+// ---------------------------------------------------------------------------
+
+// 448 tiles fit below the name table at $3800.
+const SMS_TILE_BUDGET = 448
+
+// Tilemap entry: bits 0-8 tile, bit 11 palette (0 = CRAM 0-15, 1 = 16-31).
+// Each tile is drawn with the palette of the first cell that uses it.
+function smsFirstPalettes(tilemap: Uint8Array, uniqueTiles: number): Int8Array {
+  const first = new Int8Array(uniqueTiles).fill(-1)
+  for (let c = 0; c < tilemap.length / 2; c++) {
+    const word = ((tilemap[c * 2 + 1] ?? 0) << 8) | (tilemap[c * 2] ?? 0)
+    const idx = word & 0x01FF
+    if (idx < uniqueTiles && first[idx] === -1) first[idx] = (word >> 11) & 1
+  }
+  return first
+}
+
+// Tile rows are 4 bytes, one per bitplane; bit 7 is the leftmost pixel.
+function smsTilePixel(tileBytes: Uint8Array, g: number, r: number, p: number): number {
+  let v = 0
+  for (let plane = 0; plane < 4; plane++) {
+    const byte = tileBytes[g * 32 + r * 4 + plane] ?? 0
+    v |= ((byte >> (7 - p)) & 1) << plane
+  }
+  return v
+}
+
+function smsRgb(pal: Uint8Array, entry: number): [number, number, number] {
+  return [pal[entry * 3] ?? 0, pal[entry * 3 + 1] ?? 0, pal[entry * 3 + 2] ?? 0]
+}
+
+function paintSmsTile(ctx: { px: Uint8ClampedArray; pixelW: number; cols: number;
+    tileBytes: Uint8Array; pal: Uint8Array }, g: number, line: number): void {
+  const gx0 = (g % ctx.cols) * 8
+  const gy0 = Math.floor(g / ctx.cols) * 8
+  for (let r = 0; r < 8; r++) {
+    for (let p = 0; p < 8; p++) {
+      paintTilePixel({
+        px: ctx.px, pixelW: ctx.pixelW, scale: 1, x: gx0 + p, y: gy0 + r,
+        rgb: smsRgb(ctx.pal, line * 16 + smsTilePixel(ctx.tileBytes, g, r, p)),
+      })
+    }
+  }
+}
+
+interface SmsTileInputs {
+  tileBytes: Uint8Array
+  tilemap: Uint8Array
+  pal: Uint8Array
+  unique: number
+}
+
+function smsTileInputs(result: ConvertResult): SmsTileInputs | null {
+  const tileBytes = result.genesisTileBytes
+  const tilemap = result.genesisTilemapBytes
+  const pal = result.paletteBytes
+  const unique = result.genesisUniqueTiles ?? 0
+  if (!tileBytes || !tilemap || !pal || unique === 0) return null
+  return { tileBytes, tilemap, pal, unique }
+}
+
+// 16 tiles per row, shown at 2x.
+function sizeTileCanvas(canvas: HTMLCanvasElement, unique: number, cols: number): void {
+  canvas.width = cols * 8
+  canvas.height = Math.ceil(unique / cols) * 8
+  canvas.style.width = `${canvas.width * 2}px`
+  canvas.style.height = `${canvas.height * 2}px`
+  canvas.style.imageRendering = 'pixelated'
+}
+
+function paintSmsTilesCanvas(result: ConvertResult): void {
+  const canvas = smsTilesCanvasRef.value
+  if (!canvas || !isSmsMode(options.mode)) return
+  const inputs = smsTileInputs(result)
+  if (!inputs) return
+  const first = smsFirstPalettes(inputs.tilemap, inputs.unique)
+  const cols = 16
+  sizeTileCanvas(canvas, inputs.unique, cols)
+  const ctx2d = canvas.getContext('2d')
+  if (!ctx2d) return
+  const imgData = ctx2d.createImageData(canvas.width, canvas.height)
+  const ctx = { px: imgData.data, pixelW: canvas.width, cols,
+    tileBytes: inputs.tileBytes, pal: inputs.pal }
+  for (let g = 0; g < inputs.unique; g++) {
+    const line = first[g] ?? -1
+    if (line !== -1) paintSmsTile(ctx, g, line)
+  }
+  ctx2d.putImageData(imgData, 0, 0)
+}
+
+// ---------------------------------------------------------------------------
 // SNES Mode 7 tile diagnostic.
 // ---------------------------------------------------------------------------
 
@@ -1816,6 +2126,8 @@ async function paintAndCacheResult(result: ConvertResult): Promise<boolean> {
   lastRgba = new Uint8Array(result.rgba)
   lastIndices = result.indices ? new Uint8Array(result.indices) : null
   lastSrc = { w: result.width, h: result.height }
+  splitOriginal1to1.value =
+    result.width === imageWidth.value && result.height === imageHeight.value
   lastDst = { w: cssW, h: cssH }
   if (crtEnabled.value) {
     const r = await ensureCrtRenderer()
@@ -1823,8 +2135,10 @@ async function paintAndCacheResult(result: ConvertResult): Promise<boolean> {
   }
   paintCharsetCanvas(result)
   paintGenesisTilesCanvas(result)
+  paintSmsTilesCanvas(result)
   paintSnesTilesCanvas(result)
   paintScanlinePaletteStrip(result, cssH)
+  updateRowMarks(result, cssH)
   return true
 }
 
@@ -1994,6 +2308,8 @@ async function downloadIFF() {
   converting.value = false
 }
 
+const viewerExtension = computed(() => isDosMode(options.mode) ? '.c' : '.cpp')
+
 async function downloadViewer() {
   if (!imageBytes.value) return
   converting.value = true
@@ -2006,11 +2322,18 @@ async function downloadViewer() {
     if (result.error) { errorMsg.value = result.error; return }
     const payload: BlobPayload | undefined = result.header ?? result.data
     if (!payload) return
-    downloadBlob(payload, stem + '.cpp', 'text/plain')
+    downloadBlob(payload, stem + viewerExtension.value, 'text/plain')
     exportCount++
     track('export', { format: 'cpp', mode: options.mode, exportCount })
   } catch (error) { errorMsg.value = errorMessage(error) }
   converting.value = false
+}
+
+// File extension for the raw_frame download, per mode.
+function rawExtension(mode: string): string {
+  if (isNibnibMode(mode)) return '.nibnib'
+  if (isAtariSpectrumMode(mode)) return '.spu'
+  return isSmsMode(mode) || isCpcMode(mode) ? '.bin' : '.raw'
 }
 
 async function downloadRaw() {
@@ -2020,11 +2343,53 @@ async function downloadRaw() {
     const result = await convertRaw(imageBytes.value, buildWasmOptions())
     if (result.error) { errorMsg.value = result.error; return }
     if (!result.data) return
-    downloadBlob(result.data, baseStem() + '.raw', 'application/octet-stream')
+    downloadBlob(result.data, baseStem() + rawExtension(options.mode), 'application/octet-stream')
     exportCount++
     track('export', { format: 'raw', mode: options.mode, exportCount })
   } catch (error) { errorMsg.value = errorMessage(error) }
   converting.value = false
+}
+
+async function downloadScr() {
+  if (!imageBytes.value) return
+  converting.value = true
+  try {
+    const result = await convertScr(imageBytes.value, buildWasmOptions())
+    if (result.error) { errorMsg.value = result.error; return }
+    if (!result.data) return
+    downloadBlob(result.data, baseStem() + '.scr', 'application/octet-stream')
+    exportCount++
+    track('export', { format: 'scr', mode: options.mode, exportCount })
+  } catch (error) { errorMsg.value = errorMessage(error) }
+  converting.value = false
+}
+
+async function downloadMSX() {
+  if (!imageBytes.value) return
+  converting.value = true
+  try {
+    const result = await convertMSX(imageBytes.value, buildWasmOptions())
+    if (result.error) { errorMsg.value = result.error; return }
+    if (!result.data) return
+    downloadBlob(result.data, baseStem() + '.sc' + options.mode.slice(-1), 'application/octet-stream')
+    exportCount++
+    track('export', { format: 'msx', mode: options.mode, exportCount })
+  } catch (error) { errorMsg.value = errorMessage(error) }
+  finally { converting.value = false }
+}
+
+async function downloadK7() {
+  if (!imageBytes.value) return
+  converting.value = true
+  try {
+    const result = await convertK7(imageBytes.value, buildWasmOptions())
+    if (result.error) { errorMsg.value = result.error; return }
+    if (!result.data) return
+    downloadBlob(result.data, baseStem() + '.k7', 'application/octet-stream')
+    exportCount++
+    track('export', { format: 'k7', mode: options.mode, exportCount })
+  } catch (error) { errorMsg.value = errorMessage(error) }
+  finally { converting.value = false }
 }
 
 async function downloadPRG() {
@@ -2034,7 +2399,7 @@ async function downloadPRG() {
     const result = await convertPRG(imageBytes.value, buildWasmOptions())
     if (result.error) { errorMsg.value = result.error; return }
     if (!result.data) return
-    downloadBlob(result.data, baseStem() + '.prg', 'application/octet-stream')
+    downloadBlob(result.data, baseStem() + (isAtariSpectrumMode(options.mode) ? '.exe' : '.prg'), 'application/octet-stream')
     exportCount++
     track('export', { format: 'prg', mode: options.mode, exportCount })
   } catch (error) { errorMsg.value = errorMessage(error) }
@@ -2160,6 +2525,12 @@ async function compileAndDownload(format: string) {
     track('export', { format, mode: options.mode, exportCount })
   } catch (error) { errorMsg.value = errorMessage(error) }
   converting.value = false
+}
+
+const adjustmentsAtDefault = computed(() => SLIDERS.every(s => options[s.key] === s.default))
+
+function resetAdjustments() {
+  for (const s of SLIDERS) options[s.key] = s.default
 }
 
 function resetOptions() {
@@ -2370,9 +2741,10 @@ async function loadExample(example: typeof EXAMPLES[number]) {
               <template v-else>
                 <i class="pi pi-image text-4xl text-color-secondary mb-2"></i>
                 <div class="font-semibold text-sm">Drop image here</div>
-                <div class="text-xs text-color-secondary">or click to browse</div>
+                <div class="text-xs text-color-secondary">or click to browse, or paste (Ctrl/Cmd+V)</div>
               </template>
             </div>
+            <Button label="Paste from clipboard" icon="pi pi-clipboard" size="small" severity="secondary" class="w-full mt-2" @click="pasteImage" />
             <div class="mt-3">
               <label class="block text-xs text-color-secondary font-semibold mb-2">Examples</label>
               <div class="flex flex-wrap gap-1">
@@ -2411,13 +2783,12 @@ async function loadExample(example: typeof EXAMPLES[number]) {
               <div v-if="showDepthSlider" class="grid align-items-center">
                 <label class="col-4 text-xs text-color-secondary font-semibold" title="Number of bitplanes (1-8). More planes = more colors but more chip RAM.">Depth<i v-if="paletteMismatchDepth" class="pi pi-exclamation-triangle ml-1" style="color:#f59e0b;font-size:0.7rem" :title="paletteMismatchDepth" /></label>
                 <div class="col-5">
-                  <Slider v-model="options.depth" :min="1" :max="depthMax || 6" :step="1" class="w-full" />
+                  <Slider v-model="options.depth" :min="1" :max="depthMax || 6" :step="1" class="w-full" :disabled="depthAutoActive" />
                 </div>
                 <div class="col-3">
-                  <InputNumber v-model="options.depth" :min="1" :max="depthMax || 6" :step="1" class="w-full input-sm" />
+                  <InputNumber v-model="options.depth" :min="1" :max="depthMax || 6" :step="1" class="w-full input-sm" :disabled="depthAutoActive" />
                 </div>
               </div>
-
               <!-- CGA text mode only: per-cell error metric. When blur is
                    selected the dither selector below is hidden, since blur
                    needs the continuous source. -->
@@ -2516,8 +2887,8 @@ async function loadExample(example: typeof EXAMPLES[number]) {
                 </div>
               </div>
 
-              <!-- sliced — Sliced palette (Amiga only; not Atari/DOS/C64) -->
-              <div v-if="!isAtariMode(options.mode) && !isDosMode(options.mode) && !isSnesMode(options.mode) && !isGenesisMode(options.mode) && !isC64Mode(options.mode) && !paletteData" class="grid align-items-center">
+              <!-- sliced — Sliced palette (Amiga copper only) -->
+              <div v-if="slicedAvailable" class="grid align-items-center">
                 <label class="col-4 text-xs text-color-secondary font-semibold" title="Sliced palette: per-scanline palette swaps via the Copper coprocessor, picked greedily by OKLab error reduction. Each row gets its own per-line variant of the base palette. Composes with --dpf (palette evolves across the upper PF2 register bank).">Sliced</label>
                 <div class="col-8 flex align-items-center gap-2">
                   <ToggleSwitch v-model="options.copper" />
@@ -2533,9 +2904,9 @@ async function loadExample(example: typeof EXAMPLES[number]) {
                 </div>
               </div>
 
-              <!-- strips — mid-line palette swaps (OCS lores only, DPF or EHB) -->
+              <!-- strips — mid-line palette swaps (OCS lores 1-4 planes, DPF, EHB or HAM6) -->
               <div v-if="scapAvailable" class="grid align-items-center">
-                <label class="col-4 text-xs text-color-secondary font-semibold" title="Strip palette: mid-line palette swaps inside the displayed area, on top of the sliced palette's per-line evolution. 19 MOVEs per scanline at 16-lores-px stride; slot HPOS table calibrated against real OCS hardware. Two flavours: DPF (3-plane PF2, 8 base colors) and EHB (32 base + 32 hardware-derived half-brites).">Strips</label>
+                <label class="col-4 text-xs text-color-secondary font-semibold" title="Strip palette: mid-line palette swaps inside the displayed area, on top of the sliced palette's per-line evolution. Lores 1-4 planes: 39 MOVEs per scanline at 8-px stride. DPF (3-plane PF2, 8 base colors), EHB (32 base + 32 half-brites) and HAM6 (16 base colors): 19 MOVEs at 16-px stride.">Strips</label>
                 <div class="col-8 flex align-items-center gap-2">
                   <ToggleSwitch v-model="options.scap" />
                   <span style="color: #888; font-size: 0.625rem;">mid-line swaps</span>
@@ -2551,10 +2922,18 @@ async function loadExample(example: typeof EXAMPLES[number]) {
                    for: HAM+sliced (centroid refinement), plain sliced, EHB+sliced,
                    strips DPF, strips EHB. -->
               <div v-if="bestEligible" class="grid align-items-center">
-                <label class="col-4 text-xs text-color-secondary font-semibold" title="Best-quality search. Spends ~20–30× the encode time but searches many more candidates (jittered base palettes × dither strengths × diversities) and picks the one that looks best.">Best</label>
+                <label for="best-quality" class="col-4 text-xs text-color-secondary font-semibold"
+                  :title="isNibnibMode(options.mode) ? 'Search additional palette fits and scoring objectives, then refine the palette against its actual decoded colors. Keep the result with the highest perceptual quality.' : 'Best-quality search. Spends ~20–30× the encode time but searches many more candidates (jittered base palettes × dither strengths × diversities) and picks the one that looks best.'">Best</label>
                 <div class="col-8 flex align-items-center gap-2">
-                  <ToggleSwitch v-model="options.best" />
-                  <span style="color: #888; font-size: 0.625rem;">~20–30× slower, parallel</span>
+                  <ToggleSwitch v-model="options.best" inputId="best-quality" />
+                  <span style="color: #888; font-size: 0.625rem;">{{ isNibnibMode(options.mode) ? 'palette / objective sweep' : '~20–30× slower, parallel' }}</span>
+                </div>
+              </div>
+              <div v-if="supportsCellRefine(options)" class="grid align-items-center">
+                <label for="cell-refine" class="col-4 text-xs text-color-secondary font-semibold"
+                  title="Improve how neighboring cells fit together. Takes longer to encode; keeps the original result if perceptual quality decreases.">Cell refine</label>
+                <div class="col-8 flex align-items-center gap-2">
+                  <ToggleSwitch v-model="options.cellRefine" inputId="cell-refine" />
                 </div>
               </div>
               <!-- Native PAR (DOS + SNES + Genesis + C64 — modes with fixed
@@ -2562,7 +2941,7 @@ async function loadExample(example: typeof EXAMPLES[number]) {
                    pillarboxing the image inside the fixed frame instead of
                    stretching. Stays visible (grayed out) for tile-freeform
                    modes when Resize is on so the layout doesn't jump. -->
-              <div v-if="isFixedBufferMode(options.mode) || isTileFreeformMode(options.mode)"
+              <div v-if="!isCgaPixels(options.mode) && (isFixedBufferMode(options.mode) || isTileFreeformMode(options.mode))"
                    class="grid align-items-center">
                 <label class="col-4 text-xs text-color-secondary font-semibold" title="Preserve source aspect ratio on fixed-buffer hardware (DOS / SNES) by letterboxing (reduce height) or pillarboxing (reduce width). Off = stretch to fill the full buffer.">Native PAR</label>
                 <div class="col-8 flex align-items-center gap-2">
@@ -2592,7 +2971,7 @@ async function loadExample(example: typeof EXAMPLES[number]) {
                 <div class="resize-fields" :class="{ unlinked: !aspectLocked }">
                   <label class="resize-label text-xs text-color-secondary font-semibold" title="Output width in pixels. Must be multiple of 16.">Width</label>
                   <div class="resize-input">
-                    <InputNumber v-model="options.width" :min="16" :step="16"
+                    <InputNumber v-model="options.width" :min="16" :step="isNibnibMode(options.mode) ? 2 : 16"
                                  @blur="() => onWidthCommit()"
                                  @keyup.enter="() => onWidthCommit()"
                                  class="w-full input-sm" />
@@ -2622,11 +3001,11 @@ async function loadExample(example: typeof EXAMPLES[number]) {
               <div class="grid align-items-center">
                 <label class="col-4 text-xs text-color-secondary font-semibold" title="Shift the alpha cutoff. 0 = standard 50% threshold. Negative = more opaque pixels pass, positive = fewer.">Threshold</label>
                 <div class="col-5">
-                  <Slider v-model="options.alphaThreshold" :min="-0.5" :max="0.5" :step="0.05" class="w-full" />
+                  <Slider v-model="options.alphaThreshold" :min="-0.5" :max="0.5" :step="0.01" class="w-full" />
                 </div>
                 <div class="col-3">
-                  <InputNumber v-model="options.alphaThreshold" :min="-0.5" :max="0.5" :step="0.05"
-                    :minFractionDigits="2" :maxFractionDigits="2" class="w-full input-sm" />
+                  <InputNumber v-model="options.alphaThreshold" :min="-0.5" :max="0.5" :step="0.01"
+                    :minFractionDigits="2" :maxFractionDigits="6" class="w-full input-sm" />
                 </div>
               </div>
 
@@ -2640,11 +3019,11 @@ async function loadExample(example: typeof EXAMPLES[number]) {
               <div v-if="options.alphaDither !== 'none'" class="grid align-items-center">
                 <label class="col-4 text-xs text-color-secondary font-semibold" title="Alpha dither strength. Controls how aggressively alpha is dithered.">Strength</label>
                 <div class="col-5">
-                  <Slider v-model="options.alphaDitherStrength" :min="0" :max="3.0" :step="0.05" class="w-full" />
+                  <Slider v-model="options.alphaDitherStrength" :min="0" :max="3.0" :step="0.01" class="w-full" />
                 </div>
                 <div class="col-3">
-                  <InputNumber v-model="options.alphaDitherStrength" :min="0" :max="3.0" :step="0.05"
-                    :minFractionDigits="2" :maxFractionDigits="2" class="w-full input-sm" />
+                  <InputNumber v-model="options.alphaDitherStrength" :min="0" :max="3.0" :step="0.01"
+                    :minFractionDigits="2" :maxFractionDigits="6" class="w-full input-sm" />
                 </div>
               </div>
             </div>
@@ -2652,6 +3031,11 @@ async function loadExample(example: typeof EXAMPLES[number]) {
 
           <!-- Adjustments -->
           <Panel header="Adjustments">
+            <template #icons>
+              <Button icon="pi pi-refresh" severity="secondary" text rounded size="small"
+                :disabled="adjustmentsAtDefault" @click="resetAdjustments"
+                title="Reset adjustments to their defaults" aria-label="Reset adjustments" />
+            </template>
             <div class="flex flex-column gap-2">
               <div v-for="s in SLIDERS" :key="s.key" class="grid align-items-center">
                 <label class="col-3 text-xs text-color-secondary font-semibold white-space-nowrap" :title="s.tip">{{ s.label }}</label>
@@ -2660,17 +3044,44 @@ async function loadExample(example: typeof EXAMPLES[number]) {
                 </div>
                 <div class="col-3">
                   <InputNumber v-model="options[s.key]" :min="s.min" :max="s.max" :step="s.step"
-                    :minFractionDigits="2" :maxFractionDigits="2" class="w-full input-sm" />
+                    :minFractionDigits="2" :maxFractionDigits="6" class="w-full input-sm" />
                 </div>
               </div>
 
             </div>
           </Panel>
 
+          <p v-if="isCgaPixels(options.mode)" class="text-xs text-color-secondary">
+            Fixed 160×{{ options.mode === 'cga-160x200' ? 200 : 100 }} pixels, 16 RGBI colors. Preserves CGA pixel art with
+            nearest-neighbor resizing and no glyph matching. Dithering applies when colors need conversion.
+          </p>
+          <p v-if="options.mode === 'cga-160x200'" class="text-xs text-color-secondary">
+            Preview/raw only: 32 KB exceeds standard CGA's 16 KB VRAM. Use
+            160×100 for DOS viewer export.
+          </p>
+          <p v-if="isTandyMode(options.mode)" class="text-xs text-color-secondary">
+            Native Tandy graphics with dithering and nearest-neighbor resizing.
+            DOS exports require Tandy 1000 hardware. Preview shows RGBI output.
+          </p>
           <!-- Export Actions -->
           <div class="flex flex-column gap-2">
+            <div v-if="isZxMode(options.mode)" class="flex gap-2">
+              <Button label="png" icon="pi pi-download" class="flex-1" :disabled="!imageBytes || converting" @click="downloadPNG" />
+              <Button label="scr" icon="pi pi-download" class="flex-1" :disabled="!imageBytes || converting" @click="downloadScr"
+                title="6912-byte Spectrum screen, including 8×8 attributes and shared BRIGHT bits." />
+              <Button label="h" icon="pi pi-download" class="flex-1" :disabled="!imageBytes || converting" @click="downloadHeader" />
+            </div>
+            <div v-if="isAtariSpectrumMode(options.mode)" class="flex gap-2">
+              <Button label="png" icon="pi pi-download" class="flex-1" :disabled="!imageBytes || converting" @click="downloadPNG" />
+              <Button label="exe" icon="pi pi-download" class="flex-1" :disabled="!imageBytes || converting" @click="downloadPRG"
+                title="Atari TOS executable. Rename to .prg for the desktop; PAL 8 MHz 68000. Spectrum 4096 requires STE. Space/Escape exits." />
+              <Button label="cpp" icon="pi pi-download" class="flex-1" :disabled="!imageBytes || converting" @click="downloadViewer"
+                title="Complete GNU m68k C++ viewer source. Build with build-atari.sh." />
+              <Button label="spu" icon="pi pi-download" class="flex-1" :disabled="!imageBytes || converting" @click="downloadRaw"
+                title="Uncompressed Spectrum screen and 199 scanline palettes. 4096 uses STE palette words." />
+            </div>
             <!-- Atari export buttons -->
-            <div v-if="isAtariMode(options.mode)" class="flex gap-2">
+            <div v-if="isAtariMode(options.mode) && !isAtariSpectrumMode(options.mode)" class="flex gap-2">
               <Button label="png" icon="pi pi-download" class="flex-1" :disabled="!imageBytes || converting" @click="downloadPNG"
                 title="Download the converted image as a PNG preview file." />
               <Button :label="options.mode.endsWith('-hi') ? 'pi3' : options.mode.endsWith('-med') ? 'pi2' : 'pi1'" icon="pi pi-download" class="flex-1" :disabled="!imageBytes || converting" @click="downloadDegas"
@@ -2685,19 +3096,23 @@ async function loadExample(example: typeof EXAMPLES[number]) {
             <div v-if="isDosMode(options.mode)" class="flex gap-2">
               <Button label="png" icon="pi pi-download" class="flex-1" :disabled="!imageBytes || converting" @click="downloadPNG"
                 title="Download the converted image as a PNG preview file." />
-              <Button label="img" icon="pi pi-download" class="flex-1" :disabled="!imageBytes || converting" @click="compileAndDownload('dos-img')"
+              <Button label="img" icon="pi pi-download" class="flex-1" :disabled="!imageBytes || converting || options.mode === 'cga-160x200'" @click="compileAndDownload('dos-img')"
                 title="Download a bootable 720KB FAT12 floppy image (FreeDOS kernel + COMMAND.COM + the viewer on AUTOEXEC). Drop into MartyPC or write to a real floppy and it runs." />
-              <Button label="exe" icon="pi pi-download" class="flex-1" severity="secondary" :disabled="!imageBytes || converting" @click="compileAndDownload('dos-exe')"
+              <Button label="exe" icon="pi pi-download" class="flex-1" severity="secondary" :disabled="!imageBytes || converting || options.mode === 'cga-160x200'" @click="compileAndDownload('dos-exe')"
                 title="Download a real-mode 16-bit MS-DOS .exe that displays the image. Builds server-side via ia16-elf-gcc; press any key to exit." />
             </div>
             <div v-if="isDosMode(options.mode)" class="flex gap-2">
-              <Button label="c" icon="pi pi-download" class="flex-1" severity="secondary" :disabled="!imageBytes || converting" @click="downloadViewer"
+              <Button label="c" icon="pi pi-download" class="flex-1" severity="secondary" :disabled="!imageBytes || converting || options.mode === 'cga-160x200'" @click="downloadViewer"
                 title="Download the freestanding 16-bit DOS C viewer source. Build locally: ia16-elf-gcc -march=i80286 -mcmodel=small -Os -o out.exe viewer.c" />
               <Button label="raw" icon="pi pi-download" class="flex-1" severity="secondary" :disabled="!imageBytes || converting" @click="downloadRaw"
-                :title="isEgaMode(options.mode)
+                :title="isTandyMode(options.mode)
+                  ? 'Download banked Tandy VRAM followed by 16 RGBI palette register bytes (16400 bytes for 160x200; 32784 for 320/640x200).'
+                  : isEgaMode(options.mode)
                   ? 'Download raw EGA planar data: 4 bitplanes + 16-byte IrgbIRGB palette (DMA-ready for 0xA0000).'
                   : isVgaMode(options.mode)
                   ? 'Download raw VGA planar data: 4 bitplanes + 16×3-byte 6-bit DAC palette (feed to 0x3C9).'
+                  : isCgaPixels(options.mode)
+                  ? 'Download fixed 0xDE half-block characters and RGBI attributes: 16000 bytes for 160×100, 32000 bytes for 160×200.'
                   : 'Download raw CGA banked planar data (cga-320: 4-color 2bpp; cga-640: 2-color 1bpp).'" />
             </div>
             <!-- C64 export buttons: PNG preview + .prg displayer + format-specific raw. -->
@@ -2738,8 +3153,64 @@ async function loadExample(example: typeof EXAMPLES[number]) {
               <Button label="raw" icon="pi pi-download" class="flex-1" severity="secondary" :disabled="!imageBytes || converting" @click="downloadRaw"
                 title="Download raw bytes: 16 KB tilemap (128×128, u8 tile index) + tile data (unique × 64) + 256×3-byte sRGB palette (256 mode only)." />
             </div>
+            <!-- Game Boy Advance export: PNG + devkitARM-style .h header.
+                 mode4's single .h carries both indices and the BGR555
+                 palette, so PNG + .h is sufficient in the browser. -->
+            <div v-if="isGbaMode(options.mode)" class="flex gap-2">
+              <Button label="png" icon="pi pi-download" class="flex-1" :disabled="!imageBytes || converting" @click="downloadPNG"
+                title="Download the converted image as a PNG preview file." />
+              <Button label="h" icon="pi pi-download" class="flex-1" severity="secondary" :disabled="!imageBytes || converting" @click="downloadHeader"
+                title="Download a GBA C header: Bitmap[] of BGR555 words (Mode 3/5) or 8bpp indices + Pal[256] (Mode 4), with Width / Height / BitmapLen defines." />
+            </div>
+            <!-- Thomson / TED export: PNG preview + generic .h header +
+                 native-layout raw data; TO7/70 also has a K7 picture viewer. -->
+            <div v-if="isMsxMode(options.mode)" class="flex gap-2">
+              <Button :label="'sc' + options.mode.slice(-1)" icon="pi pi-download" class="flex-1" :disabled="!imageBytes || converting" @click="downloadMSX"
+                title='MSX BASIC screen file: SCREEN n:BLOAD "PICTURE.SCn",S. SCREEN 5/6/7: COLOR=RESTORE. MSX2: VDP(9)=VDP(9) OR 34.' />
+              <Button label="png" icon="pi pi-download" class="flex-1" :disabled="!imageBytes || converting" @click="downloadPNG" />
+              <Button label="h" icon="pi pi-download" class="flex-1" severity="secondary" :disabled="!imageBytes || converting" @click="downloadHeader" />
+              <Button label="raw" icon="pi pi-download" class="flex-1" severity="secondary" :disabled="!imageBytes || converting" @click="downloadRaw" title="CPU-visible VRAM from address 0; palette mirror included for SCREEN 5/6/7." />
+            </div>
+            <div v-if="isThomsonMode(options.mode) || isTedMode(options.mode)" class="flex gap-2">
+              <Button v-if="options.mode === 'thomson-to7-320x16'" label="k7" icon="pi pi-download" class="flex-1" :disabled="!imageBytes || converting" @click="downloadK7"
+                title='Download a TO7/70 tape picture viewer. Load with LOADM"",,R; Reset exits.' />
+              <Button label="png" icon="pi pi-download" class="flex-1" :disabled="!imageBytes || converting" @click="downloadPNG"
+                title="Download the converted image as a PNG preview file." />
+              <Button label="h" icon="pi pi-download" class="flex-1" severity="secondary" :disabled="!imageBytes || converting" @click="downloadHeader"
+                title="Download a generic C header: Thomson Couleur/Forme or PageA/PageB (+ 4-bit r/g/b Palette for TO8); TED Bitmap/Luma/Chroma (+ Bg0/Bg1 for multicolor)." />
+              <Button label="raw" icon="pi pi-download" class="flex-1" severity="secondary" :disabled="!imageBytes || converting" @click="downloadRaw"
+                title="Download native-layout raw bytes (Thomson: pageA then pageB; TED: bitmap, luma, chroma, then globals)." />
+            </div>
+            <!-- Master System / Game Gear export: PNG + devkitSMS .h +
+                 raw .bin (tiles, tilemap, CRAM). -->
+            <div v-if="isSmsMode(options.mode)" class="flex gap-2">
+              <Button label="png" icon="pi pi-download" class="flex-1" :disabled="!imageBytes || converting" @click="downloadPNG"
+                title="Download the converted image as a PNG preview file." />
+              <Button label="h" icon="pi pi-download" class="flex-1" severity="secondary" :disabled="!imageBytes || converting" @click="downloadHeader"
+                title="Download a devkitSMS C header: tiles, tilemap (unsigned short), and CRAM palette bytes." />
+              <Button label="bin" icon="pi pi-download" class="flex-1" severity="secondary" :disabled="!imageBytes || converting" @click="downloadRaw"
+                title="Download raw bytes: tiles (32 B each), tilemap (u16 LE per cell), then CRAM." />
+            </div>
+            <!-- Amstrad CPC export: PNG + .h + AMSDOS .scr + raw screen. -->
+            <div v-if="isCpcMode(options.mode)" class="flex gap-2">
+              <Button label="png" icon="pi pi-download" class="flex-1" :disabled="!imageBytes || converting" @click="downloadPNG"
+                title="Download the converted image as a PNG preview file." />
+              <Button label="h" icon="pi pi-download" class="flex-1" severity="secondary" :disabled="!imageBytes || converting" @click="downloadHeader"
+                title="Download a C header: the 16 KB &C000 screen plus the inks." />
+              <Button label="scr" icon="pi pi-download" class="flex-1" severity="secondary" :disabled="!imageBytes || converting" @click="downloadScr"
+                title="Download the screen as .scr: 128-byte AMSDOS header (load &C000) + 16 KB." />
+              <Button label="bin" icon="pi pi-download" class="flex-1" severity="secondary" :disabled="!imageBytes || converting" @click="downloadRaw"
+                title="Download the raw 16 KB screen (no header)." />
+            </div>
+            <!-- nibnib export: PNG preview + the .nibnib file (raw_frame). -->
+            <div v-if="isNibnibMode(options.mode)" class="flex gap-2">
+              <Button label="png" icon="pi pi-download" class="flex-1" :disabled="!imageBytes || converting" @click="downloadPNG"
+                title="Download the converted image as a PNG preview file." />
+              <Button label="nibnib" icon="pi pi-download" class="flex-1" :disabled="!imageBytes || converting" @click="downloadRaw"
+                title="Download the .nibnib file: u16 width, u16 height, 256 × u32 pair-delta palette, then per row two RGB565 pixels and one code byte per following pixel pair, padded to 4 bytes." />
+            </div>
             <!-- Amiga export buttons -->
-            <div v-if="!isAtariMode(options.mode) && !isDosMode(options.mode) && !isSnesMode(options.mode) && !isGenesisMode(options.mode) && !isC64Mode(options.mode)" class="flex gap-2">
+            <div v-if="isAmigaMode(options.mode)" class="flex gap-2">
               <Button label="png" icon="pi pi-download" class="flex-1" :disabled="!imageBytes || converting" @click="downloadPNG"
                 title="Download the converted image as a PNG preview file." />
               <Button label="iff" icon="pi pi-download" class="flex-1" :disabled="!imageBytes || converting" @click="downloadIFF"
@@ -2749,7 +3220,7 @@ async function loadExample(example: typeof EXAMPLES[number]) {
               <Button label="adf" icon="pi pi-download" class="flex-1" :disabled="!imageBytes || converting" @click="compileAndDownload('adf')"
                 title="Download bootable Amiga floppy disk image (ADF)." />
             </div>
-            <div v-if="!isAtariMode(options.mode) && !isDosMode(options.mode) && !isSnesMode(options.mode) && !isGenesisMode(options.mode) && !isC64Mode(options.mode)" class="flex gap-2">
+            <div v-if="isAmigaMode(options.mode)" class="flex gap-2">
               <Button label="exe" icon="pi pi-download" class="flex-1" severity="secondary" :disabled="!imageBytes || converting" @click="compileAndDownload('exe')"
                 title="Download compiled AmigaOS executable. Click left mouse button to exit." />
               <Button label="cpp" icon="pi pi-download" class="flex-1" severity="secondary" :disabled="!imageBytes || converting" @click="downloadViewer"
@@ -2762,10 +3233,12 @@ async function loadExample(example: typeof EXAMPLES[number]) {
 
             <!-- Advanced section -->
             <Panel header="Advanced" toggleable collapsed class="mt-2">
-              <!-- Custom palette: HAM has dynamic per-pixel palette; Genesis
-                   builds 4 separate palette lines from k-means clustering, so
-                   a single uploaded palette has no clean mapping. -->
-              <div v-if="!isHamMode(options.mode) && !isGenesisMode(options.mode)">
+              <!-- Custom palette: HAM has a dynamic per-pixel palette, and
+                   supportsCustomPalette() covers the targets where an uploaded
+                   palette is either ignored by the encoder (C64, CGA text,
+                   SNES, Genesis) or rejected outright (Thomson, TED, GBA
+                   direct). -->
+              <div v-if="!isHamMode(options.mode) && supportsCustomPalette(options.mode)">
                 <label class="block text-xs text-color-secondary font-semibold mb-1">Custom Palette</label>
                 <div class="flex gap-2 align-items-center">
                   <Button label="Load" icon="pi pi-upload" size="small" severity="secondary" @click="loadPalette" :disabled="converting" />
@@ -2802,11 +3275,28 @@ async function loadExample(example: typeof EXAMPLES[number]) {
                 </div>
               </div>
 
-              <!-- Reserve color 0 -->
-              <div class="pt-3 mt-3 border-top-1 surface-border">
+              <!-- Reserve color 0 (nibnib has no palette slot to reserve) -->
+              <div v-if="!isNibnibMode(options.mode)" class="pt-3 mt-3 border-top-1 surface-border">
                 <div class="flex align-items-center gap-2">
-                  <input type="checkbox" v-model="options.lockColor0" id="lockColor0" />
+                  <input type="checkbox" v-model="options.lockColor0" id="lockColor0" :disabled="color0LockForcedOff" />
                   <label for="lockColor0" class="text-xs text-color-secondary" title="Reserve palette index 0 for black (Amiga border/background color). Disable to use all palette slots for image colors.">Reserve color 0 for black</label>
+                </div>
+              </div>
+
+              <!-- Mark rows that are not 1:1 -->
+              <div v-if="isAmigaMode(options.mode)" class="pt-3 mt-3 border-top-1 surface-border">
+                <div class="flex align-items-center gap-2">
+                  <input type="checkbox" v-model="markRows" id="markRows" />
+                  <label for="markRows" class="text-xs text-color-secondary" title="Draw a red mark right of the preview on every scanline whose pixels differ from the source at the chipset's colour precision (OCS 12-bit, AGA 24-bit). Meant for hardware-ready pixel art: turn off Resize and use no dither or an error-diffusion dither.">Mark rows that are not 1:1</label>
+                </div>
+              </div>
+
+              <!-- Automatic depth: fewest planes for 1:1, zoned with Sliced -->
+              <div v-if="showDepthSlider && depthAutoAvailable" class="pt-3 mt-3 border-top-1 surface-border">
+                <div class="flex align-items-center gap-2">
+                  <input id="depthAuto" v-model="options.depthAuto" type="checkbox" />
+                  <label for="depthAuto" class="text-xs text-color-secondary"
+                    title="Use the fewest bitplanes that keep the image 1:1 at the chipset's colour precision; the Depth slider is ignored. With Sliced, the depth changes per horizontal zone: the copper switches BPLCON0 and the modulos at each zone boundary, and the viewer, .h and IFF exports carry the zones.">{{ options.copper ? 'Depth zones (fewest bitplanes per zone)' : 'Fewest bitplanes for 1:1' }}</label>
                 </div>
               </div>
 
@@ -2911,9 +3401,22 @@ async function loadExample(example: typeof EXAMPLES[number]) {
                       class="scanline-palette-strip"
                       style="margin-right: 8px;"
                       title="Per-scanline base palette — one column per slot, one row per scanline." />
-              <div class="preview-stack relative">
+              <div class="preview-stack relative" ref="previewStackRef">
               <canvas ref="canvasRef" class="preview-canvas" v-show="!crtEnabled" />
               <canvas ref="crtCanvasRef" class="preview-canvas" v-show="crtEnabled" />
+              <div v-if="splitView && imageUrl" class="split-overlay" aria-hidden="true"
+                   :style="{ clipPath: `inset(0 ${(1 - splitPos) * 100}% 0 0)` }">
+                <img :src="imageUrl" alt="" class="split-original" :class="{ 'split-original-nn': splitOriginal1to1 }" :style="{ objectFit: options.nativePar && isEffectiveFixedBuffer ? 'contain' : 'fill' }" />
+              </div>
+              <!-- Focusable separator with keyboard support; the rule's
+                   interactive-role list doesn't include separator. -->
+              <!-- eslint-disable-next-line vuejs-accessibility/no-static-element-interactions -->
+              <div v-if="splitView" class="split-divider" role="separator" aria-orientation="vertical"
+                   aria-label="Drag to compare original and converted" tabindex="0"
+                   :aria-valuenow="Math.round(splitPos * 100)" aria-valuemin="0" aria-valuemax="100"
+                   :style="{ left: `calc(${splitPos * 100}% - 6px)` }"
+                   @pointerdown.stop="splitDragStart" @pointermove.stop="splitDragMove" @pointerup.stop
+                   @keydown="splitKeydown"></div>
               <div v-if="converting" class="overlay flex flex-column align-items-center justify-content-center" style="gap: 0.5rem">
                 <ProgressSpinner v-if="!progress" style="width: 2rem; height: 2rem" />
                 <div v-else style="width: 70%; max-width: 22rem; text-align: center;">
@@ -2932,6 +3435,9 @@ async function loadExample(example: typeof EXAMPLES[number]) {
                 </div>
               </div>
               </div>
+              <canvas v-show="rowStripVisible" ref="rowMarkCanvasRef"
+                      class="row-mark-strip"
+                      :title="rowStripTitle" />
             </div>
             <button class="loupe-btn" :class="{ active: loupeActive }" @click.stop="loupeToggle" title="Toggle 4x zoom">
               <i class="pi pi-search"></i>
@@ -2946,10 +3452,18 @@ async function loadExample(example: typeof EXAMPLES[number]) {
             <button class="loupe-btn crt-btn" :class="{ active: crtEnabled }" @click.stop="crtEnabled = !crtEnabled" title="CRT preview — Commodore 1084S RGB monitor simulation (slot mask, scanlines, bloom)">
               <i class="pi pi-desktop"></i>
             </button>
+            <button class="loupe-btn split-btn" :class="{ active: splitView }" @click.stop="splitToggle" title="Split view — original left of the divider, converted right">
+              <i class="pi pi-arrows-h"></i>
+            </button>
           </div>
           <div class="flex justify-content-between align-items-center px-1">
             <span class="text-xs text-color-secondary">{{ resultInfo }}</span>
             <div class="flex align-items-center gap-2">
+              <span v-if="zonesText" class="text-xs text-color-secondary">zones {{ zonesText }}</span>
+              <span v-if="markRows && lastRowMismatch" class="text-xs"
+                    :class="rowMismatchCount ? 'text-red-400' : 'text-green-400'">
+                {{ rowMismatchCount ? `${rowMismatchCount} of ${lastRowMismatch.length} rows not 1:1` : 'all rows 1:1' }}
+              </span>
               <span v-if="errorMsg" class="text-xs text-red-400">{{ errorMsg }}</span>
             </div>
           </div>
@@ -2987,6 +3501,10 @@ async function loadExample(example: typeof EXAMPLES[number]) {
                class="surface-card border-round-lg p-2">
             <canvas ref="snesTilesCanvasRef" class="charset-canvas" />
           </div>
+          <div v-if="isSmsMode(options.mode)"
+               class="surface-card border-round-lg p-2">
+            <canvas ref="smsTilesCanvasRef" class="charset-canvas" />
+          </div>
           <!-- Floating tooltip that tracks the cursor across palette
                swatches. Fixed-position so it stays under the mouse
                regardless of scroll. -->
@@ -3014,12 +3532,12 @@ async function loadExample(example: typeof EXAMPLES[number]) {
 .p-select-overlay .p-select-option-group {
   font-size: 0.75rem;
 }
-/* PrimeVue caps the list at ~200px which clipped the 8-entry chipset
-   dropdown (Amiga OCS / AGA / Atari STF / STE / VGA / EGA / CGA / SNES).
-   Bump the cap so the full list shows without scrolling. */
+/* PrimeVue caps the list at ~200px, which clipped the chipset dropdown.
+   Bump the cap so the whole chipset list (21 entries) shows without
+   scrolling, with room for two more; raise it again past that. */
 .p-select-overlay .p-select-list,
 .p-select-overlay .p-select-list-container {
-  max-height: 360px !important;
+  max-height: 420px !important;
 }
 .p-select-overlay .p-select-option-group {
   font-weight: 700;
@@ -3260,6 +3778,9 @@ async function loadExample(example: typeof EXAMPLES[number]) {
      button when present). */
   right: 4.4rem;
 }
+.loupe-btn.split-btn {
+  right: 6.4rem;
+}
 .loupe-btn:disabled {
   cursor: not-allowed;
   opacity: 0.4;
@@ -3378,6 +3899,14 @@ async function loadExample(example: typeof EXAMPLES[number]) {
   background-color: #c0c0c0;
 }
 
+.row-mark-strip {
+  display: block;
+  width: 6px;
+  margin-left: 4px;
+  image-rendering: pixelated;
+  image-rendering: crisp-edges;
+  flex: 0 0 auto;
+}
 .scanline-palette-strip {
   display: block;
   image-rendering: pixelated;
@@ -3390,5 +3919,39 @@ async function loadExample(example: typeof EXAMPLES[number]) {
   position: absolute;
   inset: 0;
   background: rgba(0, 0, 0, 0.5);
+}
+
+.split-overlay {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+}
+.split-original {
+  display: block;
+  width: 100%;
+  height: 100%;
+  object-fit: fill;
+}
+.split-original-nn {
+  image-rendering: pixelated;
+  image-rendering: crisp-edges;
+}
+.split-divider {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  width: 12px;
+  cursor: ew-resize;
+  touch-action: none;
+  background: linear-gradient(
+    to right,
+    transparent 5px,
+    rgba(255, 255, 255, 0.9) 5px,
+    rgba(255, 255, 255, 0.9) 7px,
+    transparent 7px
+  );
+}
+.split-divider:focus-visible {
+  outline: 2px solid var(--p-primary-color);
 }
 </style>

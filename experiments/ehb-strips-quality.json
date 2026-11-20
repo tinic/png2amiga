@@ -1,0 +1,814 @@
+{
+  "baseline_commit": "40b8712efdd6d00bee188e0600412cd2dfd663cf",
+  "baseline_note": "EHB encoder unchanged at the start of this experiment; binary preserved before EHB edits. DPF improvements were already present but are not used in this mode.",
+  "flags": [
+    "--mode",
+    "ehb",
+    "--strips",
+    "--width",
+    "320",
+    "--height",
+    "200"
+  ],
+  "metric": "SSIMULACRA2 (S2), higher is better; CLI reports two decimals",
+  "corpus": "All 23 PNG/JPEG/WebP specimens directly in examples/; subdirectories excluded",
+  "changes": {
+    "dedup": "One deterministic outer pass; actual RGB444 candidate keys; half-bound candidates invert the hardware nibble shift instead of doubling OKLab.",
+    "lookahead": "dedup + two-strip future candidates and discounted lookahead (0.6, 0.3), two-state beam. No boundary guard yet.",
+    "refined": "lookahead + four register-lifetime fit iterations with exhaustive joint base/half-brite RGB444 search; three-pixel boundary guard; preserve schedule and hardware state on row fallback.",
+    "beam8": "refined with eight beam states; rejected because lower mean S2 and greater runtime.",
+    "final": "Two-state refined version; suppress midline swaps when fewer than two base registers are selectable so boundary guards always have an alternative. Widened EHB guard to seven pixels after user reported remaining artifacts; tolerates three-pixel early/late landings. Maui reproduced right-edge corruption: delay EHB EOL from $DD to $E1, preserve the later wait across line 255, and honor the default COLOR00 black-border lock in the midline planner."
+  },
+  "constraints": "32 base registers + 32 hardware half-brites; unchanged visible EHB slot positions; EOL delayed to $E1; at most 13 hblank and 18 visible MOVEs per line. Initial sliced palettes remain fixed; final values equal to the next line entry are preserved during refinement.",
+  "outcome": {
+    "mean_delta_s2": 2.426956521739129,
+    "wins": 22,
+    "ties": 0,
+    "losses": 1,
+    "regression": "photo.jpg: 62.47 -> 60.98 (-1.49)"
+  },
+  "validation": {
+    "ctest": "46/46 passed: EHB tests plus DPF replay, including Maui at 320x160, +/-3-pixel EHB landings, black-border invariance and 249-row wrap.",
+    "replay": "Exact exported-bitplane/copper-to-preview equality, including \u00b13 pixel landings, 249-row vertical wrap, DBS, reserved registers, one selectable base register, and reduced change budget. Hblank and visible write limits asserted.",
+    "emulator": "Reproduced black marks at Maui right edge with seven-pixel guard. Changing EOL to $E1 removed those marks; locking COLOR00 removed colored right/bottom borders. Built and inspected production maui-fixed at 320x160 in Amiberry A1200: clean edge and black border. User confirmed maui-fixed removes the artifacts. Not physical hardware validation.",
+    "wasm": "Not rebuilt; configured Emscripten toolchain is missing"
+  },
+  "variants": {
+    "baseline": {
+      "mean_s2": 71.09782608695652,
+      "results": [
+        {
+          "image": "3macao.jpg",
+          "s2": 71.59
+        },
+        {
+          "image": "asterix.png",
+          "s2": 77.38
+        },
+        {
+          "image": "brick.png",
+          "s2": 80.55
+        },
+        {
+          "image": "chuck29.png",
+          "s2": 70.51
+        },
+        {
+          "image": "chuck30.png",
+          "s2": 76.02
+        },
+        {
+          "image": "chuck31.png",
+          "s2": 73.98
+        },
+        {
+          "image": "electrichues02.jpg",
+          "s2": 67.9
+        },
+        {
+          "image": "fantasy.png",
+          "s2": 74.12
+        },
+        {
+          "image": "fantasy1.png",
+          "s2": 71.93
+        },
+        {
+          "image": "fantasy2.png",
+          "s2": 70.78
+        },
+        {
+          "image": "fromthe.png",
+          "s2": 72.48
+        },
+        {
+          "image": "grungy.png",
+          "s2": 70.93
+        },
+        {
+          "image": "jungle.webp",
+          "s2": 80.32
+        },
+        {
+          "image": "logo.png",
+          "s2": 69.6
+        },
+        {
+          "image": "lovers.jpg",
+          "s2": 70.89
+        },
+        {
+          "image": "macaw.jpg",
+          "s2": 70.82
+        },
+        {
+          "image": "makena.jpg",
+          "s2": 71.74
+        },
+        {
+          "image": "maui.jpg",
+          "s2": 72.49
+        },
+        {
+          "image": "ocs_4096.png",
+          "s2": 67.73
+        },
+        {
+          "image": "photo.jpg",
+          "s2": 62.47
+        },
+        {
+          "image": "ramps.png",
+          "s2": 54.27
+        },
+        {
+          "image": "shooter.png",
+          "s2": 67.47
+        },
+        {
+          "image": "space3.png",
+          "s2": 69.28
+        }
+      ]
+    },
+    "dedup": {
+      "mean_s2": 71.55391304347826,
+      "results": [
+        {
+          "image": "3macao.jpg",
+          "s2": 71.65
+        },
+        {
+          "image": "asterix.png",
+          "s2": 77.41
+        },
+        {
+          "image": "brick.png",
+          "s2": 80.64
+        },
+        {
+          "image": "chuck29.png",
+          "s2": 72.03
+        },
+        {
+          "image": "chuck30.png",
+          "s2": 77.09
+        },
+        {
+          "image": "chuck31.png",
+          "s2": 74.92
+        },
+        {
+          "image": "electrichues02.jpg",
+          "s2": 68.33
+        },
+        {
+          "image": "fantasy.png",
+          "s2": 73.9
+        },
+        {
+          "image": "fantasy1.png",
+          "s2": 72.34
+        },
+        {
+          "image": "fantasy2.png",
+          "s2": 71.06
+        },
+        {
+          "image": "fromthe.png",
+          "s2": 72.74
+        },
+        {
+          "image": "grungy.png",
+          "s2": 71.62
+        },
+        {
+          "image": "jungle.webp",
+          "s2": 80.66
+        },
+        {
+          "image": "logo.png",
+          "s2": 70.57
+        },
+        {
+          "image": "lovers.jpg",
+          "s2": 71.44
+        },
+        {
+          "image": "macaw.jpg",
+          "s2": 71.46
+        },
+        {
+          "image": "makena.jpg",
+          "s2": 71.81
+        },
+        {
+          "image": "maui.jpg",
+          "s2": 72.68
+        },
+        {
+          "image": "ocs_4096.png",
+          "s2": 70.92
+        },
+        {
+          "image": "photo.jpg",
+          "s2": 62.52
+        },
+        {
+          "image": "ramps.png",
+          "s2": 51.15
+        },
+        {
+          "image": "shooter.png",
+          "s2": 68.12
+        },
+        {
+          "image": "space3.png",
+          "s2": 70.68
+        }
+      ]
+    },
+    "lookahead": {
+      "mean_s2": 74.00391304347826,
+      "results": [
+        {
+          "image": "3macao.jpg",
+          "s2": 73.61
+        },
+        {
+          "image": "asterix.png",
+          "s2": 79.5
+        },
+        {
+          "image": "brick.png",
+          "s2": 81.23
+        },
+        {
+          "image": "chuck29.png",
+          "s2": 73.69
+        },
+        {
+          "image": "chuck30.png",
+          "s2": 77.85
+        },
+        {
+          "image": "chuck31.png",
+          "s2": 75.36
+        },
+        {
+          "image": "electrichues02.jpg",
+          "s2": 72.95
+        },
+        {
+          "image": "fantasy.png",
+          "s2": 76.97
+        },
+        {
+          "image": "fantasy1.png",
+          "s2": 74.68
+        },
+        {
+          "image": "fantasy2.png",
+          "s2": 72.6
+        },
+        {
+          "image": "fromthe.png",
+          "s2": 74.75
+        },
+        {
+          "image": "grungy.png",
+          "s2": 71.91
+        },
+        {
+          "image": "jungle.webp",
+          "s2": 81.35
+        },
+        {
+          "image": "logo.png",
+          "s2": 71.89
+        },
+        {
+          "image": "lovers.jpg",
+          "s2": 73.64
+        },
+        {
+          "image": "macaw.jpg",
+          "s2": 74.37
+        },
+        {
+          "image": "makena.jpg",
+          "s2": 73.56
+        },
+        {
+          "image": "maui.jpg",
+          "s2": 74.6
+        },
+        {
+          "image": "ocs_4096.png",
+          "s2": 74.18
+        },
+        {
+          "image": "photo.jpg",
+          "s2": 61.23
+        },
+        {
+          "image": "ramps.png",
+          "s2": 71.5
+        },
+        {
+          "image": "shooter.png",
+          "s2": 69.09
+        },
+        {
+          "image": "space3.png",
+          "s2": 71.58
+        }
+      ]
+    },
+    "refined": {
+      "mean_s2": 73.87130434782608,
+      "results": [
+        {
+          "image": "3macao.jpg",
+          "s2": 73.62
+        },
+        {
+          "image": "asterix.png",
+          "s2": 79.23
+        },
+        {
+          "image": "brick.png",
+          "s2": 81.15
+        },
+        {
+          "image": "chuck29.png",
+          "s2": 73.41
+        },
+        {
+          "image": "chuck30.png",
+          "s2": 77.75
+        },
+        {
+          "image": "chuck31.png",
+          "s2": 75.2
+        },
+        {
+          "image": "electrichues02.jpg",
+          "s2": 72.72
+        },
+        {
+          "image": "fantasy.png",
+          "s2": 77.02
+        },
+        {
+          "image": "fantasy1.png",
+          "s2": 74.4
+        },
+        {
+          "image": "fantasy2.png",
+          "s2": 73.11
+        },
+        {
+          "image": "fromthe.png",
+          "s2": 74.59
+        },
+        {
+          "image": "grungy.png",
+          "s2": 71.73
+        },
+        {
+          "image": "jungle.webp",
+          "s2": 81.07
+        },
+        {
+          "image": "logo.png",
+          "s2": 71.57
+        },
+        {
+          "image": "lovers.jpg",
+          "s2": 73.44
+        },
+        {
+          "image": "macaw.jpg",
+          "s2": 74.04
+        },
+        {
+          "image": "makena.jpg",
+          "s2": 73.36
+        },
+        {
+          "image": "maui.jpg",
+          "s2": 74.42
+        },
+        {
+          "image": "ocs_4096.png",
+          "s2": 74.1
+        },
+        {
+          "image": "photo.jpg",
+          "s2": 61.23
+        },
+        {
+          "image": "ramps.png",
+          "s2": 71.64
+        },
+        {
+          "image": "shooter.png",
+          "s2": 68.86
+        },
+        {
+          "image": "space3.png",
+          "s2": 71.38
+        }
+      ]
+    },
+    "beam8": {
+      "mean_s2": 73.74347826086957,
+      "results": [
+        {
+          "image": "3macao.jpg",
+          "s2": 73.35
+        },
+        {
+          "image": "asterix.png",
+          "s2": 79.22
+        },
+        {
+          "image": "brick.png",
+          "s2": 81.1
+        },
+        {
+          "image": "chuck29.png",
+          "s2": 73.58
+        },
+        {
+          "image": "chuck30.png",
+          "s2": 77.72
+        },
+        {
+          "image": "chuck31.png",
+          "s2": 75.14
+        },
+        {
+          "image": "electrichues02.jpg",
+          "s2": 72.78
+        },
+        {
+          "image": "fantasy.png",
+          "s2": 76.87
+        },
+        {
+          "image": "fantasy1.png",
+          "s2": 74.6
+        },
+        {
+          "image": "fantasy2.png",
+          "s2": 72.93
+        },
+        {
+          "image": "fromthe.png",
+          "s2": 74.56
+        },
+        {
+          "image": "grungy.png",
+          "s2": 72.09
+        },
+        {
+          "image": "jungle.webp",
+          "s2": 80.89
+        },
+        {
+          "image": "logo.png",
+          "s2": 71.87
+        },
+        {
+          "image": "lovers.jpg",
+          "s2": 73.33
+        },
+        {
+          "image": "macaw.jpg",
+          "s2": 74.15
+        },
+        {
+          "image": "makena.jpg",
+          "s2": 73.32
+        },
+        {
+          "image": "maui.jpg",
+          "s2": 74.32
+        },
+        {
+          "image": "ocs_4096.png",
+          "s2": 74.07
+        },
+        {
+          "image": "photo.jpg",
+          "s2": 60.23
+        },
+        {
+          "image": "ramps.png",
+          "s2": 69.85
+        },
+        {
+          "image": "shooter.png",
+          "s2": 68.58
+        },
+        {
+          "image": "space3.png",
+          "s2": 71.55
+        }
+      ]
+    },
+    "guard3_before_artifact_report": {
+      "mean_s2": 73.87130434782608,
+      "results": [
+        {
+          "image": "3macao.jpg",
+          "s2": 73.62
+        },
+        {
+          "image": "asterix.png",
+          "s2": 79.23
+        },
+        {
+          "image": "brick.png",
+          "s2": 81.15
+        },
+        {
+          "image": "chuck29.png",
+          "s2": 73.41
+        },
+        {
+          "image": "chuck30.png",
+          "s2": 77.75
+        },
+        {
+          "image": "chuck31.png",
+          "s2": 75.2
+        },
+        {
+          "image": "electrichues02.jpg",
+          "s2": 72.72
+        },
+        {
+          "image": "fantasy.png",
+          "s2": 77.02
+        },
+        {
+          "image": "fantasy1.png",
+          "s2": 74.4
+        },
+        {
+          "image": "fantasy2.png",
+          "s2": 73.11
+        },
+        {
+          "image": "fromthe.png",
+          "s2": 74.59
+        },
+        {
+          "image": "grungy.png",
+          "s2": 71.73
+        },
+        {
+          "image": "jungle.webp",
+          "s2": 81.07
+        },
+        {
+          "image": "logo.png",
+          "s2": 71.57
+        },
+        {
+          "image": "lovers.jpg",
+          "s2": 73.44
+        },
+        {
+          "image": "macaw.jpg",
+          "s2": 74.04
+        },
+        {
+          "image": "makena.jpg",
+          "s2": 73.36
+        },
+        {
+          "image": "maui.jpg",
+          "s2": 74.42
+        },
+        {
+          "image": "ocs_4096.png",
+          "s2": 74.1
+        },
+        {
+          "image": "photo.jpg",
+          "s2": 61.23
+        },
+        {
+          "image": "ramps.png",
+          "s2": 71.64
+        },
+        {
+          "image": "shooter.png",
+          "s2": 68.86
+        },
+        {
+          "image": "space3.png",
+          "s2": 71.38
+        }
+      ]
+    },
+    "guard7_before_eol_fix": {
+      "mean_s2": 73.60739130434783,
+      "results": [
+        {
+          "image": "3macao.jpg",
+          "s2": 73.07
+        },
+        {
+          "image": "asterix.png",
+          "s2": 79.14
+        },
+        {
+          "image": "brick.png",
+          "s2": 81.06
+        },
+        {
+          "image": "chuck29.png",
+          "s2": 73.28
+        },
+        {
+          "image": "chuck30.png",
+          "s2": 77.38
+        },
+        {
+          "image": "chuck31.png",
+          "s2": 75.15
+        },
+        {
+          "image": "electrichues02.jpg",
+          "s2": 72.19
+        },
+        {
+          "image": "fantasy.png",
+          "s2": 76.67
+        },
+        {
+          "image": "fantasy1.png",
+          "s2": 73.89
+        },
+        {
+          "image": "fantasy2.png",
+          "s2": 72.82
+        },
+        {
+          "image": "fromthe.png",
+          "s2": 74.35
+        },
+        {
+          "image": "grungy.png",
+          "s2": 71.77
+        },
+        {
+          "image": "jungle.webp",
+          "s2": 80.89
+        },
+        {
+          "image": "logo.png",
+          "s2": 70.97
+        },
+        {
+          "image": "lovers.jpg",
+          "s2": 73.36
+        },
+        {
+          "image": "macaw.jpg",
+          "s2": 73.75
+        },
+        {
+          "image": "makena.jpg",
+          "s2": 72.84
+        },
+        {
+          "image": "maui.jpg",
+          "s2": 74.17
+        },
+        {
+          "image": "ocs_4096.png",
+          "s2": 73.63
+        },
+        {
+          "image": "photo.jpg",
+          "s2": 61.06
+        },
+        {
+          "image": "ramps.png",
+          "s2": 71.62
+        },
+        {
+          "image": "shooter.png",
+          "s2": 68.76
+        },
+        {
+          "image": "space3.png",
+          "s2": 71.15
+        }
+      ]
+    },
+    "final": {
+      "mean_s2": 73.52478260869565,
+      "results": [
+        {
+          "image": "3macao.jpg",
+          "s2": 73.09
+        },
+        {
+          "image": "asterix.png",
+          "s2": 78.98
+        },
+        {
+          "image": "brick.png",
+          "s2": 81.1
+        },
+        {
+          "image": "chuck29.png",
+          "s2": 73.33
+        },
+        {
+          "image": "chuck30.png",
+          "s2": 77.32
+        },
+        {
+          "image": "chuck31.png",
+          "s2": 75.16
+        },
+        {
+          "image": "electrichues02.jpg",
+          "s2": 72.54
+        },
+        {
+          "image": "fantasy.png",
+          "s2": 76.5
+        },
+        {
+          "image": "fantasy1.png",
+          "s2": 73.8
+        },
+        {
+          "image": "fantasy2.png",
+          "s2": 72.58
+        },
+        {
+          "image": "fromthe.png",
+          "s2": 74.49
+        },
+        {
+          "image": "grungy.png",
+          "s2": 71.59
+        },
+        {
+          "image": "jungle.webp",
+          "s2": 80.79
+        },
+        {
+          "image": "logo.png",
+          "s2": 71.46
+        },
+        {
+          "image": "lovers.jpg",
+          "s2": 73.2
+        },
+        {
+          "image": "macaw.jpg",
+          "s2": 74.12
+        },
+        {
+          "image": "makena.jpg",
+          "s2": 72.76
+        },
+        {
+          "image": "maui.jpg",
+          "s2": 74.12
+        },
+        {
+          "image": "ocs_4096.png",
+          "s2": 73.54
+        },
+        {
+          "image": "photo.jpg",
+          "s2": 60.98
+        },
+        {
+          "image": "ramps.png",
+          "s2": 69.96
+        },
+        {
+          "image": "shooter.png",
+          "s2": 68.6
+        },
+        {
+          "image": "space3.png",
+          "s2": 71.06
+        }
+      ]
+    }
+  }
+}

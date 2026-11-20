@@ -126,6 +126,7 @@ src/
   degas.hpp/.cpp      Atari Degas .pi1/.pi2/.pi3 writer (STF low/med/hi)
   cga_font.hpp        IBM CGA 8x8 font (viler CGA.F08, public-domain ROM reconstruction)
   cga_text.hpp/.cpp   CGA text-mode glyph-matching encoder (80x100 super-chunky)
+  nibnib.hpp/.cpp     nibnib RGB565 pair-delta format: fitted palette + row beam search
   cheader_dos_c.*     16-bit DOS C viewer generator (ia16-elf-gcc, real-mode 8088+)
 ```
 
@@ -176,6 +177,117 @@ ST/STE hi-res is hardware-locked to monochrome (white + black). Output to
 
 `--native-par` preserves source aspect by letterboxing/pillarboxing into the
 fixed hardware buffer (default is to stretch-fill).
+
+## Game Boy Advance Modes
+
+| `--mode` | Resolution | Colors | Notes |
+|----------|------------|--------|-------|
+| `gba-mode3` | 240×160 | 32768 | 16bpp BGR555 direct color, one u16/pixel, no palette |
+| `gba-mode4` | 240×160 | 256    | 8bpp paletted + 256-entry BGR555 palette |
+| `gba-mode5` | 160×128 | 32768 | 16bpp BGR555 direct color, smaller buffer (hardware-scaled) |
+
+Fixed-buffer modes (square pixels, PAR 1.0). Output: PNG preview (always)
++ devkitARM/grit-style C header (`.h`: `const unsigned short`/`const
+unsigned char` arrays, element-count sizes, BGR555 palette as `unsigned
+short`) + raw `.bin` (mode4 also writes a companion `.pal`, 256 × u16 LE
+BGR555). Direct modes (mode3/mode5) route per-pixel through
+`dither::diffuse_raw_buffer` snapping to the BGR555 grid (mirrors
+`snes_mode7_direct`, 5-5-5 instead of 3-3-2); mode4 quantizes to 256
+BGR555-snapped colors and dithers via `dither::apply` (mirrors `vga_13h`).
+`--depth` and `--chipset` are no-ops; `.iff` / viewer outputs are rejected.
+
+## Thomson Modes
+
+| `--mode` | Resolution | Colors | Notes |
+|----------|------------|--------|-------|
+| `thomson-to7-320x16` | 320×200 | 16 fixed | forme-couleur, 2 colors/8×1 cell, fixed TO7/70 palette |
+| `thomson-to8-320x16` | 320×200 | 16 prog | forme-couleur, programmable 16-from-4096 palette |
+| `thomson-to8-160x16` | 160×200 | 16 prog | 4bpp bitmap |
+| `thomson-to8-320x4` | 320×200 | 4 prog | 2 bitplanes |
+| `thomson-to8-640x2` | 640×200 | 2 prog | 1bpp |
+
+TO7/70 + TO8, EF9369+TEA5114 gamma LUT (`palette::kThomsonIntens`, non-uniform
+ramp — NOT nibble replication). `src/thomson.{hpp,cpp}`. forme-couleur reuses
+the c64-style per-cell brute force + `diffuse_raw_buffer` dither (cell = 8×1);
+the color byte has INVERTED high bits (TO-series `Decode320x16` format,
+round-trip-verified). Bitmap modes mirror the gba-mode4 quantize→snap→dither→
+pack path (snap each channel to the nearest `intens[]` level). VRAM = two 8 KB
+pages; raw_frame = pageA ++ pageB.
+
+## Commodore TED Modes
+
+| `--mode` | Resolution | Colors | Notes |
+|----------|------------|--------|-------|
+| `ted-hires` | 320×200 | 2 / 8×8 cell | hires (C64-hires-like) |
+| `ted-multicolor` | 160×200 | 4 / 4×8 cell | multicolor: 2 global + 2 per-cell |
+
+Plus/4 / C16. Fixed 121-color palette (`palette::kTedPalette`, 128 entries
+indexed `(luma<<4)|chroma`; chroma 0 = black at every luma → 121 distinct
+hardware colours, of which 111 are unique RGB — Colodore saturates at luma 7).
+`src/ted.{hpp,cpp}`. Per-cell brute force over the 121 colors in OKLab; the
+LUMA / CHROMA bytes pack two 3-bit lumas and two 4-bit chromas per cell.
+Multicolor adds a 2-color global background pair (`$FF15`/`$FF16`). raw_frame
+= bitmap[8000] ++ luma[1000] ++ chroma[1000] (++ bg0,bg1 for multicolor).
+
+Thomson + TED: fixed-buffer (square pixels, PAR 1.0). Output: PNG preview +
+generic C header (`.h`) + native-layout raw `.bin` (TO8 also writes a
+companion `.pal`). `--depth` / `--chipset` no-ops; reserve / lock / external-
+palette and `.iff` / viewer outputs rejected (fixed or auto-quantized palette).
+
+## Sega Master System / Game Gear Modes
+
+| `--mode` | Resolution | Colors | Notes |
+|----------|------------|--------|-------|
+| `sms-mode4` | 256×192 | 2 × 16 of 64 | RGB222 CRAM, ≤ 448 tiles |
+| `gg-mode4` | 160×144 | 2 × 16 of 4096 | RGB444 CRAM |
+
+VDP mode 4, `src/sms.{hpp,cpp}`. `genesis::cluster_tiles` (K=2) → per-cluster
+palette (`quantize::ega_histogram` — RGB222 IS the EGA gamut; OCS brute-force
+for RGB444) → `dither::diffuse_cells_mirrored` → `genesis::dedup_tiles` →
+`tile_merge::merge_to_budget` (shared with SNES Mode 7) + Lloyd refit, slots
+kept single-palette. Preview is decoded from the packed tiles/tilemap/CRAM.
+raw_frame = tiles ++ tilemap (u16 LE) ++ CRAM.
+
+## Amstrad CPC Modes
+
+| `--mode` | Resolution | Inks | Palette |
+|----------|------------|------|---------|
+| `cpc-mode0` / `cpc-plus-mode0` | 160×200 | 16 | 27 firmware / 4096 RGB444 |
+| `cpc-mode1` / `cpc-plus-mode1` | 320×200 | 4 | 27 firmware / 4096 RGB444 |
+| `cpc-mode2` / `cpc-plus-mode2` | 640×200 | 2 | 27 firmware / 4096 RGB444 |
+
+`src/cpc.{hpp,cpp}`. Pen bit order from MAME `amstrad_init_lookups`; hardware
+colour numbers from MAME `amstrad_palette[]`. Inks: 27-colour gamut via
+`quantize::gamut_histogram` (K=16) or exhaustive C(27,K) search scored on a
+dithered 80×50 proxy (K≤4); Plus via OCS brute-force. Dither via
+`dither::apply`. raw_frame = 16 KB `&C000` screen; `.scr` adds a 128-byte
+AMSDOS header; `.pal` = Gate Array bytes (classic) or ASIC `R<<4|B, G` (Plus).
+
+SMS / CPC: fixed-buffer; `--depth` / `--chipset` no-ops; reserve / lock /
+external-palette and `.iff` / viewer outputs rejected. Round-trip ctest:
+`tools/check_sms_cpc_roundtrip.py` decodes the raw output independently.
+
+## nibnib
+
+`--mode nibnib` writes github.com/raphlinus/nibnib files (`.nibnib`; `.png`
+preview). The CLI dispatches it in `main.cpp`; the web app goes through
+`api.cpp` (`raw_frame` = the file). The CLI keeps the source size unless
+`--width` / `--height` is given; the web defaults to 320 wide (ModeParams
+screen_width); the width must be even. Target = source dithered to RGB565
+via `diffuse_raw_buffer`; all 256 palette entries fitted (Lloyd on wanted
+pair deltas, least-used reseeded at worst pairs; upstream's fixed cube
+cost 2.6 S2); state = last pixel, OKLab² cost. Normal mode uses a
+deterministic distance-weighted diverse seed, source-scored fitting with
+the lowest-error checkpoint retained, and a 64-state final row search.
+`--best` = four RGB565 fit restarts, a source-scored fit and an intermediate
+palette checkpoint, then a decoder-aware coordinate refinement of the current
+winner's palette; best SSIMULACRA2 kept using a cached source reference.
+It includes the normal diverse-seed result and refines it with a 256-state
+search only when that result improves the incumbent.
+Identical target/objective rows share their search; duplicate-heavy palettes
+are compacted and unchanged palette fits stop early without changing output.
+`tools/check_nibnib.py` (ctest `nibnib-decode`) decodes by the
+format's rules and must match the preview pixel for pixel.
 
 ## Architecture Notes
 

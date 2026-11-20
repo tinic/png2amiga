@@ -114,10 +114,12 @@ std::vector<std::uint8_t> byterun1_compress(const std::uint8_t* data, std::size_
 std::uint32_t make_camg(amiga::Mode mode, bool hires, bool interlace, bool dpf) {
     std::uint32_t camg = 0;
     auto params = amiga::get_mode_params(mode);
-    if (hires) camg |= 0x8000;          // HIRES
+    // The mode's own resolution counts too, so a caller that only passes the
+    // mode (hires / *_interlace) still gets the right viewport bits.
+    if (hires || params.is_hires) camg |= 0x8000;  // HIRES
     if (params.is_ham) camg |= 0x0800;  // HAM
     if (params.is_ehb) camg |= 0x0080;  // EXTRA_HALFBRITE
-    if (interlace) camg |= 0x0004;      // LACE
+    if (interlace || params.is_interlaced) camg |= 0x0004;  // LACE
     if (dpf) camg |= 0x0400;            // DBLPF (dual playfield)
     return camg;
 }
@@ -230,7 +232,18 @@ Result<std::vector<std::uint8_t>> write_ilbm(const bitplane::BitplaneData& plane
         //   PCHGF_32BIT (flag 0x0002): BigLineChanges,   regs 0..65535, RGB888+A
         // Use Big when the palette can address registers >= 32 (HAM7/HAM8
         // base palette), otherwise Small for compactness.
-        const bool use_big = colors_per_line > 32;
+        // Small changes cannot preserve AGA low nibbles, even with <=32
+        // registers. Select by precision as well as register count.
+        const bool needs_rgb888 = std::any_of(scan_pals.begin(), scan_pals.end(),
+            [](const auto& row) {
+                return std::any_of(row.begin(), row.end(), [](Color3f c) {
+                    auto rgb = color_space::linear_to_srgb(c).clamped();
+                    return std::lround(rgb.r * 255.0f) % 17 != 0 ||
+                           std::lround(rgb.g * 255.0f) % 17 != 0 ||
+                           std::lround(rgb.b * 255.0f) % 17 != 0;
+                });
+            });
+        const bool use_big = colors_per_line > 32 || needs_rgb888;
 
         write_id(out, "PCHG");
         auto pchg_size_off = out.size();

@@ -10,16 +10,20 @@ import {
   defaultDepth,
   defaultOptions,
   effectiveChipset,
+  isAmigaMode,
+  supportsCustomPalette,
   hamType,
   isAtariMode,
   isCgaMode,
   isDosMode,
+  isFixedBufferMode,
   isEgaMode,
   isEhbMode,
   isErrorDiffusion,
   isHamMode,
   isHiresMode,
   isInterlaceMode,
+  isNibnibMode,
   isVgaMode,
   maxDepth,
   modePar,
@@ -27,7 +31,48 @@ import {
   numBitplanes,
   numColors,
   previewScale,
+  supportsCellRefine,
+  requiresCellRefineDiffusion,
 } from './options.js'
+
+describe('cell refinement support', () => {
+  const supported = new Set([
+    'c64-hires', 'c64-multicolor', 'c64-fli', 'c64-afli', 'c64-petscii',
+    'c64-charset-hires', 'c64-charset-multicolor',
+    'ted-hires', 'ted-multicolor',
+    'msx1-screen2', 'thomson-to7-320x16', 'thomson-to8-320x16',
+    'cga-text80x200', 'cga-text80x100', 'cga-text80x50', 'cga-text80x25',
+    'cga-text40x200', 'cga-text40x100',
+  ])
+  const modes = [...new Set(CHIPSETS.flatMap(c => modesForChipset(c.value).map(m => m.value)))]
+
+  it.each(modes)('matches API mode restrictions for %s', (mode) => {
+    expect(supportsCellRefine({ mode, cgaTextMetric: 'blur' })).toBe(supported.has(mode))
+    expect(supportsCellRefine({ mode, cgaTextMetric: 'mse' })).toBe(
+      supported.has(mode) && !mode.startsWith('cga-text'))
+  })
+
+  it('starts disabled and rejects unknown modes and CGA metrics', () => {
+    expect(defaultOptions().cellRefine).toBe(false)
+    expect(supportsCellRefine({ mode: 'c64-unknown', cgaTextMetric: 'blur' })).toBe(false)
+    expect(supportsCellRefine({ mode: 'cga-text80x100', cgaTextMetric: 'unknown' })).toBe(false)
+  })
+})
+
+describe('cell refinement dithering', () => {
+  it.each([
+    ['c64-multicolor', true], ['c64-hires', true], ['c64-fli', true],
+    ['c64-afli', true], ['c64-charset-hires', true], ['c64-charset-multicolor', true],
+    ['ted-hires', true], ['ted-multicolor', true],
+    ['thomson-to7-320x16', true], ['thomson-to8-320x16', true],
+    ['c64-petscii', false], ['cga-text80x100', false],
+    ['thomson-to8-320x4', false], ['lores', false],
+  ])('requires diffusion for %s: %s', (mode, expected) => {
+    const opts = { mode, cellRefine: true, cgaTextMetric: 'blur' }
+    expect(requiresCellRefineDiffusion(opts)).toBe(expected)
+    expect(requiresCellRefineDiffusion({ ...opts, cellRefine: false })).toBe(false)
+  })
+})
 
 describe('hamType', () => {
   it.each([
@@ -49,6 +94,22 @@ describe('mode predicates', () => {
     expect(isHamMode('ham8-hires')).toBe(true)
     expect(isHamMode('lores')).toBe(false)
     expect(isHamMode('ehb')).toBe(false)
+  })
+
+  it('isAmigaMode gates the copper-only controls', () => {
+    expect(isAmigaMode('lores')).toBe(true)
+    expect(isAmigaMode('ham8-hires-lace')).toBe(true)
+    expect(isAmigaMode('ehb')).toBe(true)
+    // The tile-freeform modes are the ones that leaked: isFixedBufferMode()
+    // reports false for them so Native PAR survives Resize, which used to let
+    // the Sliced toggle show up on the c64 charset modes.
+    expect(isAmigaMode('c64-charset-hires')).toBe(false)
+    expect(isAmigaMode('c64-charset-multicolor')).toBe(false)
+    expect(isAmigaMode('snes-mode7-256')).toBe(false)
+    expect(isAmigaMode('genesis-h40')).toBe(false)
+    expect(isAmigaMode('c64-multicolor')).toBe(false)
+    expect(isAmigaMode('vga-13h')).toBe(false)
+    expect(isAmigaMode('nonexistent-mode')).toBe(false)
   })
 
   it('isEhbMode covers both progressive and interlace', () => {
@@ -216,6 +277,12 @@ describe('isErrorDiffusion', () => {
     ['sierra-lite',      true],
     ['stucki',           true],
     ['jarvis',           true],
+    ['riemersma',        true],
+    ['structure-fs',     true],
+    ['contrast-fs',      true],
+    ['zhoufang',         true],
+    ['gilbert',          false],
+    ['dbs',              false],
     ['none',             false],
     ['bayer8x8',         false],
     ['checker',          false],
@@ -322,5 +389,79 @@ describe('defaultOptions', () => {
 
   it('seeds the CGA text metric default', () => {
     expect(defaultOptions().cgaTextMetric).toBe('blur')
+  })
+})
+
+// These screens have coupled attributes or timed raster palettes, not a
+// user-adjustable global Amiga palette.
+describe('ZX and Atari Spectrum hardware modes', () => {
+  it.each(['zx-spectrum', 'stf-spectrum512', 'ste-spectrum4096'])('%s locks hardware controls', mode => {
+    expect(isAmigaMode(mode)).toBe(false)
+    expect(supportsCustomPalette(mode)).toBe(false)
+    expect(supportsCellRefine({ mode, cgaTextMetric: 'blur' })).toBe(false)
+  })
+})
+
+
+describe('CGA direct pixels', () => {
+  it.each([
+    { mode: 'cga-160', par: 5 / 6, sy: 4 },
+    { mode: 'cga-160x200', par: 5 / 3, sy: 2 },
+  ])('$mode uses fixed RGBI geometry without glyph or palette controls', ({ mode, par, sy }) => {
+    expect(modesForChipset('cga').map(m => m.value)).toContain(mode)
+    expect(defaultDepth(mode)).toBe(4)
+    expect(isDosMode(mode)).toBe(true)
+    expect(isFixedBufferMode(mode)).toBe(true)
+    expect(supportsCustomPalette(mode)).toBe(false)
+    expect(supportsCellRefine({ mode, cgaTextMetric: 'blur' })).toBe(false)
+    expect(modePar(mode)).toBeCloseTo(par)
+    expect(previewScale(mode)).toEqual({ sx: 4, sy })
+  })
+})
+
+
+describe('Tandy native modes', () => {
+  it.each([
+    { mode: 'tandy-160', depth: 4, par: 5 / 3, sx: 4 },
+    { mode: 'tandy-320', depth: 4, par: 5 / 6, sx: 2 },
+    { mode: 'tandy-640', depth: 2, par: 5 / 12, sx: 1 },
+  ])('$mode exposes fixed DOS geometry and palette controls', ({ mode, depth, par, sx }) => {
+    expect(modesForChipset('tandy').map(m => m.value)).toContain(mode)
+    expect(defaultDepth(mode)).toBe(depth)
+    expect(isDosMode(mode)).toBe(true)
+    expect(isFixedBufferMode(mode)).toBe(true)
+    expect(isAmigaMode(mode)).toBe(false)
+    expect(supportsCustomPalette(mode)).toBe(false)
+    expect(supportsCellRefine({ mode, cgaTextMetric: 'blur' })).toBe(false)
+    expect(modePar(mode)).toBeCloseTo(par)
+    expect(previewScale(mode)).toEqual({ sx, sy: 2 })
+  })
+})
+
+describe('nibnib mode', () => {
+  it('has its own chipset group and nothing else in it', () => {
+    expect(modesForChipset('rp2350').map(m => m.value)).toEqual(['nibnib'])
+    expect(CHIPSETS.some(c => c.value === 'rp2350')).toBe(true)
+    expect(modesForChipset('ocs').some(m => m.value === 'nibnib')).toBe(false)
+  })
+
+  it('is free size (Resize like lores), not a fixed buffer or Amiga mode', () => {
+    expect(isNibnibMode('nibnib')).toBe(true)
+    expect(isNibnibMode('lores')).toBe(false)
+    expect(isFixedBufferMode('nibnib')).toBe(false)
+    expect(isAmigaMode('nibnib')).toBe(false)
+  })
+
+  it('has no depth slider, custom palette or bitplane depth choice', () => {
+    expect(maxDepth('nibnib', 'rp2350')).toBe(0)
+    expect(defaultDepth('nibnib')).toBe(16)
+    expect(supportsCustomPalette('nibnib')).toBe(false)
+    expect(numColors('nibnib', 16)).toBe('65536')
+  })
+
+  it('previews with square pixels and passes through decomposeMode', () => {
+    expect(modePar('nibnib')).toBe(1)
+    expect(previewScale('nibnib')).toEqual({ sx: 2, sy: 2 })
+    expect(decomposeMode('nibnib')).toEqual({ mode: 'nibnib', width: 0, interlace: false })
   })
 })

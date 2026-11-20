@@ -83,6 +83,13 @@ declare module '@wasm/png2amiga.js' {
     // evolution. Missing for modes without per-line palettes.
     scanlinePaletteBytes?: Uint8Array
     scanlinePaletteSize?: number
+    // Amiga modes: per scanline, the number of pixels that differ from the
+    // source at the chipset's colour precision (0 = the row is 1:1).
+    rowMismatch?: Uint32Array
+    // Sliced depth zones: zone i starts at zoneRows[i] with zoneDepths[i]
+    // planes. Missing without zones.
+    zoneRows?: number[]
+    zoneDepths?: number[]
     // Per-pixel palette index map (non-HAM modes that emit a 1:1 index
     // grid). Used by the web swatch's hover-isolate feature so two
     // palette slots with the same rendered RGB (e.g. EHB slot 0
@@ -159,6 +166,7 @@ declare module '@wasm/png2amiga.js' {
     slicedVerticalDither?: boolean
     dualPlayfield?: boolean
     scap?: boolean
+    depthAuto?: boolean
     scapDebug?: boolean
     lockColor0?: boolean
     // Per-slot palette reserves. Each entry removes the slot from the
@@ -179,6 +187,7 @@ declare module '@wasm/png2amiga.js' {
     // CGA text
     cgaTextMetric?: string
     cgaTextKernel?: string
+    cellRefine?: boolean
 
     // CGA composite (NTSC chroma multiplexer): card revision
     cgaCompositeNewCga?: boolean
@@ -208,12 +217,29 @@ declare module '@wasm/png2amiga.js' {
     convertDegas(bytes: Uint8Array, opts: WasmOptions): ConvertResult
     convertRaw(bytes: Uint8Array, opts: WasmOptions): ConvertResult
     convertPRG(bytes: Uint8Array, opts: WasmOptions): ConvertResult
+    convertK7(bytes: Uint8Array, opts: WasmOptions): ConvertResult
+    convertMSX(bytes: Uint8Array, opts: WasmOptions): ConvertResult
     convertKoa(bytes: Uint8Array, opts: WasmOptions): ConvertResult
+    convertScr(bytes: Uint8Array, opts: WasmOptions): ConvertResult
     convertHir(bytes: Uint8Array, opts: WasmOptions): ConvertResult
     convertMask(bytes: Uint8Array, opts: WasmOptions): ConvertResult
     convertMaskRaw(bytes: Uint8Array, opts: WasmOptions): ConvertResult
     ditherDefaults(method: string): DitherDefaults
   }
+
+  const createPng2Amiga: (options?: Png2AmigaModuleOptions) => Promise<Png2AmigaModule>
+  export default createPng2Amiga
+}
+
+// Scalar twin of the module above, built without -msimd128 (CMakeLists.txt →
+// png2amiga_wasm_nosimd). Identical embind surface — the worker picks it when
+// the browser can't run WASM SIMD. Re-exports the SIMD module's types so the
+// two stay in sync by construction.
+declare module '@wasm/png2amiga-nosimd.js' {
+  import type {
+    Png2AmigaModule,
+    Png2AmigaModuleOptions,
+  } from '@wasm/png2amiga.js'
 
   const createPng2Amiga: (options?: Png2AmigaModuleOptions) => Promise<Png2AmigaModule>
   export default createPng2Amiga

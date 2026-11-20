@@ -36,6 +36,21 @@ Color3f srgb8_to_linear(SRGBColor c) {
 }
 
 // HamPrecomp definition (declared in ham.hpp).
+Color3f ordered_dither_target(
+    Color3f c, dither::Method method, std::size_t x, std::size_t y, float strength) {
+    auto lab = color_space::linear_to_oklab(c);
+    float threshold = dither::ordered_threshold(method, x, y);
+    lab.L += threshold * strength * 0.15f;
+    lab.a += threshold * strength * 0.03f;
+    lab.b += threshold * strength * 0.03f;
+    auto linear = color_space::oklab_to_linear(lab);
+    return {
+        std::clamp(linear.r, 0.0f, 1.0f),
+        std::clamp(linear.g, 0.0f, 1.0f),
+        std::clamp(linear.b, 0.0f, 1.0f),
+    };
+}
+
 HamPrecomp::HamPrecomp(std::span<const Color3f> palette, std::size_t db)
     : data_bits(db), num_data_values(std::size_t{1} << db) {
     palette_lab.resize(palette.size());
@@ -303,6 +318,9 @@ inline std::uint8_t dispatch_palette_aware_pick(dither::Method method,
     case M::opt_line_checker:  return dither::pick_opt_line_checker_index(target, cand_lab, x, y, strength);
     case M::opt_vline:         return dither::pick_opt_vline_index(target, cand_lab, x, y, strength);
     case M::opt_vline_checker: return dither::pick_opt_vline_checker_index(target, cand_lab, x, y, strength);
+    case M::opt_rowdot:        return dither::pick_opt_rowdot_index(target, cand_lab, x, y, strength);
+    case M::opt_rowdot_aligned: return dither::pick_opt_rowdot_aligned_index(target, cand_lab, x, y, strength);
+    case M::opt_rowdot_checker: return dither::pick_opt_rowdot_checker_index(target, cand_lab, x, y, strength);
     case M::yliluoma:          return dither::pick_yliluoma_index(target, cand_lab, x, y, /*mode2=*/false, strength);
     case M::yliluoma2:         return dither::pick_yliluoma_index(target, cand_lab, x, y, /*mode2=*/true,  strength);
     case M::yliluoma1:         return dither::pick_yliluoma_index(target, cand_lab, x, y, /*mode2=*/false, strength);
@@ -526,6 +544,8 @@ struct HamScratch {
     std::vector<BeamState> prev_beam;  // x=0 seed only
     std::vector<std::vector<BeamState>> beam_history;
     std::vector<ErrIdx> err_idx;
+    std::vector<std::uint32_t> held_color_keys;
+    std::vector<std::size_t> held_color_indices;
     // refine_triple per-row buffers
     std::vector<SRGBColor> states;
     std::vector<BeamState> window_candidates;
@@ -887,6 +907,53 @@ void prune_beam(std::vector<BeamState>& candidates,
     }
 }
 
+// A HAM scanline's future depends only on the held RGB color, position,
+// and upcoming palettes. Paths reaching the same color are equivalent:
+// retain the cheapest one before limiting the beam, so repeated SETs do
+// not crowd out distinct colors that can encode later pixels better.
+// Use all 24 bits: AGA HAM6 and externally supplied palettes may contain
+// colors between the OCS RGB444 grid points.
+void prune_unique_ham6(HamScratch& sc, std::vector<BeamState>& beam,
+                      std::size_t beam_width) {
+    auto& candidates = sc.candidates;
+    std::size_t table_size = 1;
+    while (table_size < candidates.size() * 2) table_size *= 2;
+    sc.held_color_keys.assign(table_size, 0xFFFFFFFFu);
+    sc.held_color_indices.resize(table_size);
+    const auto mask = table_size - 1;
+    std::size_t count = 0;
+    for (std::size_t i = 0; i < candidates.size(); ++i) {
+        const auto candidate = candidates[i];
+        const auto color = candidate.color;
+        const auto key = (static_cast<std::uint32_t>(color.r) << 16) |
+                         (static_cast<std::uint32_t>(color.g) << 8) | color.b;
+        auto hash = key * 2654435761u;
+        hash ^= hash >> 16;  // mix red into low table-index bits too
+        auto slot = static_cast<std::size_t>(hash) & mask;
+        while (sc.held_color_keys[slot] != 0xFFFFFFFFu && sc.held_color_keys[slot] != key)
+            slot = (slot + 1) & mask;
+        if (sc.held_color_keys[slot] == 0xFFFFFFFFu) {
+            sc.held_color_keys[slot] = key;
+            sc.held_color_indices[slot] = count;
+            candidates[count++] = candidate;
+        } else {
+            auto index = sc.held_color_indices[slot];
+            if (candidate.cumulative_error < candidates[index].cumulative_error)
+                candidates[index] = candidate;
+        }
+    }
+    candidates.resize(count);
+    auto& scores = sc.err_idx;
+    scores.clear();
+    for (std::size_t i = 0; i < count; ++i)
+        scores.push_back({candidates[i].cumulative_error, static_cast<std::uint32_t>(i)});
+    const auto n = std::min(beam_width, count);
+    std::partial_sort(scores.begin(), scores.begin() + static_cast<std::ptrdiff_t>(n),
+                      scores.end(), ErrIdxLess{});
+    beam.resize(n);
+    for (std::size_t i = 0; i < n; ++i) beam[i] = candidates[scores[i].idx];
+}
+
 // DP beam search for a single scanline. ScanlineResult is declared
 // in ham.hpp now so strips and other consumers can use it.
 // Per-strip variant: takes parallel arrays of HamPrecomp and base_srgb
@@ -940,7 +1007,10 @@ ScanlineResult encode_scanline_dp_per_strip_t(
                             base_srgbs[si],
                             sc.candidates);
         }
-        prune_beam(sc.candidates, sc.beam_history[x], beam_width, sc.err_idx);
+        if (pres[si].data_bits == 4)
+            prune_unique_ham6(sc, sc.beam_history[x], beam_width);
+        else
+            prune_beam(sc.candidates, sc.beam_history[x], beam_width, sc.err_idx);
     }
 
     auto& final_beam = sc.beam_history[width - 1];
@@ -958,6 +1028,64 @@ ScanlineResult encode_scanline_dp_per_strip_t(
         state_idx = state.parent_idx;
     }
     return {std::move(values), total_error};
+}
+
+// Forward-only form of encode_scanline_dp_per_strip_t: same expansion
+// order and pruning, so the error matches a whole-row run exactly.
+template<HamMetric M>
+float score_scanline_dp_per_strip_from_t(std::span<const Color3f> target_row,
+                                         const DpBeam& seed,
+                                         std::size_t x0,
+                                         std::span<const HamPrecomp> pres,
+                                         std::span<const std::span<const SRGBColor>> base_srgbs,
+                                         std::span<const std::uint16_t> strip_for_x,
+                                         std::size_t beam_width,
+                                         std::span<const std::size_t> capture_x,
+                                         std::vector<DpBeam>* captures) {
+    auto width = target_row.size();
+    if (captures) captures->assign(capture_x.size(), {});
+    if (seed.empty() || pres.empty() || base_srgbs.empty()) return 0.0f;
+    auto& sc = thread_scratch();
+    thread_local std::vector<BeamState> cur, nxt;
+    cur.clear();
+    for (const auto& e : seed)
+        cur.push_back({e.color, e.cumulative_error, 0, 0});
+    std::size_t ci = 0;
+    auto capture = [&](std::size_t x) {
+        while (captures && ci < capture_x.size() && capture_x[ci] == x) {
+            auto& out = (*captures)[ci++];
+            out.reserve(cur.size());
+            for (const auto& s : cur)
+                out.push_back({s.color, s.cumulative_error});
+        }
+    };
+    for (std::size_t x = x0; x < width; ++x) {
+        capture(x);
+        sc.candidates.clear();
+        auto si = static_cast<std::size_t>(strip_for_x[x]);
+        if (si >= pres.size()) si = pres.size() - 1;
+        const auto lab = color_space::linear_to_oklab(target_row[x]);
+        const auto srgb = linear_to_srgb8(target_row[x]);
+        for (std::size_t s = 0; s < cur.size(); ++s)
+            expand_ham_t<M>(cur[s].color,
+                            lab,
+                            srgb,
+                            cur[s].cumulative_error,
+                            static_cast<std::uint16_t>(s),
+                            pres[si],
+                            base_srgbs[si],
+                            sc.candidates);
+        if (pres[si].data_bits == 4)
+            prune_unique_ham6(sc, nxt, beam_width);
+        else
+            prune_beam(sc.candidates, nxt, beam_width, sc.err_idx);
+        cur.swap(nxt);
+    }
+    capture(width);
+    float best = std::numeric_limits<float>::max();
+    for (const auto& s : cur)
+        best = std::min(best, s.cumulative_error);
+    return best;
 }
 
 template<HamMetric M>
@@ -1006,7 +1134,10 @@ ScanlineResult encode_scanline_dp_t(std::span<const Color3f> target_row,
                             sc.candidates);
         }
 
-        prune_beam(sc.candidates, sc.beam_history[x], beam_width, sc.err_idx);
+        if (pre.data_bits == 4)
+            prune_unique_ham6(sc, sc.beam_history[x], beam_width);
+        else
+            prune_beam(sc.candidates, sc.beam_history[x], beam_width, sc.err_idx);
     }
 
     // Find the best final state
@@ -1066,8 +1197,8 @@ ScanlineResult encode_scanline_dp_per_strip_impl(
 // ---------------------------------------------------------------------------
 // Triple-pixel refinement post-pass.
 //
-// The main DP uses a 1-pixel lookahead with `beam_width` survivors. This can
-// miss a better sequence where the locally-best op at pixel i leads to a
+// The main DP prunes by accumulated error with `beam_width` survivors.
+// This can miss a better sequence where the locally-best op at pixel i leads to a
 // constrained state that gives a bad choice at pixel i+1 or i+2 — classic
 // HAM fringe lag on color transitions.
 //
@@ -1701,19 +1832,8 @@ Result<HamResult> encode_ham_generic(const Image& image,
                 SRGBColor start = base_srgb[0];
                 auto row = image.row(y);
 
-                for (std::size_t x = 0; x < w; ++x) {
-                    auto lab = color_space::linear_to_oklab(row[x]);
-                    float threshold = dither::ordered_threshold(opts.dither_method, x, y);
-                    lab.L += threshold * strength * 0.15f;
-                    lab.a += threshold * strength * 0.03f;
-                    lab.b += threshold * strength * 0.03f;
-                    auto linear = color_space::oklab_to_linear(lab);
-                    dithered_row[x] = {
-                        std::clamp(linear.r, 0.0f, 1.0f),
-                        std::clamp(linear.g, 0.0f, 1.0f),
-                        std::clamp(linear.b, 0.0f, 1.0f),
-                    };
-                }
+                for (std::size_t x = 0; x < w; ++x)
+                    dithered_row[x] = ordered_dither_target(row[x], opts.dither_method, x, y, strength);
 
                 std::span<const Color3f> dithered_span{dithered_row};
                 auto scanline = encode_scanline_dp(
@@ -2068,15 +2188,9 @@ std::vector<HamSwap> find_ham_swaps(
         std::vector<Color3f> cands;
         cands.reserve(kTopK + 1);
         std::array<bool, 4096> seen{};
-        auto ocs_key = [](Color3f c) {
-            int r = static_cast<int>(std::lround(std::clamp(c.r, 0.0f, 1.0f) * 15.0f));
-            int g = static_cast<int>(std::lround(std::clamp(c.g, 0.0f, 1.0f) * 15.0f));
-            int b = static_cast<int>(std::lround(std::clamp(c.b, 0.0f, 1.0f) * 15.0f));
-            return static_cast<std::size_t>((r << 8) | (g << 4) | b);
-        };
         auto add_cand = [&](Color3f c) {
             auto cs = (chipset != amiga::Chipset::aga) ? palette::quantize_to_ocs(c) : c;
-            auto key = ocs_key(cs);
+            auto key = palette::linear_to_ocs(cs);
             if (chipset == amiga::Chipset::aga || !seen[key]) {
                 if (chipset != amiga::Chipset::aga) seen[key] = true;
                 cands.push_back(cs);
@@ -2389,19 +2503,8 @@ Result<HamResult> encode_ham_copper_generic(const Image& image,
                     err = sl.error;
                 } else if (use_ordered) {
                     std::vector<Color3f> dithered_row(w);
-                    for (std::size_t x = 0; x < w; ++x) {
-                        auto lab = color_space::linear_to_oklab(row[x]);
-                        float threshold = dither::ordered_threshold(opts.dither_method, x, y);
-                        lab.L += threshold * opts.dither_strength * 0.15f;
-                        lab.a += threshold * opts.dither_strength * 0.03f;
-                        lab.b += threshold * opts.dither_strength * 0.03f;
-                        auto linear = color_space::oklab_to_linear(lab);
-                        dithered_row[x] = {
-                            std::clamp(linear.r, 0.0f, 1.0f),
-                            std::clamp(linear.g, 0.0f, 1.0f),
-                            std::clamp(linear.b, 0.0f, 1.0f),
-                        };
-                    }
+                    for (std::size_t x = 0; x < w; ++x)
+                        dithered_row[x] = ordered_dither_target(row[x], opts.dither_method, x, y, opts.dither_strength);
                     std::span<const Color3f> dr{dithered_row};
                     auto scanline = encode_scanline_dp(
                         dr, start, line_pre, srgb_span, beam_width, opts.metric);
@@ -2588,6 +2691,23 @@ ScanlineResult encode_scanline_dp_per_strip(std::span<const Color3f> target_row,
                                             HamMetric metric) {
     return encode_scanline_dp_per_strip_impl(
         target_row, start_color, pres, base_srgbs, strip_for_x, beam_width, metric);
+}
+
+float score_scanline_dp_per_strip_from(std::span<const Color3f> target_row,
+                                       const DpBeam& seed,
+                                       std::size_t x0,
+                                       std::span<const HamPrecomp> pres,
+                                       std::span<const std::span<const SRGBColor>> base_srgbs,
+                                       std::span<const std::uint16_t> strip_for_x,
+                                       std::size_t beam_width,
+                                       HamMetric metric,
+                                       std::span<const std::size_t> capture_x,
+                                       std::vector<DpBeam>* captures) {
+    if (metric == HamMetric::oklab2)
+        return score_scanline_dp_per_strip_from_t<HamMetric::oklab2>(
+            target_row, seed, x0, pres, base_srgbs, strip_for_x, beam_width, capture_x, captures);
+    return score_scanline_dp_per_strip_from_t<HamMetric::srgb_mse>(
+        target_row, seed, x0, pres, base_srgbs, strip_for_x, beam_width, capture_x, captures);
 }
 
 ScanlineResult encode_scanline_ham_pal_aware_per_strip(

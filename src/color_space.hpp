@@ -1,6 +1,7 @@
 #pragma once
 
 #include "types.hpp"
+#include <algorithm>
 #include <array>
 #include <bit>
 #include <cmath>
@@ -195,7 +196,16 @@ constexpr float c9 = +1.4666385867e-01f;
 //   * WASM SIMD (browser)   : measured at integration time
 // ---------------------------------------------------------------------------
 
-#if defined(__x86_64__) || defined(_M_X64)
+// x86-64 path. The kernels below use _mm_fmadd_ps (FMA), _mm_blendv_ps and
+// _mm_round_ps (SSE4.1) — Haswell 2013+ / Zen 2017+. Gate on __FMA__, not on
+// the architecture alone: the baseline compat build
+// (-DPNG2AMIGA_BASELINE_SIMD=ON, see CMakeLists.txt) targets plain x86-64 and
+// must fall through to the scalar path at the bottom of this block. MSVC
+// compiles these intrinsics regardless of /arch:, so an arch-only gate would
+// silently emit vfmadd/vblendvps into the compat binary and SIGILL on exactly
+// the pre-AVX2 CPUs it exists for. GCC/Clang define __FMA__ from -mfma; MSVC
+// never defines it, so CMake defines it explicitly next to /arch:AVX2.
+#if (defined(__x86_64__) || defined(_M_X64)) && defined(__FMA__)
 #include <immintrin.h>
 
 namespace detail {
@@ -573,12 +583,47 @@ PNG2AMIGA_INLINE_HOT OKLab srgb_to_oklab_simd(Color3f c) noexcept {
     };
 }
 
-#else  // No SIMD ISA detected — analytic scalar fallback.
+#else  // No SIMD ISA detected — scalar arm.
+// Reached by the baseline x86-64 compat build, the no-SIMD WASM variant, and
+// any target without one of the three ISAs above.
+//
+// This evaluates the SAME fitted degree-9 polynomial as the SSE4/NEON/WASM
+// paths, one channel at a time, rather than calling the exact srgb_to_linear().
+// The exact form would be *more* accurate (the polynomial carries up to
+// 2.06e-04 relative error) but it would disagree with every vector build at
+// nearest-colour tie-breaks — and error diffusion plus HAM's sequential state
+// amplify a single flipped decision into whole runs of visibly different
+// pixels. Agreeing with the binaries we actually ship is worth more than the
+// last 1e-6 of accuracy. Everything downstream (LMS mix, fast_cbrt4, OKLab
+// matrix) is already backend-independent, so this is the only step that has
+// to be kept in step by hand.
+//
+// linear_to_oklab lives in the OKLab utility block further down (it needs
+// f32x4 / lms_cbrt_to_oklab, both declared after this point). Forward-declare
+// it so this arm can call it; the definition follows in the same TU.
+inline OKLab linear_to_oklab(Color3f c) noexcept;
+
+PNG2AMIGA_INLINE_HOT float srgb_to_linear_poly(float s) noexcept {
+    // Horner, same coefficient order as the _mm_fmadd_ps / vfmaq_f32 chains.
+    float p = pow24_fixed::c9;
+    p = PNG2AMIGA_FMA(p, s, pow24_fixed::c8);
+    p = PNG2AMIGA_FMA(p, s, pow24_fixed::c7);
+    p = PNG2AMIGA_FMA(p, s, pow24_fixed::c6);
+    p = PNG2AMIGA_FMA(p, s, pow24_fixed::c5);
+    p = PNG2AMIGA_FMA(p, s, pow24_fixed::c4);
+    p = PNG2AMIGA_FMA(p, s, pow24_fixed::c3);
+    p = PNG2AMIGA_FMA(p, s, pow24_fixed::c2);
+    p = PNG2AMIGA_FMA(p, s, pow24_fixed::c1);
+    p = PNG2AMIGA_FMA(p, s, pow24_fixed::c0);
+    // The vector paths compute both arms and blend; a branch is the same value.
+    return s <= 0.04045f ? s * (1.0f / 12.92f) : p;
+}
+
 PNG2AMIGA_INLINE_HOT Color3f srgb_to_linear_simd(Color3f c) noexcept {
-    return srgb_to_linear(c);
+    return {srgb_to_linear_poly(c.r), srgb_to_linear_poly(c.g), srgb_to_linear_poly(c.b)};
 }
 PNG2AMIGA_INLINE_HOT OKLab srgb_to_oklab_simd(Color3f c) noexcept {
-    return linear_to_oklab(srgb_to_linear(c));
+    return linear_to_oklab(srgb_to_linear_simd(c));
 }
 #endif
 
@@ -607,6 +652,28 @@ inline float fma_dist_sq(OKLab a, OKLab b) noexcept {
 [[gnu::always_inline]]
 inline double fma_dist_sq(double dx, double dy, double dz) noexcept {
     return PNG2AMIGA_FMA(dx, dx, PNG2AMIGA_FMA(dy, dy, dz * dz));
+}
+
+// Dither-aware pair score for attribute-cell encoders (c64 hires/FLI/AFLI,
+// TED hires, thomson forme-couleur): distance from target `t` to the OKLab
+// SEGMENT between candidate colors a/b (an error-diffusion pass realizes
+// any duty cycle between the two, and ED in OKLab averages in OKLab), plus
+// the mixing-noise penalty λ·u(1−u)·|a−b|² (variance of a Bernoulli mix —
+// keeps far-apart pairs from winning on mean alone and showing up as
+// checkerboard noise). λ is per cell geometry; see call sites.
+inline float mix_segment_score(const OKLab& t,
+                               const OKLab& a,
+                               const OKLab& b,
+                               float mix_noise_lambda) noexcept {
+    float dL = b.L - a.L, da = b.a - a.a, db = b.b - a.b;
+    float seg_sq = fma_dist_sq(dL, da, db);
+    if (seg_sq <= 0.0f) return fma_dist_sq(t, a);
+    float u = ((t.L - a.L) * dL + (t.a - a.a) * da + (t.b - a.b) * db) / seg_sq;
+    u = std::clamp(u, 0.0f, 1.0f);
+    float eL = t.L - (a.L + u * dL);
+    float ea = t.a - (a.a + u * da);
+    float eb = t.b - (a.b + u * db);
+    return fma_dist_sq(eL, ea, eb) + mix_noise_lambda * u * (1.0f - u) * seg_sq;
 }
 
 // 3-coefficient FMA dot product: c0*x0 + c1*x1 + c2*x2. Used by the OKLab

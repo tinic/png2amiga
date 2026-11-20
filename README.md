@@ -39,7 +39,11 @@ the active scanline, used in demoscene productions like Desire's
 
 **Atari modes**: STF Low/Medium/Hi, STE Low/Medium/Hi (9-bit palette
 on STF, 12-bit on STE; ST-Hi is hardware-locked monochrome). Degas
-Elite `.PI1`/`.PI2`/`.PI3` output.
+Elite `.PI1`/`.PI2`/`.PI3` output. Spectrum 512/4096 raster modes add
+`.spu`, `.cpp`, and standalone Atari TOS `.exe`/`.prg` exports.
+
+**ZX Spectrum**: 256×192, two colors per 8×8 cell with shared BRIGHT;
+native `.scr` export.
 
 **IBM PC modes**: CGA 320×200 / 640×200 / composite (NTSC artifact
 colors), CGA text-mode glyph matching at 80x{200,100,50,25} and
@@ -60,9 +64,26 @@ Hamming-distance pair merging when content overflows. Outputs
 optional Shadow/Highlight extension. 4 palette lines × 16 BGR333,
 8×8 4bpp tiles + tilemap. SGDK `.h` / `.bin` output.
 
-**SNES Mode 7**: 256-color BGR555-palette and 2048-color Direct
+**SNES Mode 7**: 256-color BGR555-palette and 256-color Direct
 Color (BBGGGRRR) variants. Affine-transformable 8bpp BG1, ≤256
 unique 8×8 tiles via greedy distance-merging when content overflows.
+`tools/snes-mode7-viewer/build.sh` turns a frame into a LoROM `.sfc`
+for an emulator or a flash cart; set M7VOFS to -1 in your own code, or
+the frame's top row is hidden.
+
+**Game Boy Advance**: Mode 3 (240×160 16bpp BGR555 direct), Mode 4
+(240×160 8bpp + 256-color BGR555 palette), and Mode 5 (160×128 16bpp
+BGR555 direct). PNG preview + devkitARM/grit-style `.h` header +
+raw `.bin` (Mode 4 also writes a companion `.pal`).
+
+**Sega Master System / Game Gear**: VDP mode 4 (SMS 256×192 RGB222,
+GG 160×144 RGB444). 8×8 4bpp tiles, two 16-color palettes, H/V-flip
+tile dedup and merging down to the 448-tile VRAM budget. devkitSMS
+`.h` / `.bin` output.
+
+**Amstrad CPC / CPC Plus**: modes 0 / 1 / 2 (16 / 4 / 2 inks) from the
+27-color firmware palette or the Plus 4096-color palette. 16 KB `&C000`
+screen as `.bin` or AMSDOS `.scr`, companion `.pal`, and `.h`.
 
 **Palette quantizers**: GPU-accelerated parallel-restart Lloyd
 k-means in OKLab on Apple GPU (default for AGA / VGA when Xcode's
@@ -72,22 +93,33 @@ k-means over all 4096 OCS colors), PNN agglomerative (Ward's
 linkage in OKLab — default for HAM AGA), and median-cut + k-means
 refinement in OKLab (CPU fallback when Metal isn't available).
 
-**Dithering**: 64 methods.
+**Dithering**: 71 methods.
 
-- **Error Diffusion** (19) — Floyd–Steinberg, Sierra-Lite, Atkinson,
-  Jarvis, Stucki, Gilbert, Riemersma, DBS (slow); palette-aware
+- **Error Diffusion** (23) — Floyd–Steinberg, Sierra-Lite, Atkinson,
+  Jarvis, Stucki, Gilbert, Riemersma, DBS (slow), Smooth; palette-aware
   planning: Optimal Checker, Optimal Line, Optimal Line-Checker,
-  Tri-tone, Knoll, Yliluoma 1 (exhaustive) and Yliluoma 2 (greedy +
-  luma-weighted variant); structure-aware: Structure-FS,
+  Optimal Row-Dot / Row-Dot Aligned / Row-Dot Checker (two colours at
+  five fixed levels), Tri-tone, Knoll, Yliluoma 1 (exhaustive) and
+  Yliluoma 2 (greedy + luma-weighted variant); structure-aware:
+  Structure-FS,
   Contrast-FS, Zhou–Fang.
+  Smooth plans a colour pair and a 1/16 coverage step per pixel on a
+  Bayer layout, then refines against a blurred error at three scales
+  with no scan direction. Gradients show almost no banding. Smooth
+  applies to Amiga bitplane modes, including sliced and strips, but
+  not HAM. With sliced or strips, a row whose palette loses a colour
+  to a copper load can still show as a seam.
 - **Bayer** (14) — Bayer 2×2 / 4×4 / 8×8 / 3×3 / 5×5 / 6×6 / 7×7,
   non-square Bayer 4×2 and 2×4, plus the matrices Aseprite (old
   4×4), libcaca (3×3 and 6×6), Pegasus 8×8 shipped, and
   Cranley–Patterson rotated Bayer.
 - **Halftone** (4) — Halftone 8×8, Diagonal Newspaper, Spiral 5×5,
   Clustered Dot.
-- **Hatching** (9) — horizontal Lines 2 / 4 / 8 + Line Checker,
-  vertical VLines 2 / 4 / 8 + VLine Checker, Crosshatch.
+- **Hatching** (12) — horizontal Lines 2 / 4 / 8 + Line Checker,
+  vertical VLines 2 / 4 / 8 + VLine Checker, Crosshatch, and Row-Dot
+  (staggered), Row-Dot Aligned and Row-Dot Checker: five levels with
+  25% and 75% as dotted alternating rows and 50% as alternating rows
+  or a checkerboard.
 - **Pattern** (8) — Checker, Wide 2×4, Tall 4×2, Hexagonal 8×8 and
   5×5, Radial, Quasicrystal, Truchet.
 - **Noise** (10) — Blue Noise, Void & Cluster, Cluster Noise,
@@ -95,7 +127,10 @@ refinement in OKLab (CPU fallback when Metal isn't available).
   R2-triangle, Value Noise, White Noise.
 
 **HAM encoding**: DP beam search with a triple-pixel refinement pass
-(default on) that catches the fringe-lag artifacts 1-pixel DP misses.
+(default on) that catches fringe-lag artifacts missed by the finite beam.
+HAM6 keeps only the cheapest path to each distinct held RGB color before
+pruning the beam, leaving room for colors that help encode later pixels.
+This also applies to sliced and striped HAM6; AGA colors retain all 24 bits.
 `--ham-fast` switches to the greedy encoder (~15× faster, ~0.04 dB
 quality cost) for live preview or batch video processing.
 
@@ -114,9 +149,9 @@ cmake -B build -DCMAKE_C_COMPILER=gcc-15 -DCMAKE_CXX_COMPILER=g++-15 .
 cmake --build build
 ctest --test-dir build --output-on-failure
 
-# WASM (requires Emscripten)
+# WASM (requires Emscripten) — builds both the SIMD and scalar variants
 emcmake cmake -B build-wasm -DCMAKE_BUILD_TYPE=Release .
-cmake --build build-wasm
+cmake --build build-wasm --parallel
 
 # Web frontend
 cd web && npm install && npm run dev
@@ -127,6 +162,11 @@ cd web && npm install && npm run dev
 
 Pre-built Linux / macOS / Windows binaries are attached to each
 [GitHub release](https://github.com/tinic/png2amiga/releases).
+
+The x86-64 binaries need **AVX2** (Intel Haswell 2013+, AMD Zen 2017+).
+On an older CPU, use `png2amiga-windows-x86_64-compat.exe` from the same
+release — same features, somewhat slower. Building one on any platform:
+`cmake -B build-compat -DPNG2AMIGA_BASELINE_SIMD=ON .`
 
 ## Usage
 
@@ -145,9 +185,11 @@ Pre-built Linux / macOS / Windows binaries are attached to each
 ./build/png2amiga --mode lores --depth 5 --sliced input.png output.iff
 ./build/png2amiga --mode ham6 --sliced input.png output.iff
 
-# Strip palette — mid-line swaps inside the active scanline. DPF or EHB only.
+# Strip palette — mid-line swaps inside the active scanline. OCS lores 1-4
+# planes, DPF, EHB or HAM6.
 # IFF has no chunk for mid-line MOVEs, so use .cpp (runnable AmigaOS viewer)
 # or .h (data-only) instead.
+./build/png2amiga --mode lores --depth 3 --sliced --strips input.png viewer.cpp
 ./build/png2amiga --mode lores --dpf --strips input.png viewer.cpp
 ./build/png2amiga --mode ehb --strips input.png data.h
 
@@ -158,7 +200,7 @@ Pre-built Linux / macOS / Windows binaries are attached to each
 ./build/png2amiga --mode ham6 input.png viewer.cpp
 ./build-amiga.sh viewer.cpp viewer.adf
 
-# Launch in fs-uae (A1200 by default)
+# Launch in Amiberry (A1200 by default; install Amiberry separately)
 ./run-amiga.sh viewer.adf
 ./run-amiga.sh viewer.adf A500 ntsc
 
@@ -181,6 +223,22 @@ Pre-built Linux / macOS / Windows binaries are attached to each
 
 # SNES Mode 7 (256-color palette + tilemap + tile data)
 ./build/png2amiga --mode snes-mode7-256 input.png output.bin
+
+# Game Boy Advance
+./build/png2amiga --mode gba-mode3 input.png output.h          # 16bpp BGR555 bitmap header
+./build/png2amiga --mode gba-mode4 input.png output.bin        # 8bpp indices + companion .pal
+./build/png2amiga --mode gba-mode5 input.png output.png        # 160×128 preview
+
+# nibnib (RGB565, 4 bits per pixel; the CLI keeps the source size)
+./build/png2amiga --mode nibnib input.png output.nibnib
+
+# Sega Master System / Game Gear
+./build/png2amiga --mode sms-mode4 input.png output.h          # devkitSMS header
+./build/png2amiga --mode gg-mode4 input.png output.bin         # tiles + tilemap + CRAM
+
+# Amstrad CPC
+./build/png2amiga --mode cpc-mode0 input.png output.scr        # AMSDOS .scr + companion .pal
+./build/png2amiga --mode cpc-plus-mode1 input.png output.h     # screen + ASIC palette bytes
 ```
 
 Run `./build/png2amiga --help` for the full flag reference.
@@ -206,11 +264,18 @@ Run `./build/png2amiga --help` for the full flag reference.
 | `stf-hi` / `ste-hi` | 640×400 | 1 | 2 (B/W) | hardware-locked monochrome |
 | `ste-low` | 320×200 | 4 | 16 | 12-bit (4096 colors) |
 | `ste-med` | 640×200 | 2 | 4 | 12-bit (4096 colors) |
+| `stf-spectrum512` | 320×199 + blank line | 4 | up to 42 + black/line | 9-bit, timed raster palettes |
+| `ste-spectrum4096` | 320×199 + blank line | 4 | up to 42 + black/line | 12-bit, timed raster palettes |
 
 ## IBM PC Modes
 
 | Mode | Resolution | Colors | Notes |
 |------|-----------|--------|-------|
+| `cga-160` | 160×100 | 16 | Fixed half-block pixels in 80×100 text cells; preserves pixel art without glyph matching |
+| `cga-160x200` | 160×200 | 16 | Single-scanline half-block cells; preview/raw only (32 KB exceeds 16 KB CGA VRAM) |
+| `tandy-160` | 160×200 | 16 | Native Tandy mode 08h; two 8 KB banks |
+| `tandy-320` | 320×200 | 16 | Native Tandy mode 09h; four 8 KB banks |
+| `tandy-640` | 640×200 | 4 of 16 | Native Tandy mode 0Ah; adjacent low/high bitplane bytes |
 | `cga-320` | 320×200 | 4 | Fixed palettes (`--cga-palette p0-low/p0-high/p1-low/p1-high`) |
 | `cga-640` | 640×200 | 2 | Monochrome |
 | `cga-composite` | 320×200 | 16 | Reenigne NTSC chroma multiplexer; `--cga-composite-card old`/`new` |
@@ -220,8 +285,310 @@ Run `./build/png2amiga --help` for the full flag reference.
 | `vga-10h` | 640×350 | 16 | 4-plane planar, 18-bit DAC |
 | `vga-12h` | 640×480 | 16 | 4-plane planar, square pixels |
 
+`cga-160` (alias `cga-160x100`) maps each pair of pixels to a fixed
+`0xDE` right-half-block character: left pixel in the background nibble,
+right pixel in the foreground nibble. A 160×100 image using the 16 CGA
+RGBI colors retains its pixels and colors, regardless of PNG palette order.
+Other colors use the selected dithering method against the fixed RGBI palette
+(or nearest-color mapping with `--dither none`); resizing uses nearest neighbor. Native PAR and size overrides do not change its fixed
+logical grid. This is an RGBI mode; the preview does not simulate composite.
+
+Export `.raw` / `.bin` for the 16000-byte character/attribute buffer, `.c`
+for the DOS viewer, or `.png` for the 160×100 logical preview. The web UI also
+provides compiled DOS `.exe` and bootable `.img` exports through the compiler
+service. The viewer uses 80×100 two-scanline cells and disables blink so all
+16 background colors are available.
+
+`cga-160x200` uses the same direct pixel/dither pipeline at twice the
+height. PNG and raw exports are available, but its 32000-byte text buffer
+exceeds standard CGA VRAM. DOS viewer/EXE/disk-image export is disabled.
+It is separate from the NTSC artifact-color mode `cga-composite-hires`.
+
+The [Tandy technical reference](https://www.manualslib.com/manual/887518/Tandy-1000.html?page=53)
+describes the two/four-bank layouts used here. Tandy modes use the standard RGBI palette, with direct pixel encoding and
+all dithering methods. Native-size RGBI artwork retains its pixels and colors;
+640×200 selects four global colors from the 16-color gamut. Resizing uses
+nearest neighbor. The RGBI preview does not simulate composite output.
+
+Tandy `.raw` / `.bin` output contains 16384 bytes of banked VRAM for 160×200,
+or 32768 bytes for 320/640×200, followed by 16 one-byte RGBI palette registers.
+The DOS `.c` viewer uses BIOS modes 08h/09h/0Ah and loads the Tandy palette
+through ports 3DAh/3DEh; EXE and bootable disk-image exports use the same source.
+These viewers require Tandy hardware: PCjr register differences and later
+Tandy Video II 640×200 16-color modes are not implemented.
+
 `--native-par` letterboxes/pillarboxes the source into the fixed DOS
 buffer; the default is to stretch-fill.
+
+## Game Boy Advance Modes
+
+| Mode | Resolution | Colors | Notes |
+|------|-----------|--------|-------|
+| `gba-mode3` | 240×160 | 32768 | 16bpp BGR555 direct color (one word per pixel, no palette) |
+| `gba-mode4` | 240×160 | 256 | 8bpp paletted + 256-entry BGR555 palette |
+| `gba-mode5` | 160×128 | 32768 | 16bpp BGR555 direct color (smaller buffer, hardware-scaled) |
+
+Output: PNG preview (always) + devkitARM/grit-style C header (`.h`,
+`const unsigned short`/`const unsigned char` arrays with element-count
+sizes) + raw `.bin` (Mode 4 also writes a companion `.pal` of 256 ×
+u16 LE BGR555). Square pixels (PAR 1.0). `--native-par` letterboxes/
+pillarboxes the source into the fixed LCD buffer; the default is to
+stretch-fill.
+
+## Thomson Modes
+
+Thomson TO7/70 and TO8 (French micros). Channels use the EF9369 + TEA5114
+gamma LUT (`intens[16]`, a non-uniform ramp — NOT nibble replication).
+
+| Mode | Resolution | Colors | Notes |
+|------|-----------|--------|-------|
+| `thomson-to7-320x16` | 320×200 | 16 fixed | forme-couleur, 2 colors per 8×1-pixel cell, fixed TO7/70 palette |
+| `thomson-to8-320x16` | 320×200 | 16 prog. | forme-couleur, programmable 16-from-4096 palette |
+| `thomson-to8-160x16` | 160×200 | 16 prog. | 4bpp bitmap, no per-cell constraint |
+| `thomson-to8-320x4` | 320×200 | 4 prog. | 2-bitplane bitmap |
+| `thomson-to8-640x2` | 640×200 | 2 prog. | 1bpp bitmap |
+
+Plain lores, hires, and their interlaced variants automatically try both
+single-color and paired palette fitting at depths 2–8 (4–256 colors), keeping
+the best S2 result including the original. OCS supports up to 32 colors in
+lores or 16 in hires; larger palettes require AGA. The search
+models spatial color mixing, snaps proposed colors to the OCS or AGA color
+grid, and fully re-encodes with the selected dither method and strength.
+Each search runs two rounds with up to eight candidates per round, retaining
+only SSIMULACRA2 improvements. Palette locks remain fixed. This pass applies to the ordinary
+single-pass encoder; `--best` retains its existing palette search. Fixed
+palettes, reserved slots, transparency, sliced/striped palettes, DPF, and
+EHB retain their existing handling. No additional option is needed.
+
+Plain OCS EHB also refines its automatic palette, trying independent
+single-color and paired-color searches from the original encoding and keeping
+whichever has the highest S2 score. Every change updates both the base color
+and its hardware-derived half-bright partner. The selected dither and locks
+are preserved; `--best`, user palettes, reserves, transparency, and
+sliced/striped EHB retain their existing paths.
+
+MSX modes are available in the CLI and in the **MSX1** / **MSX2** web selectors:
+
+| Mode | Screen | Colors |
+|---|---|---|
+| `msx1-screen2` | 256×192 | TMS9918 fixed palette, two colors per 8×1 cell |
+| `msx2-screen5` | 256×212 | 16 selected from 512 |
+| `msx2-screen6` | 512×212 | 4 selected from 512 |
+| `msx2-screen7` | 512×212 | 16 selected from 512 |
+| `msx2-screen8` | 256×212 | Fixed 256-color GGGRRRBB |
+
+SCREEN 2 reuses the Thomson color-pair optimizer and supports `--cell-refine`.
+Its transparent ink 0 is replaced with opaque black ink 1. The MSX1 RGB preview
+uses a conventional TMS9918 approximation; analog colors vary between machines.
+MSX2 palettes use RGB333, and SCREEN 8 uses the V9938 blue levels 0, 2, 4, 7.
+All modes accept the existing dithering controls, including `--dither opt-checker`.
+`--best` and external palette/slot overrides are not supported in these modes.
+
+```sh
+./build/png2amiga --mode msx1-screen2 --dither opt-checker examples/maui.jpg maui.sc2
+./build/png2amiga --mode msx2-screen5 --dither opt-checker examples/maui.jpg maui.sc5
+```
+
+Exports: `.png` preview, `.h` VRAM array, `.raw`/`.bin` CPU-visible VRAM from
+address zero, and `.sc2`/`.sc5`/`.sc6`/`.sc7`/`.sc8` MSX BASIC BLOAD files.
+Screen files contain data, not an executable or cassette archive. In MSX BASIC:
+
+```basic
+SCREEN 2:BLOAD "MAUI.SC2",S
+```
+
+For MSX2, select the matching screen and disable transparent color zero and
+sprites. SCREEN 5/6/7 include the palette in BASIC's VRAM mirror; restore it
+**after** loading:
+
+```basic
+SCREEN 5:VDP(9)=VDP(9) OR 34:BLOAD "MAUI.SC5",S:COLOR=RESTORE
+```
+
+SCREEN 8 uses the same sequence without `COLOR=RESTORE`. SCREEN 7/8 require
+128 KB VRAM. These are non-interlaced screens without sprite or raster tricks.
+Layouts follow the [Yamaha V9938 technical manual](https://map.grauw.nl/resources/video/yamaha_v9938.pdf).
+
+TO7/70 can export a `.k7` tape containing a standalone picture viewer:
+
+```sh
+./build/png2amiga --mode thomson-to7-320x16 examples/maui.jpg maui.k7
+```
+
+The web UI also offers a **k7** download button for this mode. In
+[to7.fr](https://to7.fr/), select **TO7-70** with BASIC 1.0, import the tape
+(drag the `.k7` onto the emulator and choose **Importer**), rewind it, and
+enter `LOADM"",,R`. Reset exits the viewer. This export requires the 16-color
+TO7/70; the original 8-color TO7 and TO8 modes are not supported by this viewer.
+The tape stores both native screen planes without recompression or requantization.
+TO7/70 quantization and previews use the fixed RGB palette displayed by to7.fr;
+TO8 retains its separate programmable EF9369 palette. Other emulators may use
+different RGB approximations for the same TO7/70 hardware color numbers.
+
+TO8 forme-couleur (`thomson-to8-320x16`) now also automatically selects the
+best of its original palette, single-color fitting, and paired fitting. With
+`--cell-refine`, it additionally compares fitting the palette before refining
+cells. Every candidate uses the selected dither and is fully encoded with
+TO8's intensity table and two-color-per-8×1-cell restriction; S2 selects the
+winner. This can be substantially slower with cell refinement enabled.
+TO7's fixed palette, TO8 bitmap modes, and `--best` retain their existing paths.
+
+`--cell-refine` optionally refines colors and pixel patterns across cell
+boundaries in TO7/70, TO8 forme-couleur, CGA text, all C64 modes, and TED
+hires/multicolor. Short two-color cells and CGA glyphs use a global 3×3
+binomial blur in linear RGB. The larger C64/TED cells also try OKLab,
+alternating color and bitmap/glyph updates for up to four passes and
+retaining the best S2 checkpoint. Shared background registers remain
+shared; writable charset bits change together at every use of the glyph,
+without increasing the glyph count. PETSCII stays within the ROM and
+respects `--c64-petscii-graphics`. FLI/AFLI keep the first 24 physical pixels
+light gray (color 15), matching
+the bundled displayers’ late-badline region in PAL VICE; they do not hide it
+with background-colored sprites.
+
+For ordered and palette-aware dithers (including `opt-checker`, `opt-line`,
+Bayer, and `--dither none`), bitmap refinement changes legal color registers
+and regenerates affected pixels through the selected quantizer at the
+original phase and strength. It does not freely rearrange pixels. C64
+charset refinement preserves the glyph bytes and screen references for
+these methods, optimizing only colors. PETSCII and CGA select ROM glyphs
+directly and do not use the bitmap dither setting.
+
+The pass keeps the original whole encoding if its S2 score does not improve.
+It is slower and changes the halftone texture; CGA requires
+`--cga-text-metric blur`. Diffusion methods seed the unrestricted pattern search. Both paths
+use a global blur objective and retain only full-image S2 improvements. TO8 keeps the palette
+selected by the existing quantizer (or the `--best` palette search).
+
+C64 multicolor's initial quantizer now reserves code 00 for the one shared
+background register, choosing three local colors per cell. Older versions
+allowed a different background in each cell's preview even though the
+export could not represent it. Comparisons should use this corrected
+baseline before measuring the additional `--cell-refine` gain.
+
+`python3 tools/check_c64_vice.py` verifies default and refined C64 previews
+against every pixel of the 320×200 PAL VICE display (requires `x64sc` and
+its ROMs). It executes the exported PRGs for bitmap modes and PETSCII.
+Charset modes use a minimal test loader for the native glyph/screen/color
+bytes, because charset PRG export is not implemented. Use `--model c64c`
+to check the newer PAL VIC-II as well. This checks emulator behavior;
+physical hardware has not been tested.
+
+```sh
+./build/png2amiga --mode thomson-to7-320x16 --cell-refine examples/maui.jpg maui-to7.png
+./build/png2amiga --mode cga-text80x100 --cell-refine examples/maui.jpg maui-cga.png
+```
+
+The forme-couleur color byte uses the TO-series inverted-high-bits format
+(round-trip-verified against the theodore emulator's `Decode320x16`).
+
+## Commodore TED Modes
+
+Commodore Plus/4 and C16 (TED video chip). Fixed 121-color palette
+(luma 0–7 × chroma 0–15; chroma 0 = black at every luma).
+
+| Mode | Resolution | Colors | Notes |
+|------|-----------|--------|-------|
+| `ted-hires` | 320×200 | 2 / 8×8 cell | hires (C64-hires-like) |
+| `ted-multicolor` | 160×200 | 4 / 4×8 cell | multicolor: 2 global + 2 per-cell |
+
+Thomson + TED: fixed-buffer modes, square pixels (PAR 1.0). Output: PNG
+preview (always) + generic C header (`.h`: `const unsigned char` arrays
+— Thomson `Couleur`/`Forme` or `PageA`/`PageB` + a 4-bit r/g/b `Palette`
+for the TO8 modes; TED `Bitmap`/`Luma`/`Chroma` + `Bg0`/`Bg1` defines for
+multicolor) + native-layout raw `.bin` (Thomson: pageA then pageB; TED:
+bitmap, luma, chroma, then the two global bytes). The programmable TO8
+modes also write a companion `.pal`. `--depth` / `--chipset` are no-ops;
+reserve / lock / external-palette flags and `.iff` / viewer outputs are
+rejected (fixed or auto-quantized palettes).
+
+## Sega Master System / Game Gear Modes
+
+| Mode | Resolution | Colors | Notes |
+|------|-----------|--------|-------|
+| `sms-mode4` | 256×192 | 2 × 16 of 64 | RGB222 CRAM, ≤ 448 unique tiles (768 cells merged) |
+| `gg-mode4` | 160×144 | 2 × 16 of 4096 | RGB444 CRAM, 360 cells |
+
+8×8 4bpp planar tiles; each cell picks one of the two palettes (tilemap
+bit 11: CRAM 0-15 or 16-31) and H/V flips. Output: PNG preview + devkitSMS
+`.h` (`_tiles` / `_palette` as `unsigned char`, `_tilemap` as `unsigned
+short`, `_size` defines in bytes) + raw `.bin` = tiles (32 bytes each) ++
+tilemap (u16 LE per cell, row-major) ++ CRAM (SMS 32 bytes `--BBGGRR`, GG
+64 bytes `----BBBBGGGGRRRR` LE). The GG tilemap is the 20×18 visible area
+(load it at name-table column 6, row 3).
+
+## Amstrad CPC Modes
+
+| Mode | Resolution | Inks | Palette |
+|------|-----------|------|---------|
+| `cpc-mode0` | 160×200 | 16 | 27-color firmware palette |
+| `cpc-mode1` | 320×200 | 4 | 27-color firmware palette |
+| `cpc-mode2` | 640×200 | 2 | 27-color firmware palette |
+| `cpc-plus-mode0` | 160×200 | 16 | 4096-color RGB444 (ASIC) |
+| `cpc-plus-mode1` | 320×200 | 4 | 4096-color RGB444 (ASIC) |
+| `cpc-plus-mode2` | 640×200 | 2 | 4096-color RGB444 (ASIC) |
+
+Mode 0 pixels are 2:1 wide, mode 2 pixels 1:2 tall. The screen is the
+16 KB `&C000` layout (line y at `(y/8)*80 + (y%8)*2048`). Output: PNG
+preview + `.bin` (raw 16384 bytes) or `.scr` (128-byte AMSDOS header, load
+`&C000`, + 16384 bytes), both with a companion `.pal` (classic: one Gate
+Array byte `0x40|hw` per ink; Plus: `R<<4|B`, `G` per ink, the ASIC
+palette-RAM order) + `.h` (screen + inks as firmware numbers and Gate
+Array bytes, or Plus `0x0GRB` words and ASIC bytes).
+
+SMS / GG + CPC: `--depth` / `--chipset` are no-ops; reserve / lock /
+external-palette flags and `.iff` / viewer outputs are rejected.
+
+## nibnib
+
+[nibnib](https://github.com/raphlinus/nibnib) is an RGB565 image format
+at 4 bits per pixel, built to decode at a few cycles per pixel on an
+RP2350. Each byte selects one of 256 palette words. The decoder adds
+that word to the previous pixel, doubled into both halves of a 32-bit
+value, which gives the next two pixels. The palette therefore holds
+pixel-pair deltas, not colours.
+
+| Mode | Size | Output |
+|------|------|--------|
+| `nibnib` | CLI: source size by default; web: 320 wide by default; width must be even | `.nibnib`, `.png` preview |
+
+The decoder is fixed, so all of the quality comes from the encoder:
+
+1. The image is dithered to RGB565 with the selected `--dither` method
+   (error-diffusion and ordered methods; palette-picking methods such as
+   `yliluoma` or `dbs` are rejected).
+2. All 256 palette entries are fitted to the image. Each entry moves to
+   the mean delta of the pixel pairs that use it, and the least-used
+   entries move to the pairs that are coded worst.
+3. Each row is encoded with a beam search over the codes (64 states in
+   normal mode; 256 for Best's wider searches).
+   The search state is the last decoded pixel, and the cost is the
+   OKLab error of both pixels of each pair.
+
+Normal mode starts from a distance-weighted palette seed that covers
+distinct color changes, fits against the original image, and retains the
+lowest-error fitting checkpoint. Its 64-state final search reduces encoding
+work compared with the previous 256-state normal search.
+
+`--best` sweeps four RGB565-target palette fits, a fit scored against the
+original image, an earlier palette checkpoint, and decoder-aware palette
+refinement. The refinement tests small changes to each packed word against
+the colors it actually decodes, including carries and wraparound, then runs
+the row search again. It keeps the result
+with the highest SSIMULACRA2, including the normal encode as a fallback.
+It also includes the normal mode's diverse-seed result; only an improvement
+earns another refinement and full 256-state search. The complete earlier
+Best result remains a fallback.
+
+The encoder reuses identical rows, skips duplicate-heavy palette entries,
+and stops fitting when a palette no longer changes. These shortcuts preserve
+the encoded result; repeated backgrounds and pixel art benefit most.
+
+Across eight native photo, pixel-art and gradient comparisons, normal mode
+encoded 1.5–2.1× faster than the previous normal encoder, with higher
+SSIMULACRA2 in every case ([measurements](experiments/nibnib-encoder/normal-results.json)).
+The file size stays the same because the format fixes it. In the web app,
+pick the "RP2350: nibnib (RGB565)" chipset.
 
 ## Sliced palette (per-line copper swaps)
 
@@ -251,6 +618,42 @@ change) and 3 on AGA (4 MOVEs per change worst-case under banked LOCT).
 Auto-mode tries K+3, K+2, K+1 and picks the highest K whose worst-case
 cost fits the budget — typically 6 swaps/line at depths 3–5 on AGA.
 
+Hardware-ready pixel art (colour splits drawn in the paint program) is
+planned exactly: when each row's colours fit the palette at chipset
+precision, the planner loads exactly those colours, preloading upcoming
+colours into idle slots when a row needs more changes than the line
+budget allows. Rows that cannot fit keep the nearest colours. This
+applies to lores and hires with the planner's own palette; EHB, a
+`--palette` file and `--sliced-vertical-dither` use the error-minimising
+planner. `--report-rows` lists the scanlines that are not 1:1 with the
+source; the web tool marks them in red (Advanced → "Mark rows that are
+not 1:1").
+
+**Depth zones.** `--depth auto` picks the fewest bitplanes that keep the
+image 1:1. With `--sliced` the depth may change down the frame: the
+image splits into horizontal zones, each with the fewest planes its rows
+need, and the copper switches BPLCON0 and the modulos in the horizontal
+blank before each zone. A zone whose rows still miss gets one more plane.
+`--zones 0:3,64:5,180:2` sets the zones (start row:depth) instead.
+
+```bash
+png2amiga screen.png --mode lores --depth auto --sliced --dither none --report-rows -o screen.cpp
+# Zones:    0-63 2bpl, 64-179 5bpl, 180-255 1bpl
+```
+
+Bitplane data is interleaved with each row holding only its zone's
+planes, so a plane on in consecutive zones runs on into the next zone by
+itself; a plane that turns on again after a gap gets its pointer
+reloaded at the boundary. A boundary costs 3 copper MOVEs (BPLCON0,
+BPL1MOD, BPL2MOD) plus 2 per reloaded plane, taken from that line's
+colour-change budget. The `.cpp` viewer runs the zones; the `.h` carries
+the packed planes and a zone table (`_zone_row`, `_zone_depth`,
+`_zone_offset`); `--output-zones <prefix>` writes each zone as
+`<prefix>_zoneN.png` and `.iff` (its rows, planes and per-line
+palettes). Lores and hires, progressive; not with HAM, EHB, `--dpf`,
+`--strips`, `--palette`, interlace or `--best`. In the web tool: Depth →
+Auto with Sliced on; the zones show as grey bands beside the preview.
+
 `--slice-changes N` overrides the budget; use if you want to experiment
 with configurations that may exceed real hardware limits but still
 display correctly on emulators.
@@ -269,7 +672,8 @@ strip palette. Cost is ~20–30× the single-pass time on most modes
 MOVEs at fixed **mid-line** copper slots — so a single scanline can
 display multiple palette banks across its width. Where the per-line
 sliced palette gives "this row's 64 colors", strips gives "this strip's
-64 colors", with strips on a 16-pixel grid. Strips ride on top of the
+64 colors", with strips on an 8-pixel grid in lores with 1-4 planes
+and a 16-pixel grid in the 6-plane modes. Strips ride on top of the
 sliced base (each line opens with the sliced palette reload in hblank,
 then mid-line swaps walk it through the visible region).
 
@@ -284,7 +688,19 @@ can get. png2amiga's contribution is wiring this style of per-strip
 palette change into a still-image converter on top of an OKLab
 error-diffused dither.
 
-Two strip modes:
+Strip modes:
+
+* **Lores + strips** (`--mode lores --depth 1-4 --strips`) — OCS lores
+  without DPF, 2-16 base colors. With 4 or fewer planes the copper gets
+  a MOVE every 8 pixels: 40 mid-line slots at x = 0, 8, ..., 312. The
+  hblank budget is 14 MOVEs with color 0 locked and 13 with color 0
+  unlocked. Depths 1-3 reset all registers in every hblank; depth 4
+  resets the 14 (or 13) registers with the largest error. Depth 1
+  always unlocks color 0. With color 0 unlocked, the viewer loads
+  `COLOR00` at x = 0 and restores it to black at x = 320, so the border
+  stays black on all sides. The viewer moves the bitplanes 5 pixels
+  left (`DDFSTRT $30`, `BPLCON1 $BB`) so that the slots land on exact
+  8-pixel boundaries.
 
 * **DPF + strips** (`--mode lores --dpf --strips`) — OCS dual-playfield,
   3-plane PF2 (8 base colors). The 8 PF2 registers are unconditionally
@@ -295,13 +711,59 @@ Two strip modes:
 * **EHB + strips** (`--mode ehb --strips`) — OCS Extra Half-Brite, 32
   base registers + 32 hardware-derived half-brites. Each base swap also
   updates the matching half-brite slot via the hardware DAC. Adaptive
-  per-line hblank tracking keeps each line inside the 14-MOVE OCS hblank
+  per-line hblank tracking keeps each line inside the 13-MOVE EHB hblank
   budget. ~1100+ unique displayed colors per frame.
 
-Both modes are OCS-only, lores, no interlace. The planner runs 6
-iterative refinement passes alternating index dither and mid-line swap
-selection. Slot positions were calibrated empirically on real OCS
-hardware via `--strips-probe` (see `src/strips.hpp`); the published
+* **HAM6 + strips** (`--mode ham6 --strips`) — OCS HAM6, 16 base
+  registers. Mid-line swaps change the registers that HAM SET pixels
+  load; MODIFY pixels follow the swapped colors. Slots at 16k+7. Each
+  line restores at most 13 registers in hblank.
+
+All strip modes are OCS-only, lores, no interlace. The DPF planner uses a
+64-state beam with two-strip lookahead, allowing a color to be loaded
+before the pixels that need it. It then performs up to four palette
+refinement iterations: each initial or mid-line color is fitted to the
+pixels selecting that register over its entire lifetime, until the next
+overwrite. Refinement preserves locked colors and the copper schedule;
+it is disabled for partial hblank resets (`--slice-changes N`). The final
+dither runs against the resulting per-strip palettes. Candidate colors
+are deduplicated by their actual RGB444 codes, preserving dark shades.
+EHB uses the same two-strip lookahead with a two-state beam. Its lifetime
+refinement jointly fits base and half-brite pixels by testing all 4096
+RGB444 colors with the hardware's truncating half-brite operation. The
+sliced entry palette remains fixed, and refinement preserves the next
+line's reset budget (at most 13 hblank and 18 visible MOVEs per line).
+EHB delays next-row resets until horizontal position `$E1`, after the
+visible right edge, and preserves `COLOR00` when black-border locking
+is enabled.
+Both planners run once; repeating the old outer loop did not feed back
+new information.
+
+At each write boundary, a guard avoids selecting the register being
+changed (including its half-brite index in EHB). DPF, lores and EHB guard one
+pixel on either side (lores slot 0 at x = 0 has no guard). Previews and S2 scores include these
+constraints. The DPF and EHB planners also charge the nearest-color error
+caused by these guards on both sides of each proposed write, so they avoid
+swaps whose apparent benefit disappears at the boundary. DPF lifetime
+refinement excludes the guarded register from pixel assignments as well.
+
+HAM6 strips plans scanlines in order because register values carry over
+between lines. Its preview uses the palette actually restored within
+the 13-write hblank limit, so preview and export agree. Each slot
+takes the best single swap: candidates are ranked by the HAM error a
+SET of that color would remove, and the row's HAM DP scores the top 24
+(at most 4 per register) with a three-strip lookahead. Candidates are
+scored in parallel, and the DP resumes at the first changed pixel. The
+written colors are then refit to the pixels that use them over their
+register lifetimes. Ordered dithers apply to HAM6 strips. Progressive
+sliced and strip viewers wait until `$E1` before next-row palette
+writes, including across line 255; interlaced sliced viewers retain
+`$E3`.
+
+DPF slot positions were calibrated empirically on real OCS hardware via
+`--strips-probe` (see `src/strips.hpp`). The EHB and HAM6 tables (slots
+at 16k+7) and the lores 1-4 plane table were calibrated or verified on the cycle-exact Copperline emulator
+with `--strips-debug`; the published
 hardware budget is ~14 hblank MOVEs + ~20 visible-area MOVEs per line in
 6-plane modes, and the calibrated slot tables sit comfortably within
 that.
@@ -347,7 +809,7 @@ PSNR — they can land on the optimum-MSE centroid; the Amiga-mode
 encoders have to snap to the nearest 4-bit-per-channel grid point.
 
 That's why some 32-color rows below show png2amiga's PSNR _behind_
-pngquant's by ~1 dB while still leading perceptually (51.55 vs
+pngquant's by ~1 dB while still leading perceptually (52.02 vs
 51.14 SSIMULACRA2 — the 12-bit handicap costs PSNR but the 
 OKLab + ocs-bruteforce quantizer still wins the eyeball test). And it's
 why the 256-color tier is closer on PSNR: there both encoders
@@ -370,17 +832,19 @@ columns can be compared apples-to-apples:
 
 |     | Encoder     | Mode                              | PSNR (dB) | SSIMULACRA2 | Time (s) |
 |:---:|-------------|-----------------------------------|----------:|------------:|---------:|
-| 🟦 | **png2amiga** | **lores d=8 AGA + best**       | 32.35     | **83.02**   |    15.04 |
-| 🟦 | png2amiga   | lores d=8 AGA                     | 32.37     | 82.87       |     0.76 |
+| 🟦 | **png2amiga** | **lores d=8 AGA + best**          | 31.50     | **84.39**   |     1.68 |
+| 🟦 | png2amiga   | lores d=8 AGA                     | 31.82     | 83.99       |     0.96 |
 | 🟦 | pngquant    | libimagequant 256 (`--speed 1`)   | 33.61     | 80.13       |     0.06 |
 | 🟦 | ffmpeg      | 256 (`palettegen`+FS)†            | 31.18     | 78.61       |     0.06 |
-| 🟪 | png2amiga   | HAM6 + sliced + best              | 30.99     | 76.15       |    21.72 |
-| 🟪 | png2amiga   | HAM6 + sliced                     | 30.50     | 75.60       |     0.25 |
+| 🟪 | png2amiga   | HAM6 + sliced + strips            | 31.78     | 76.57       |    49.34 |
+| 🟪 | png2amiga   | HAM6 + sliced + best              | 30.99     | 76.13       |    17.64 |
+| 🟪 | png2amiga   | HAM6 + sliced                     | 30.53     | 75.59       |     0.24 |
 | 🟪 | ham_convert | SHAM6 (`ham6_sliced`, `dither_fs`)| 31.81     | 74.82       |    20.18 |
-| 🟪 | png2amiga   | HAM6 (no copper)                  | 30.22     | 72.94       |     0.19 |
-| 🟪 | png2amiga   | HAM6 + best (no copper)           | 30.22     | 72.94       |     9.40 |
+| 🟩 | png2amiga   | EHB + strips + best               | 30.25     | 73.85       |    21.59 |
+| 🟩 | png2amiga   | EHB + strips                      | 29.81     | 73.60       |     1.01 |
+| 🟪 | png2amiga   | HAM6 + best (no copper)           | 30.18     | 72.94       |    10.98 |
+| 🟪 | png2amiga   | HAM6 (no copper)                  | 30.23     | 72.77       |     0.18 |
 | 🟦 | Netpbm      | pnmquant 256 (`-floyd`)†          | 31.59     | 72.20       |     0.11 |
-| 🟩 | png2amiga   | EHB + strips + best               | 29.39     | 71.60       |    18.55 |
 | 🟪 | ham_convert | HAM6 q1 (fastest, `dither_fs`)    | 29.45     | 70.41       |     4.08 |
 | 🟪 | ham_convert | HAM6 q7 (max quality, `dither_fs`)| 30.04     | 70.05       |    38.30 |
 | 🟦 | gifsicle    | 256 (`--dither floyd-steinberg`)† | 32.94     | 69.47       |     0.02 |
@@ -388,11 +852,11 @@ columns can be compared apples-to-apples:
 | 🟦 | ImageMagick | 256 (`-dither FS`)†               | 30.69     | 66.85       |     0.05 |
 | 🟦 | pngnq       | 256 (NeuQuant + FS, `-s 1`)†      | 31.61     | 65.73       |     0.07 |
 | 🟪 | abc         | HAM6 (`-floyd`)                   | 28.31     | 63.24       |     1.96 |
-| 🟩 | png2amiga   | EHB + best (no copper)            | 23.75     | 62.54       |    13.81 |
+| 🟩 | png2amiga   | EHB + best (no copper)            | 23.81     | 62.70       |     9.23 |
 | 🟪 | abc         | SHAM6 (`-floyd`)                  | 26.66     | 60.59       |     1.22 |
-| 🟧 | png2amiga   | lores d=5 + best                  | 23.42     | 57.83       |    16.19 |
-| 🟩 | png2amiga   | EHB (no copper)                   | 25.03     | 52.38       |     0.09 |
-| 🟧 | png2amiga   | lores d=5                         | 24.96     | 51.57       |     0.10 |
+| 🟧 | png2amiga   | lores d=5 + best                  | 22.61     | 60.08       |    11.67 |
+| 🟩 | png2amiga   | EHB (no copper)                   | 24.69     | 54.67       |     0.22 |
+| 🟧 | png2amiga   | lores d=5                         | 24.89     | 52.02       |     0.17 |
 | 🟧 | pngquant    | libimagequant 32 (`--speed 1`)    | 26.08     | 51.14       |     0.48 |
 | 🟩 | ham_convert | EHB (`dither_fs`)                 | 25.82     | 49.68       |     6.06 |
 | 🟧 | ham_convert | ocs32 (`dither_fs`)               | 24.42     | 37.70       |     6.08 |
@@ -410,12 +874,12 @@ quantize the rest" flag — `-remap` / `-mapfile` / their equivalents
 accept either no constraints or a fully-fixed palette. Their palette
 is unconstrained on these runs, which is a small advantage on
 photographic input that doesn't move the rankings. At 256 colors
-libimagequant has the highest PSNR (33.61 dB) but lands ~3
+libimagequant has the highest PSNR (33.61 dB) but lands ~4
 SSIMULACRA2 below png2amiga — typical MSE-vs-perceptual split when
 the quantizer runs in linear/sRGB rather than a perceptually uniform
 space. Notable per-tool observations: **gifsicle** at 256 has very
 high PSNR (32.94 dB, beating most of the Amiga-mode encoders) but
-sits 13 SSIMULACRA2 below png2amiga; **pngnq** (NeuQuant) lands well
+sits 15 SSIMULACRA2 below png2amiga; **pngnq** (NeuQuant) lands well
 below its perceptual-aware competitors despite the slowest-quality
 setting; **didder**'s `mmcq:N` median-cut pairs a clean dither
 implementation with an unsophisticated quantizer.
@@ -444,6 +908,11 @@ The project includes
 as a submodule, which provides the `m68k-amiga-elf-gcc` cross-compiler,
 `elf2hunk`, `exe2adf`, `fs-uae`, and AmigaOS SDK headers — everything
 needed to produce bootable disk images locally.
+
+`run-amiga.sh` launches the separately installed Amiberry emulator. It
+looks on `PATH` and in the standard macOS Applications folders; set
+`AMIBERRY_BIN` to use another executable. The default is an A1200;
+append `A500` and/or `ntsc` to select those settings.
 
 ```bash
 git submodule update --init
@@ -513,9 +982,9 @@ hashing.
 -->
 
 ```
-png2amiga 1.97.0.1211
+png2amiga 1.121.0.1330
 
-Usage: png2amiga [options] input.[png|jpg|webp] [-o output.[png|iff|h|raw|pal|pi1|pi2|pi3]]
+Usage: png2amiga [options] input.[png|jpg|webp] [-o output.[png|iff|h|raw|pal|pi1|pi2|pi3|nibnib]]
 
 
 Modes:
@@ -524,13 +993,28 @@ Modes:
             ham6[-hires][-lace] | ham8[-hires][-lace] | ehb[-lace]
     Atari:  stf-low | stf-med | stf-hi | ste-low | ste-med | ste-hi
     DOS:    vga-13h | vga-10h | vga-12h | ega-320 | ega-640 | ega-hi |
-            cga-320 | cga-640 | cga-composite-hires |
+            tandy-160 | tandy-320 | tandy-640 |
+            cga-160 | cga-160x200 | cga-320 | cga-640 | cga-composite-hires |
             cga-text80x{200,100,50,25}
     SNES:   snes-mode7-256 | snes-mode7-direct
     Genesis: genesis-h32 | genesis-h40 | genesis-h32-sh | genesis-h40-sh
     C64:    c64-multicolor | c64-hires | c64-fli | c64-afli |
             c64-petscii | c64-charset-hires | c64-charset-multicolor
-  --depth <1-8>                   Bitplane depth (default: 5)
+    GBA:    gba-mode3 | gba-mode4 | gba-mode5
+    ZX/Atari: zx-spectrum | stf-spectrum512 | ste-spectrum4096
+    MSX: msx1-screen2 | msx2-screen5 | msx2-screen6 | msx2-screen7 | msx2-screen8
+    Thomson: thomson-to7-320x16 | thomson-to8-320x16 |
+            thomson-to8-160x16 | thomson-to8-320x4 | thomson-to8-640x2
+    TED:    ted-hires | ted-multicolor
+    Sega:   sms-mode4 | gg-mode4
+    CPC:    cpc-mode0 | cpc-mode1 | cpc-mode2 |
+            cpc-plus-mode0 | cpc-plus-mode1 | cpc-plus-mode2
+    Other:  nibnib (RGB565 pair-delta format, .nibnib)
+  --depth <1-8|auto>              Bitplane depth (default: 5); auto = fewest
+                                  planes that keep the image 1:1, with
+                                  --sliced per horizontal zone
+  --zones <row:depth,...>         Depth zones for --sliced (lores/hires),
+                                  e.g. 0:3,64:5,180:2
   --chipset ocs|aga               Amiga chipset (default: auto)
   --dual-playfield, --dpf         Encode into PF2 (depth 3 OCS / 4 AGA)
   --width <int>                   Override output width
@@ -554,7 +1038,7 @@ Palette:
   --print-palette                 Dump final CMAP to stderr (text)
   --print-palette-json            Dump final CMAP to stdout (JSON)
 
-Palette index pinning (lores/hires/EHB/Atari):
+Palette index pinning (indexed-palette modes):
   --no-lock-color0                Allow palette index 0 to be image color
   --lock-index, --li <id> <hex>   Pin slot's color; image pixels CAN
                                   still route to it (quantizer uses it)
@@ -566,8 +1050,9 @@ Palette index pinning (lores/hires/EHB/Atari):
 
 Search quality:
   --best                          Multi-restart search (~20–30× slower).
-                                  Works with plain HAM/EHB/lores/hires
-                                  and with --sliced / --strips.
+                                  Works with plain HAM/EHB/lores/hires,
+                                  --sliced / --strips, Thomson 320x16
+                                  and nibnib (palette/objective sweep).
 
 Image processing:
   --brightness <float>            -1.0..1.0 (default: 0.0)
@@ -614,7 +1099,7 @@ Sliced palette (Amiga, per-line swaps; aka SHAM / DHIRES):
                                   0xFFDF line-255 wrap marker.
 
 Strip palette (mid-line swaps, OCS lores):
-  --strips                        Mid-line swaps; pair with --dpf or ehb
+  --strips                        Mid-line swaps (lores 1-4 planes, --dpf, ehb, ham6)
 
 Seamless tile:
   --tile                          Replicate input 3x3 before dither, export center
@@ -646,6 +1131,7 @@ Platform-specific:
   --tile-reserve <N>              Reserve N tile slots from the budget
   --cga-palette <p>               p0-low | p0-high | p1-low | p1-high
   --cga-bg <0..15>                CGA background color
+  --cell-refine                  Refine supported cell modes across boundaries (slower)
   --cga-text-metric <m>           blur (default) | mse
   --cga-text-kernel <k>           Blur kernel: auto | binomial | aniso53 |
                                   aniso73 | aniso35 | aniso37 | wide55 | wide77
@@ -664,6 +1150,8 @@ Output:
   --interleaved                   Alias for --layout interleaved
   --output-indexed <file>         Raw chunky indices: 1 byte/pixel,
                                   scan order, no header (post-pin)
+  --output-zones <prefix>         Depth zones: <prefix>_zoneN.png and .iff
+                                  per zone (its rows, planes and palettes)
   --preview                       Inline preview (iTerm2, kitty, sixel)
   --preview-scale <1-8>           Preview display scale
   --preview-video                 Batch only: loop frames inline
@@ -680,6 +1168,7 @@ Output:
       .idx                          Raw chunky indices (1 byte/pixel, scan order);
                                     also via --output-indexed / --output-each .idx
       .pi1 / .pi2 / .pi3            Atari Degas (STF/STE low / med / hi)
+      .k7                           TO7/70 tape picture viewer (LOADM"",,R)
       .prg                          C64 PRG (autostart)
       .koa                          C64 Koala paint
       .hir                          C64 hires bitmap
@@ -695,6 +1184,8 @@ Build integration:
   --depfile <path>                Write a Make-format depfile
   --list-modes                    Print supported modes and exit
   --list-dithers                  Print supported dither methods and exit
+  --report-rows                   List scanlines that are not 1:1 with the
+                                  source (Amiga modes)
   --profile <N>                   Run encode N times for sampling profilers
   --score-vs <ref>                Score input against reference (no encoding).
                                   Input may be a .png OR a .idx (raw chunky
@@ -703,9 +1194,9 @@ Build integration:
 
 Exit codes (sysexits.h):
   0 ok    1 internal    64 usage    66 no input    73 cannot create
-
 ```
 
 ## License
 
 MIT
+

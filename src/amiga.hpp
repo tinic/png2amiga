@@ -45,9 +45,16 @@ enum class Mode : unsigned char {
     ega_640,  // EGA 640x200, 4 bitplanes, 16 colors
     ega_hi,   // EGA 640x350, 4 bitplanes, 16 colors
 
+    // Original Tandy 1000 native graphics (BIOS 08h / 09h / 0Ah).
+    tandy_160,       // 160x200, 16 RGBI colours, two 8 KB banks
+    tandy_320,       // 320x200, 16 RGBI colours, four 8 KB banks
+    tandy_640,       // 640x200, four of 16 RGBI colours, paired bitplanes
+
     // CGA (Color Graphics Adapter) — fixed palettes, two-bank memory.
     // 320x200 2bpp (4 colors), 640x200 1bpp (2 colors). --cga-palette
     // selects which of the fixed palette variants (0/1 × low/high intensity).
+    cga_160x200,     // 160x200 direct RGBI pixels; 32 KB, preview/raw only
+    cga_160,         // 160x100 RGBI pixels: fixed half-blocks in 80x100 text cells
     cga_320,         // CGA 320x200, 4 colors from palette 0/1 × low/high
     cga_640,         // CGA 640x200, monochrome (bg + 1 fg)
     cga_composite_hires, // CGA 640x200 mode 06: 1bpp + NTSC artifact decoding (8088 MPH-style)
@@ -210,6 +217,79 @@ enum class Mode : unsigned char {
     // the encoder doesn't yet generate.
     genesis_h32_sh,  // 256×224, 4 base palettes + per-tile shadow flag
     genesis_h40_sh,  // 320×224, same
+
+    // Game Boy Advance bitmap modes — linear framebuffers in VRAM, no
+    // tilemap/bitplane structure. The GBA LCD is a fixed 240×160 panel;
+    // the smaller Mode 5 buffer is hardware-scaled to fill it.
+    //   mode3: 240×160, 16bpp BGR555 direct-color (one u16 per pixel, no
+    //          palette). 0bbbbbgggggrrrrr; top bit unused.
+    //   mode4: 240×160, 8bpp paletted (one u8 index per pixel) + a 256-entry
+    //          BGR555 palette in the BG palette RAM.
+    //   mode5: 160×128, 16bpp BGR555 direct-color (smaller buffer than the
+    //          panel; the hardware can stretch it to 240×160).
+    gba_mode3,  // 240×160, 16bpp BGR555 direct-color (no palette)
+    gba_mode4,  // 240×160, 8bpp, 256-color BGR555 palette
+    gba_mode5,  // 160×128, 16bpp BGR555 direct-color (no palette)
+
+    zx_spectrum,
+    stf_spectrum512,
+    ste_spectrum4096,
+
+    // MSX1 TMS9918 attribute screen and MSX2 V9938 bitmaps.
+    msx1_screen2,
+    msx2_screen5,
+    msx2_screen6,
+    msx2_screen7,
+    msx2_screen8,
+    // Thomson TO7/70 + TO8 — French micros, EF9369/TEA5114 gamma-corrected
+    // 4-bit-per-channel palette (non-uniform intens[] ramp). VRAM is two
+    // 8 KB pages (pageA / pageB). Fixed-buffer modes, square pixels.
+    //   forme-couleur (320×16): 2 colors per 8×1 pixel attribute. pageB =
+    //     shape (bit7 leftmost), pageA = color byte (bg/fg index, with the
+    //     two high bits INVERTED — the TO-series Decode320x16 format).
+    //   bitmap modes have no per-cell color constraint:
+    //     160×16 = 4bpp nibbles, 320×4 = 2 bitplanes, 640×2 = 1bpp.
+    //   TO7/70 uses the FIXED 16-color palette; TO8 is programmable
+    //   (16 / 4 / 2 colors chosen from the 4096-color intens[] gamut).
+    thomson_to7_320x16,  // TO7/70, 320×200, 16 fixed, forme-couleur
+    thomson_to8_320x16,  // TO8, 320×200, 16 programmable, forme-couleur
+    thomson_to8_160x16,  // TO8, 160×200, 16 programmable, 4bpp bitmap
+    thomson_to8_320x4,   // TO8, 320×200, 4 programmable, 2 bitplanes
+    thomson_to8_640x2,   // TO8, 640×200, 2 programmable, 1bpp
+
+    // Commodore TED (Plus/4, C16) — fixed 121-color palette (luma 0..7 ×
+    // chroma 0..15, chroma 0 = black at every luma). Cell-based color
+    // constraints like the VIC-II C64 modes.
+    //   hires (320×200): 2 colors per 8×8 cell (C64-hires-like).
+    //   multicolor (160×200): 4 colors per 4×8 cell (2 global + 2 per-cell,
+    //     C64-multicolor-like).
+    ted_hires,  // TED hires, 320×200, 2 colors/8×8 cell
+    ted_multicolor,  // TED multicolor, 160×200, 4 colors/4×8 cell
+
+    // Sega Master System / Game Gear — VDP mode 4. 8×8 4bpp planar tiles,
+    // two 16-color palettes (BG CRAM 0-15 and sprite CRAM 16-31; tilemap
+    // bit 11 selects), H/V flip per cell. VRAM holds 448 tiles below the
+    // name table at $3800.
+    //   SMS: 256×192, RGB222 (64 colors, --BBGGRR), 768 cells → merged
+    //        down to ≤ 448 unique tiles.
+    //   GG:  160×144 visible, RGB444 (4096 colors, 0x0BGR LE), 360 cells.
+    sms_mode4,  // SMS, 256×192, 2 × 16 of 64
+    gg_mode4,   // Game Gear, 160×144, 2 × 16 of 4096
+
+    // Amstrad CPC Gate Array (27-color firmware palette) and CPC Plus ASIC
+    // (4096-color RGB444). 16 KB screen at &C000, 80 bytes/line, line
+    // address (y/8)*80 + (y%8)*2048.
+    cpc_mode0,       // 160×200, 16 inks, wide pixels
+    cpc_mode1,       // 320×200, 4 inks
+    cpc_mode2,       // 640×200, 2 inks, tall pixels
+    cpc_plus_mode0,  // Plus: 160×200, 16 of 4096
+    cpc_plus_mode1,  // Plus: 320×200, 4 of 4096
+    cpc_plus_mode2,  // Plus: 640×200, 2 of 4096
+
+    // nibnib (github.com/raphlinus/nibnib): RGB565 with a 256-entry
+    // pixel-pair delta palette, 4 bits per pixel. Any size, even width;
+    // the CLI keeps the source size by default.
+    nibnib,
 };
 
 // ---------------------------------------------------------------------------
@@ -305,7 +385,17 @@ constexpr ModeParams get_mode_params(Mode mode) noexcept {
         return {640, 200, 4, 16, false, false, true, false, 1, 2, 0.417f};
     case Mode::ega_hi:
         return {640, 350, 4, 16, false, false, true, false, 1, 1, 0.730f};
+    case Mode::tandy_160:
+        return {160, 200, 4, 16, false, false, false, false, 4, 2, 1.6666667f};
+    case Mode::tandy_320:
+        return {320, 200, 4, 16, false, false, false, false, 2, 2, 0.8333333f};
+    case Mode::tandy_640:
+        return {640, 200, 2, 4, false, false, true, false, 1, 2, 0.4166667f};
     // CGA: same 1.2 PAR as VGA 13h. cga_320 is 2bpp packed, cga_640 is 1bpp.
+    case Mode::cga_160x200:
+        return {160, 200, 4, 16, false, false, false, false, 4, 2, 1.6666667f};
+    case Mode::cga_160:
+        return {160, 100, 4, 16, false, false, false, false, 4, 4, 0.8333333f};
     case Mode::cga_320:
         return {320, 200, 2, 4, false, false, false, false, 1, 1, 0.833f};
     case Mode::cga_640:
@@ -420,6 +510,85 @@ constexpr ModeParams get_mode_params(Mode mode) noexcept {
         return {256, 224, 4, 128, false, false, false, false, 1, 1, 1.167f};
     case Mode::genesis_h40_sh:
         return {320, 224, 4, 128, false, false, false, false, 1, 1, 0.933f};
+    // Game Boy Advance bitmap modes — fixed buffers, square pixels (PAR
+    // 1.0). bitplane_depth is conceptual for the direct modes (16 = bits
+    // per pixel, NOT a bitplane count); is_gba_direct gates off all
+    // palette/depth code so that field is never used as a plane count.
+    //   mode3/mode5: 16bpp direct, 32768 effective colors (BGR555).
+    //   mode4:        8bpp paletted, 256 colors.
+    case Mode::gba_mode3:
+        return {240, 160, 16, 32768, false, false, false, false, 1, 1, 1.0f};
+    case Mode::gba_mode4:
+        return {240, 160, 8, 256, false, false, false, false, 1, 1, 1.0f};
+    case Mode::gba_mode5:
+        return {160, 128, 16, 32768, false, false, false, false, 1, 1, 1.0f};
+    case Mode::zx_spectrum:
+        return {256, 192, 1, 16, false, false, false, false, 1, 1, 1.0f};
+    case Mode::stf_spectrum512:
+    case Mode::ste_spectrum4096:
+        return {320, 199, 4, 48, false, false, false, false, 1, 1, 0.833f};
+    // MSX: ~5.37 MHz pixels (8:7); SCREEN 6/7 double horizontal resolution.
+    case Mode::msx1_screen2:
+        return {256, 192, 4, 16, false, false, false, false, 1, 1, 1.143f};
+    case Mode::msx2_screen5:
+        return {256, 212, 4, 16, false, false, false, false, 1, 1, 1.143f};
+    case Mode::msx2_screen6:
+        return {512, 212, 2, 4, false, false, false, false, 1, 1, 0.5715f};
+    case Mode::msx2_screen7:
+        return {512, 212, 4, 16, false, false, false, false, 1, 1, 0.5715f};
+    case Mode::msx2_screen8:
+        return {256, 212, 8, 256, false, false, false, false, 1, 1, 1.143f};
+    // Thomson — fixed 200-line buffers, square pixels (PAR 1.0). The
+    // 160-wide and 640-wide modes hardware-double / halve horizontally but
+    // are square on the actual display; we letterbox the source to the
+    // native buffer. bitplane_depth is conceptual (color depth), not an
+    // Amiga plane count — suppressed from status like GBA/C64.
+    //   forme-couleur 320×16: 16 colors, attribute cells.
+    //   160×16 4bpp / 320×4 2-plane / 640×2 1bpp bitmaps.
+    // Thomson 4:3 display: 320×200 → PAR 0.833 (slightly tall, like the DOS /
+    // Atari 320×200 modes); 160×200 → 2× hardware doubling → 1.667; 640×200 →
+    // 0.417 (half-width pixels, like ega-640).
+    case Mode::thomson_to7_320x16:
+    case Mode::thomson_to8_320x16:
+        return {320, 200, 4, 16, false, false, false, false, 1, 1, 0.833f};
+    case Mode::thomson_to8_160x16:
+        return {160, 200, 4, 16, false, false, false, false, 2, 1, 1.667f};
+    case Mode::thomson_to8_320x4:
+        return {320, 200, 2, 4, false, false, false, false, 1, 1, 0.833f};
+    case Mode::thomson_to8_640x2:
+        return {640, 200, 1, 2, false, false, false, false, 1, 1, 0.417f};
+    // Commodore TED — same PAL VIC-II-family display geometry as the C64:
+    //   hires 320×200: 2 colors / 8×8 cell → PAR 0.936 (like c64-hires).
+    //   multicolor 160×200: 4 colors / 4×8 cell (2:1 doubling) → 1.872
+    //   (= 2 × 0.936, like c64-multicolor).
+    case Mode::ted_hires:
+        return {320, 200, 1, 2, false, false, false, false, 1, 1, 0.936f};
+    case Mode::ted_multicolor:
+        return {160, 200, 2, 4, false, false, false, false, 2, 1, 1.872f};
+    // Sega 8-bit VDP: same ~5.37 MHz pixel clock as NES/SNES/Genesis H32,
+    // so a 256-wide line displays at 8:7. The Game Gear LCD is treated
+    // as square.
+    case Mode::sms_mode4:
+        return {256, 192, 4, 32, false, false, false, false, 1, 1, 1.143f};
+    case Mode::gg_mode4:
+        return {160, 144, 4, 32, false, false, false, false, 1, 1, 1.0f};
+    // Amstrad CPC: mode 1 is ~square, mode 0 doubles width, mode 2 halves
+    // it (same shapes as Amiga lores-lace / hires).
+    case Mode::cpc_mode0:
+    case Mode::cpc_plus_mode0:
+        return {160, 200, 4, 16, false, false, false, false, 2, 1, 2.0f};
+    case Mode::cpc_mode1:
+    case Mode::cpc_plus_mode1:
+        return {320, 200, 2, 4, false, false, false, false, 1, 1, 1.0f};
+    case Mode::cpc_mode2:
+    case Mode::cpc_plus_mode2:
+        return {640, 200, 1, 2, false, false, false, false, 1, 2, 0.5f};
+    // Not a buffer. screen_width is the web/api default width (the height
+    // follows the source aspect; the api does not upscale). The CLI does
+    // not read it: without --width/--height it keeps the source size.
+    // bitplane_depth is bits per pixel, as for the GBA direct modes.
+    case Mode::nibnib:
+        return {320, 0, 16, 65536, false, false, false, false, 1, 1, 1.0f};
     }
     std::unreachable();
 }
@@ -427,6 +596,11 @@ constexpr ModeParams get_mode_params(Mode mode) noexcept {
 // Default width for a mode (320 for lores/ham/ehb, 640 for hires)
 constexpr std::size_t default_width(Mode mode) noexcept {
     return get_mode_params(mode).screen_width;
+}
+
+// Amiga bitplane modes (lores/hires/HAM/EHB); the enum lists them first.
+constexpr bool is_amiga(Mode mode) noexcept {
+    return mode <= Mode::ehb;
 }
 
 // Check if a mode is any HAM variant
@@ -476,9 +650,18 @@ constexpr bool is_ega(Mode mode) noexcept {
     return mode == Mode::ega_320 || mode == Mode::ega_640 || mode == Mode::ega_hi;
 }
 
+constexpr bool is_tandy(Mode mode) noexcept {
+    return mode == Mode::tandy_160 || mode == Mode::tandy_320 || mode == Mode::tandy_640;
+}
+
+// Direct half-block pixel modes, separate from glyph matching.
+constexpr bool is_cga_pixels(Mode mode) noexcept {
+    return mode == Mode::cga_160 || mode == Mode::cga_160x200;
+}
+
 // Check if a mode is an IBM PC / DOS CGA mode
 constexpr bool is_cga(Mode mode) noexcept {
-    return mode == Mode::cga_320 || mode == Mode::cga_640 ||
+    return is_cga_pixels(mode) || mode == Mode::cga_320 || mode == Mode::cga_640 ||
            mode == Mode::cga_composite_hires || mode == Mode::cga_text80x100 ||
            mode == Mode::cga_text80x50 || mode == Mode::cga_text80x25 ||
            mode == Mode::cga_text80x200 || mode == Mode::cga_text40x200 ||
@@ -612,7 +795,8 @@ constexpr bool is_chunky(Mode mode) noexcept {
     // 8bpp pixel-byte streams handed to the encoder before any tile-pack
     // layer. VGA 13h is genuine chunky output; SNES Mode 7 is chunky at
     // the encoder *input* but gets repacked into tiles before write.
-    return mode == Mode::vga_13h || mode == Mode::snes_mode7_256 || mode == Mode::snes_mode7_direct;
+    return mode == Mode::vga_13h || mode == Mode::snes_mode7_256 ||
+           mode == Mode::snes_mode7_direct || mode == Mode::gba_mode4;
 }
 
 constexpr bool is_snes(Mode mode) noexcept {
@@ -621,6 +805,110 @@ constexpr bool is_snes(Mode mode) noexcept {
 
 constexpr bool is_snes_direct(Mode mode) noexcept {
     return mode == Mode::snes_mode7_direct;
+}
+
+// Game Boy Advance bitmap modes (mode3/mode4/mode5).
+constexpr bool is_gba(Mode mode) noexcept {
+    return mode == Mode::gba_mode3 || mode == Mode::gba_mode4 || mode == Mode::gba_mode5;
+}
+
+constexpr bool is_nibnib(Mode mode) noexcept { return mode == Mode::nibnib; }
+
+// GBA direct-color modes (16bpp BGR555 per pixel, no palette).
+constexpr bool is_gba_direct(Mode mode) noexcept {
+    return mode == Mode::gba_mode3 || mode == Mode::gba_mode5;
+}
+
+// GBA paletted mode (8bpp + 256-entry BGR555 palette).
+constexpr bool is_gba_paletted(Mode mode) noexcept {
+    return mode == Mode::gba_mode4;
+}
+
+constexpr bool is_atari_spectrum(Mode mode) noexcept {
+    return mode == Mode::stf_spectrum512 || mode == Mode::ste_spectrum4096;
+}
+constexpr bool is_retro_raster(Mode mode) noexcept {
+    return mode == Mode::zx_spectrum || is_atari_spectrum(mode);
+}
+// MSX1 / MSX2 native screens.
+constexpr bool is_msx(Mode mode) noexcept {
+    return mode >= Mode::msx1_screen2 && mode <= Mode::msx2_screen8;
+}
+
+// Thomson TO7/70 + TO8 modes.
+constexpr bool is_thomson(Mode mode) noexcept {
+    return mode == Mode::thomson_to7_320x16 || mode == Mode::thomson_to8_320x16 ||
+           mode == Mode::thomson_to8_160x16 || mode == Mode::thomson_to8_320x4 ||
+           mode == Mode::thomson_to8_640x2;
+}
+
+// Thomson forme-couleur attribute modes (2 colors per 8×1 pixel cell):
+// TO7/70 (fixed palette) and TO8 (programmable palette).
+constexpr bool is_thomson_formecouleur(Mode mode) noexcept {
+    return mode == Mode::thomson_to7_320x16 || mode == Mode::thomson_to8_320x16;
+}
+
+// Thomson bitmap modes (no per-cell color constraint): TO8 160×16 4bpp,
+// 320×4 2-plane, 640×2 1bpp. All have a programmable palette.
+constexpr bool is_thomson_bitmap(Mode mode) noexcept {
+    return mode == Mode::thomson_to8_160x16 || mode == Mode::thomson_to8_320x4 ||
+           mode == Mode::thomson_to8_640x2;
+}
+
+// Thomson modes with a programmable (vs. fixed TO7/70) palette — all TO8
+// modes. Drives the companion .pal output and the palette emission in .h.
+constexpr bool is_thomson_programmable(Mode mode) noexcept {
+    return is_thomson(mode) && mode != Mode::thomson_to7_320x16;
+}
+
+// Number of palette colors for a Thomson mode (16 / 4 / 2).
+constexpr std::size_t thomson_palette_size(Mode mode) noexcept {
+    return get_mode_params(mode).max_colors;
+}
+
+// Commodore TED modes (Plus/4, C16).
+constexpr bool is_ted(Mode mode) noexcept {
+    return mode == Mode::ted_hires || mode == Mode::ted_multicolor;
+}
+
+// TED multicolor (4 colors / 4×8 cell) vs. hires (2 colors / 8×8 cell).
+constexpr bool is_ted_multicolor(Mode mode) noexcept {
+    return mode == Mode::ted_multicolor;
+}
+
+// Sega Master System / Game Gear VDP mode 4.
+constexpr bool is_sms(Mode mode) noexcept {
+    return mode == Mode::sms_mode4 || mode == Mode::gg_mode4;
+}
+
+constexpr bool is_game_gear(Mode mode) noexcept {
+    return mode == Mode::gg_mode4;
+}
+
+// Amstrad CPC (classic Gate Array + Plus ASIC).
+constexpr bool is_cpc(Mode mode) noexcept {
+    return mode == Mode::cpc_mode0 || mode == Mode::cpc_mode1 || mode == Mode::cpc_mode2 ||
+           mode == Mode::cpc_plus_mode0 || mode == Mode::cpc_plus_mode1 ||
+           mode == Mode::cpc_plus_mode2;
+}
+
+constexpr bool is_cpc_plus(Mode mode) noexcept {
+    return mode == Mode::cpc_plus_mode0 || mode == Mode::cpc_plus_mode1 ||
+           mode == Mode::cpc_plus_mode2;
+}
+
+// Gate Array screen mode number (0 / 1 / 2).
+constexpr int cpc_screen_mode(Mode mode) noexcept {
+    switch (mode) {
+    case Mode::cpc_mode0:
+    case Mode::cpc_plus_mode0:
+        return 0;
+    case Mode::cpc_mode1:
+    case Mode::cpc_plus_mode1:
+        return 1;
+    default:
+        return 2;
+    }
 }
 
 // Maximum bitplane depth for a chipset (raw hardware limit)
@@ -647,6 +935,12 @@ constexpr std::size_t max_user_depth(Mode mode, Chipset chipset) noexcept {
     if (is_atari(mode)) return get_mode_params(mode).bitplane_depth;
     if (is_bc7(mode) || is_bc3(mode) || is_bc2(mode) || is_astc(mode)) return 8;
     if (is_block_compressed(mode)) return 4;     // ETC2 / BC1 are fixed 4 bpp
+    // GBA buffers are fixed: mode4 = 8bpp paletted, direct modes = 16bpp.
+    // --depth is a no-op for all three.
+    if (is_gba(mode) || is_nibnib(mode)) return get_mode_params(mode).bitplane_depth;
+    // Thomson / TED buffers are fixed by the hardware video mode.
+    if (is_thomson(mode) || is_ted(mode)) return get_mode_params(mode).bitplane_depth;
+    if (is_sms(mode) || is_cpc(mode)) return get_mode_params(mode).bitplane_depth;
 
     // AGA standard modes
     if (chipset == Chipset::aga) return 8;

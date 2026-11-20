@@ -38,6 +38,7 @@ Options parse_js_options(val js_opts) {
     if (js_opts.hasOwnProperty("mode")) opts.mode = js_opts["mode"].as<std::string>();
     if (js_opts.hasOwnProperty("chipset")) opts.chipset = js_opts["chipset"].as<std::string>();
     if (js_opts.hasOwnProperty("depth")) opts.depth = js_opts["depth"].as<int>();
+    if (js_opts.hasOwnProperty("depthAuto")) opts.depth_auto = js_opts["depthAuto"].as<bool>();
     if (js_opts.hasOwnProperty("interlace")) opts.interlace = js_opts["interlace"].as<bool>();
     if (js_opts.hasOwnProperty("dither")) opts.dither = js_opts["dither"].as<std::string>();
     if (js_opts.hasOwnProperty("ditherStrength"))
@@ -130,6 +131,7 @@ Options parse_js_options(val js_opts) {
         opts.alpha_dither_strength = js_opts["alphaDitherStrength"].as<float>();
     if (js_opts.hasOwnProperty("maskInvert")) opts.mask_invert = js_opts["maskInvert"].as<bool>();
     if (js_opts.hasOwnProperty("nativePar")) opts.native_par = js_opts["nativePar"].as<bool>();
+    if (js_opts.hasOwnProperty("cellRefine")) opts.cell_refine = js_opts["cellRefine"].as<bool>();
     if (js_opts.hasOwnProperty("cgaTextMetric"))
         opts.cga_text_metric = js_opts["cgaTextMetric"].as<std::string>();
     if (js_opts.hasOwnProperty("cgaTextKernel"))
@@ -271,6 +273,24 @@ val js_convert_rgba(val input_array, val js_opts) {
     if (!result.indices.empty()) {
         obj.set("indices", make_uint8_array(result.indices));
     }
+    if (!result.zoneRows.empty()) {
+        val rows = val::array();
+        val depths = val::array();
+        for (std::size_t i = 0; i < result.zoneRows.size(); ++i) {
+            rows.call<void>("push", result.zoneRows[i]);
+            depths.call<void>("push", result.zoneDepths[i]);
+        }
+        obj.set("zoneRows", rows);
+        obj.set("zoneDepths", depths);
+    }
+    // Per-scanline count of pixels that are not 1:1 with the source (Amiga).
+    if (!result.rowMismatch.empty()) {
+        val arr = val::global("Uint32Array").new_(result.rowMismatch.size());
+        arr.call<void>("set",
+                       val(typed_memory_view(result.rowMismatch.size(),
+                                             result.rowMismatch.data())));
+        obj.set("rowMismatch", arr);
+    }
     obj.set("error", result.error);
 
     if (!result.data.empty()) obj.set("rgba", make_uint8_array(result.data));
@@ -383,6 +403,40 @@ val js_convert_prg(val input_array, val js_opts) {
     return obj;
 }
 
+val js_convert_msx(val input_array, val js_opts) {
+    auto length = input_array["length"].as<std::size_t>();
+    std::vector<std::uint8_t> input(length);
+    val view = val(typed_memory_view(length, input.data()));
+    view.call<void>("set", input_array);
+
+    auto opts = parse_js_options(js_opts);
+    auto result = convert_msx(input.data(), input.size(), opts);
+
+    val obj = val::object();
+    obj.set("width", result.width);
+    obj.set("height", result.height);
+    obj.set("error", result.error);
+    if (!result.data.empty()) obj.set("data", make_uint8_array(result.data));
+    return obj;
+}
+
+val js_convert_k7(val input_array, val js_opts) {
+    auto length = input_array["length"].as<std::size_t>();
+    std::vector<std::uint8_t> input(length);
+    val view = val(typed_memory_view(length, input.data()));
+    view.call<void>("set", input_array);
+
+    auto opts = parse_js_options(js_opts);
+    auto result = convert_k7(input.data(), input.size(), opts);
+
+    val obj = val::object();
+    obj.set("width", result.width);
+    obj.set("height", result.height);
+    obj.set("error", result.error);
+    if (!result.data.empty()) obj.set("data", make_uint8_array(result.data));
+    return obj;
+}
+
 // JS API: convertKoa(Uint8Array, options) -> { data: Uint8Array(.koa), error }
 val js_convert_koa(val input_array, val js_opts) {
     auto length = input_array["length"].as<std::size_t>();
@@ -391,6 +445,21 @@ val js_convert_koa(val input_array, val js_opts) {
     view.call<void>("set", input_array);
     auto opts = parse_js_options(js_opts);
     auto result = convert_koa(input.data(), input.size(), opts);
+    val obj = val::object();
+    obj.set("error", result.error);
+    if (!result.data.empty()) obj.set("data", make_uint8_array(result.data));
+    return obj;
+}
+
+// JS API: convertScr(Uint8Array, options) -> { data: Uint8Array(.scr), error }
+// Amstrad CPC modes only: 128-byte AMSDOS header + 16 KB screen.
+val js_convert_scr(val input_array, val js_opts) {
+    auto length = input_array["length"].as<std::size_t>();
+    std::vector<std::uint8_t> input(length);
+    val view = val(typed_memory_view(length, input.data()));
+    view.call<void>("set", input_array);
+    auto opts = parse_js_options(js_opts);
+    auto result = convert_scr(input.data(), input.size(), opts);
     val obj = val::object();
     obj.set("error", result.error);
     if (!result.data.empty()) obj.set("data", make_uint8_array(result.data));
@@ -518,7 +587,10 @@ EMSCRIPTEN_BINDINGS(png2amiga) {
     function("convertDegas", &js_convert_degas);
     function("convertRaw", &js_convert_raw);
     function("convertPRG", &js_convert_prg);
+    function("convertK7", &js_convert_k7);
+    function("convertMSX", &js_convert_msx);
     function("convertKoa", &js_convert_koa);
+    function("convertScr", &js_convert_scr);
     function("convertHir", &js_convert_hir);
     function("convertMask", &js_convert_mask);
     function("convertMaskRaw", &js_convert_mask_raw);

@@ -693,6 +693,61 @@ Result<std::string> generate(amiga::Mode mode,
     using namespace amiga;
     auto sym = sanitize_symbol(options.symbol_name);
 
+    if (is_tandy(mode)) {
+        const auto params = get_mode_params(mode);
+        const auto bytes = mode == Mode::tandy_160 ? 16384u : 32768u;
+        if (width != params.screen_width || height != 200 || raw_frame.size() != bytes || palette.size() != 16)
+            return std::unexpected{Error{ErrorCode::invalid_dimensions,
+                "Tandy viewer needs the native banked frame and 16 RGBI palette register bytes"}};
+        for (auto color : palette)
+            if (color > 15)
+                return std::unexpected{Error{ErrorCode::invalid_dimensions, "Tandy palette values must be 0..15"}};
+        const auto bios_mode = mode == Mode::tandy_160 ? 0x08 : mode == Mode::tandy_320 ? 0x09 : 0x0A;
+        std::string out = std::format(
+            "/* Tandy 1000 RGBI graphics: {}x200, BIOS mode 0x{:02X}.\n"
+            " * Requires Tandy hardware; the register writes are not PCjr compatible.\n"
+            " * VRAM is banked in {} groups of 8192 bytes. */\n",
+            width, bios_mode, mode == Mode::tandy_160 ? 2 : 4);
+        out += kPreamble;
+        out += std::format("\nstatic const unsigned char {}_data[{}] = {{\n", sym, bytes);
+        out += emit_byte_array(raw_frame);
+        out += "};\n";
+        out += std::format("static const unsigned char {}_palette[16] = {{\n", sym);
+        out += emit_byte_array(palette);
+        out += "};\n\n";
+        out += std::format(
+            "int main(void) {{\n"
+            "    set_mode(0x{:02X});\n"
+            "    blit_b800({}_data, sizeof({}_data));\n"
+            "    /* Tandy palette access belongs in vertical blank. */\n"
+            "    while (inb(0x3DA) & 8) {{}}\n"
+            "    while (!(inb(0x3DA) & 8)) {{}}\n"
+            "    outb(0x3DA, 1);\n"
+            "    outb(0x3DE, 0x{:02X}); /* palette address mask */\n"
+            "    for (unsigned i = 0; i < 16; ++i) {{\n"
+            "        outb(0x3DA, (unsigned char)(0x10 + i));\n"
+            "        outb(0x3DE, {}_palette[i]);\n"
+            "    }}\n"
+            "    outb(0x3DA, 0); /* leave palette access mode to stop display noise */\n"
+            "    (void)wait_key();\n"
+            "    set_mode(0x03);\n"
+            "    return 0;\n"
+            "}}\n",
+            bios_mode, sym, sym, mode == Mode::tandy_640 ? 3 : 15, sym);
+        return out;
+    }
+    if (mode == Mode::cga_160x200) {
+        return std::unexpected{Error{ErrorCode::unsupported_mode,
+            "CGA 160x200 needs 32000 char+attr bytes, exceeding standard CGA's 16384-byte "
+            "VRAM. Use preview/raw export, or cga-160 for a DOS viewer."}};
+    }
+    if (mode == Mode::cga_160) {
+        if (width != 160 || height != 100 || raw_frame.size() != 16000)
+            return std::unexpected{Error{ErrorCode::invalid_dimensions,
+                "cheader_dos_c: cga-160 needs 160x100 pixels and 16000 char+attr bytes"}};
+        return std::string{"/* CGA 160x100 RGBI: fixed 0xDE half-blocks, no glyph matching. */\n"}
+               + generate_cga_text(raw_frame, 80, 100, sym);
+    }
     if (is_cga_text(mode)) {
         std::size_t expected_cols = cga_text_cols(mode);
         std::size_t expected_rows = cga_text_rows(mode);

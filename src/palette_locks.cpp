@@ -1,6 +1,7 @@
 #include "palette_locks.hpp"
 
 #include "color_space.hpp"
+#include "console_color.hpp"
 #include "palette.hpp"
 
 #include <algorithm>
@@ -25,6 +26,11 @@ Color3f to_color(const LockSpec& lock, amiga::Chipset chipset, amiga::Mode mode)
     auto c = clamp_srgb(lock.r, lock.g, lock.b);
     if (amiga::is_stf(mode)) {
         return palette::quantize_to_stf(c);
+    }
+    // GBA Mode 4 stores a 256-entry BGR555 palette — snap lock / reserve
+    // colors onto the 5-bit-per-channel grid the hardware actually holds.
+    if (amiga::is_gba(mode)) {
+        return console_color::bgr555_quantize(c);
     }
     if (chipset != amiga::Chipset::aga) {
         return palette::quantize_to_ocs(c);
@@ -207,6 +213,29 @@ void finalize_palette(std::vector<Color3f>& colors, std::size_t num_colors, bool
     if (colors.size() > num_colors) colors.resize(num_colors);
     while (colors.size() < num_colors)
         colors.push_back(Color3f{0.0f, 0.0f, 0.0f});
+}
+
+void fill_unlocked_slots(std::span<Color3f> colors,
+                         const std::vector<bool>& locked,
+                         std::span<const Color3f> quantized) {
+    constexpr float eps = 1e-6f;
+    auto is_locked_dup = [&](const Color3f& c) {
+        for (std::size_t i = 0; i < colors.size() && i < locked.size(); ++i) {
+            if (!locked[i]) continue;
+            const auto& l = colors[i];
+            if (std::abs(c.r - l.r) < eps && std::abs(c.g - l.g) < eps &&
+                std::abs(c.b - l.b) < eps)
+                return true;
+        }
+        return false;
+    };
+    std::size_t qi = 0;
+    for (std::size_t i = 0; i < colors.size(); ++i) {
+        if (i < locked.size() && locked[i]) continue;
+        while (qi < quantized.size() && is_locked_dup(quantized[qi]))
+            ++qi;
+        if (qi < quantized.size()) colors[i] = quantized[qi++];
+    }
 }
 
 AssembledPalette assemble_locked_palette(const Palette& quantized,

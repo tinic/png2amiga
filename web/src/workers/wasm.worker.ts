@@ -49,6 +49,9 @@ interface ReplyEnvelope {
   indices?: ArrayBuffer
   scanlinePaletteBytes?: ArrayBuffer
   scanlinePaletteSize?: number
+  rowMismatch?: Uint32Array
+  zoneRows?: number[]
+  zoneDepths?: number[]
   error?: string
   rgba?: ArrayBuffer
   data?: ArrayBuffer
@@ -58,6 +61,29 @@ interface ReplyEnvelope {
 let Module: Png2AmigaModule | null = null
 let initError: string | null = null
 
+// A 24-byte WASM module whose only function body is
+// `i32.const 0; i8x16.splat; drop` — the canonical SIMD probe (same bytes
+// wasm-feature-detect uses). WebAssembly.validate() rejects it when the
+// engine has the SIMD proposal disabled, which V8 and SpiderMonkey do on
+// CPUs without SSE4.1 — pre-Penryn Intel / pre-Bulldozer AMD, current
+// browser or not. On those the SIMD module fails at instantiation, before
+// any of our code runs, and the app never becomes ready. Hence the scalar
+// twin (CMakeLists.txt → png2amiga_wasm_nosimd).
+const WASM_SIMD_PROBE = new Uint8Array([
+  0x00, 0x61, 0x73, 0x6D, 0x01, 0x00, 0x00, 0x00,
+  0x01, 0x04, 0x01, 0x60, 0x00, 0x00,
+  0x03, 0x02, 0x01, 0x00,
+  0x0A, 0x09, 0x01, 0x07, 0x00, 0x41, 0x00, 0xFD, 0x0F, 0x1A, 0x0B,
+])
+
+function hasWasmSimd(): boolean {
+  try {
+    return WebAssembly.validate(WASM_SIMD_PROBE)
+  } catch {
+    return false
+  }
+}
+
 async function init(): Promise<void> {
   try {
     // Resolve the JS module URL up front so Emscripten's pthread shim
@@ -65,11 +91,24 @@ async function init(): Promise<void> {
     // the pthread workers try to load `./png2amiga.js` relative to
     // the parent worker's blob URL → 404 → silent "worker sent an
     // error! undefined" in the console and the module never resolves.
-    const wasmJsUrl = new URL(
-      '../../../build-wasm/png2amiga.js', import.meta.url).href
-    const wasmBinUrl = new URL(
-      '../../../build-wasm/png2amiga.wasm', import.meta.url).href
-    const { default: createPng2Amiga } = await import('@wasm/png2amiga.js')
+    //
+    // Both new URL() argument pairs have to stay string literals — Vite
+    // rewrites them to hashed asset URLs at build time. Same for the two
+    // import() specifiers: the branch not taken is still bundled, but only
+    // the taken one is fetched.
+    const simd = hasWasmSimd()
+    const wasmJsUrl = simd
+      ? new URL('../../../build-wasm/png2amiga.js', import.meta.url).href
+      : new URL('../../../build-wasm/png2amiga-nosimd.js', import.meta.url).href
+    const wasmBinUrl = simd
+      ? new URL('../../../build-wasm/png2amiga.wasm', import.meta.url).href
+      : new URL('../../../build-wasm/png2amiga-nosimd.wasm', import.meta.url).href
+    const { default: createPng2Amiga } = simd
+      ? await import('@wasm/png2amiga.js')
+      : await import('@wasm/png2amiga-nosimd.js')
+    if (!simd) {
+      console.warn('png2amiga: WASM SIMD unavailable — loading scalar build (slower)')
+    }
     Module = await createPng2Amiga({
       locateFile: (path: string) => {
         if (path.endsWith('.wasm')) return wasmBinUrl
@@ -101,7 +140,10 @@ const DISPATCHERS: Record<string, Dispatcher> = {
   convertDegas:   (m, args) => m.convertDegas(args[0] as Uint8Array, args[1] as WasmOptions),
   convertRaw:     (m, args) => m.convertRaw(args[0] as Uint8Array, args[1] as WasmOptions),
   convertPRG:     (m, args) => m.convertPRG(args[0] as Uint8Array, args[1] as WasmOptions),
+  convertK7:     (m, args) => m.convertK7(args[0] as Uint8Array, args[1] as WasmOptions),
+  convertMSX:     (m, args) => m.convertMSX(args[0] as Uint8Array, args[1] as WasmOptions),
   convertKoa:     (m, args) => m.convertKoa(args[0] as Uint8Array, args[1] as WasmOptions),
+  convertScr:     (m, args) => m.convertScr(args[0] as Uint8Array, args[1] as WasmOptions),
   convertHir:     (m, args) => m.convertHir(args[0] as Uint8Array, args[1] as WasmOptions),
   convertMask:    (m, args) => m.convertMask(args[0] as Uint8Array, args[1] as WasmOptions),
   convertMaskRaw: (m, args) => m.convertMaskRaw(args[0] as Uint8Array, args[1] as WasmOptions),
@@ -155,6 +197,9 @@ function buildReply(result: ConvertResult): { reply: ReplyEnvelope; transfers: A
     ...opt('c64Mc2', result.c64Mc2),
     ...opt('c64BgColor', result.c64BgColor),
     ...opt('scanlinePaletteSize', result.scanlinePaletteSize),
+    ...opt('rowMismatch', result.rowMismatch),
+    ...opt('zoneRows', result.zoneRows),
+    ...opt('zoneDepths', result.zoneDepths),
     ...opt('error', result.error),
   }
   const transfers: ArrayBuffer[] = []
@@ -232,7 +277,6 @@ async function handleMessage(e: MessageEvent<IncomingMessage>): Promise<void> {
 // (`?worker` import in useWasm.ts). The browser only delivers messages
 // from the parent realm; sonarjs/post-message can't tell that apart from
 // cross-window postMessage flows.
-// eslint-disable-next-line sonarjs/post-message
-globalThis.addEventListener('message', (e: MessageEvent<IncomingMessage>) => {
+addEventListener('message', (e: MessageEvent<IncomingMessage>) => {
   void handleMessage(e)
 })

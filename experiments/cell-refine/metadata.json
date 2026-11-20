@@ -1,0 +1,19 @@
+{
+  "baseline_commit": "e45282c5",
+  "examples": 23,
+  "modes": 7,
+  "dimensions": "Native hardware dimensions for each mode; standard CLI preview aspect correction",
+  "default_previews_byte_identical": 161,
+  "objective": "Two forward/backward coordinate descent passes; squared error after global 3x3 binomial blur in linear RGB; full-image S2 acceptance check",
+  "rejected_variants": [
+    "Extra unblurred-pixel penalty (0.05, 0.2)",
+    "OKLab-space global blur",
+    "Four passes: smaller incremental gain for roughly double the refinement work"
+  ],
+  "runtime_note": "Recorded wall times include CLI startup and some concurrent validation; use bench_cell_refine.py for isolated timing",
+  "src_sha256": {
+    "src/cell_refine.hpp": "88a3a3b4831950804cdfa1843b820435150b65a9a8262dca45642aeff77f87d1",
+    "src/cga_text.cpp": "638f57a669d9e76bef498f1d548e25ef8989a183c5236a598d2f16b78a7dd291",
+    "src/thomson.cpp": "a8591e2429377f40e055fc017b7c53c335563f8fb84980b2402473629fd6fd2f"
+  }
+}

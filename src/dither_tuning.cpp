@@ -297,6 +297,8 @@ Defaults defaults_for(const Context& ctx) {
     if (ctx.scap) {
         if (ctx.dpf) return Defaults{0.9f, 0.10f};                       // 8 colors
         if (ctx.mode == amiga::Mode::ehb) return Defaults{0.9f, 0.10f};  // 64 effective
+        // Plain lores 1-4 planes: same 2-16 color shape as DPF, no sweep.
+        if (ctx.mode == amiga::Mode::lores && ctx.depth <= 4) return Defaults{0.9f, 0.10f};
         return kFallback;
     }
 
@@ -305,18 +307,27 @@ Defaults defaults_for(const Context& ctx) {
 
     // ---- sliced (per-line palette evolution, no strips) ----------------------
     if (ctx.copper) {
-        if (ctx.mode == amiga::Mode::ehb) return Defaults{0.9f, 0.20f};  // mean 37.83
-        if (ctx.mode == amiga::Mode::lores) {
+        // EHB sliced: same strength as plain EHB. 0.9 was swept when the
+        // planner scored mean S2 37.83; at today's ~60 it over-diffuses
+        // across rows whose palettes differ (DIV2K 0267: 35.9 -> 52.7).
+        if (ctx.mode == amiga::Mode::ehb) return Defaults{0.74f, 0.20f};
+        if (ctx.mode == amiga::Mode::lores || ctx.mode == amiga::Mode::lores_interlace) {
+            // The 1.0 strengths were swept at mean S2 21-48. Resweep
+            // 2026-10-15 on the DitherWindow planner (75a88cea), 13
+            // test-suite-lores images outside the evaluation set,
+            // strength {0.6..1.0} x clamp {0.10, 0.35}; 1.0 is now the
+            // worst column at every depth.
             if (ctx.chipset == amiga::Chipset::aga) {
                 switch (ctx.depth) {
                 case 4:
-                    return Defaults{1.0f, 0.10f};  // mean 33.20
+                    return Defaults{0.80f, 0.35f};  // S2 50.83 (1.0/0.10: 48.42)
                 case 5:
-                    return Defaults{1.0f, 0.10f};  // mean 37.19
                 case 6:
-                    return Defaults{1.0f, 0.06f};  // mean 44.33
+                case 7:
                 case 8:
-                    return Defaults{1.0f, 0.04f};  // mean 48.14
+                    // d5 67.72, d6 74.89, d7 80.62, d8 84.15
+                    // (1.0/0.10: 65.58 / 71.81 / 78.08 / 81.63)
+                    return Defaults{0.70f, 0.35f};
                 default:
                     break;
                 }
@@ -325,27 +336,46 @@ Defaults defaults_for(const Context& ctx) {
                 case 2:
                     return Defaults{1.0f, 0.10f};  // mean 21.76
                 case 3:
-                    return Defaults{1.0f, 0.20f};  // mean 26.89
+                    return Defaults{0.70f, 0.10f};  // S2 14.28 (1.0/0.10: 11.72)
                 case 4:
-                    return Defaults{1.0f, 0.04f};  // mean 30.92
+                    return Defaults{0.60f, 0.35f};  // S2 45.02 (1.0/0.10: 40.72)
                 case 5:
-                    return Defaults{1.0f, 0.10f};  // mean 35.61
+                    // 1.0/0.10 was swept at mean S2 35.61; at today's ~54 it
+                    // over-diffuses (34-image DIV2K set: 51.06 -> 53.40;
+                    // plain lores d5 51.48). Same optimum as plain d5.
+                    return Defaults{0.72f, 0.35f};
                 default:
                     break;
                 }
             }
         }
-        if (ctx.mode == amiga::Mode::hires) {
+        if (ctx.mode == amiga::Mode::hires || ctx.mode == amiga::Mode::hires_interlace) {
             switch (ctx.depth) {
             case 3:
-                return Defaults{1.0f, 0.10f};  // mean 26.48
+                return Defaults{0.80f, 0.35f};  // S2 10.45 (1.0/0.10: 6.06)
             case 4:
-                return Defaults{1.0f, 0.20f};  // mean 30.68
+                return Defaults{0.80f, 0.35f};  // S2 39.20 (1.0/0.35: 27.01)
+            // d5-8 (AGA-only; OCS hires maxes at 4bpp) were a fall-through
+            // hole -> the loose kFallback{1.0, 0.35} let FS error run away
+            // against the per-line palette, dumping opposite-hue speckle
+            // (chroma streaks) in smooth regions. Swept on the tuning set:
+            // the optimum is flat across 0.72-0.80 x 0.04-0.06; 0.76/0.06 is
+            // best-or-tied at every depth. tuning-set mean S2: d5 67.5,
+            // d6 76.6, d7 82.1, d8 85.1 (was 54.7 / 65.8 / 74.8 / 80.4).
+            case 5:
+            case 6:
+            case 7:
+            case 8:
+                return Defaults{0.76f, 0.06f};
             default:
                 break;
             }
         }
-        return kFallback;
+        // Sliced-safe fallback. Any unlisted sliced combo (low-depth
+        // stragglers: hires/lores d1-d3, OCS hires d1/d2) gets the flat-optimum
+        // tight clamp rather than the global kFallback{1.0, 0.35}, whose loose
+        // error_clamp is what produced the copper chroma-speckle regression.
+        return Defaults{0.76f, 0.06f};
     }
 
     // ---- Standard modes (no copper, no strips) ----------------------------
@@ -395,6 +425,128 @@ Defaults defaults_for(const Context& ctx) {
             return Defaults{0.76f, 0.35f};  // S2  33.49 (was 0.70)
         default:
             break;
+        }
+    }
+
+    // ---- Thomson forme-couleur + TED -------------------------------------
+    // Swept 2026-06-10 (tools/dither_sweep.py, THOMSON_TED_IMAGES diverse
+    // art/photo/texture set, SSIMULACRA2, strength grid x clamp
+    // {0.20, 0.35, 0.50}) against the segment-scorer encoders -- these
+    // modes previously fell through to the lores-d=5 fallback below.
+    // NOTE: a first pass on the 3-image block-lowres set (C64 blocky art)
+    // over-fit badly -- its optima LOST 0.2-0.6 mean S2 on the full
+    // examples set. Tune these modes on the diverse set only.
+    //
+    // TO7/70's bright-only fixed palette diffuses huge legitimate
+    // residuals (black-mixing), so tight clamps hurt: ec=0.20 costs ~3 S2
+    // vs 0.50. The TED modes also prefer the loose 0.50. TO8's auto
+    // palette is mixed: FS wants the 0.35 default, heavier kernels 0.20.
+    // The FS entry (and bucket default) of each block was re-anchored on
+    // the FULL 23-image examples set — the 6-image margins were inside
+    // noise for FS and the full set reordered them (TO8 FS especially:
+    // 6-image said 0.70/0.50, full set says the old 0.76/0.35 exactly).
+    if (ctx.mode == amiga::Mode::thomson_to7_320x16) {
+        switch (ctx.method) {
+        case dither::Method::floyd_steinberg:
+            return Defaults{0.76f, 0.50f};  // S2 -55.71 (full examples-23)
+        case dither::Method::atkinson:
+            return Defaults{0.80f, 0.50f};  // S2 -51.96
+        case dither::Method::sierra_lite:
+            return Defaults{0.80f, 0.50f};  // S2 -51.20
+        case dither::Method::stucki:
+            return Defaults{0.70f, 0.50f};  // S2 -50.30
+        case dither::Method::jarvis:
+            return Defaults{0.90f, 0.50f};  // S2 -50.56
+        case dither::Method::gilbert:
+            return Defaults{0.50f, 0.35f};  // S2 -72.55 (poor fit; clamp unswept)
+        case dither::Method::riemersma:
+            return Defaults{0.50f, 0.35f};  // S2 -63.24 (poor fit; clamp unswept)
+        case dither::Method::structure_fs:
+            return Defaults{0.80f, 0.35f};  // S2 -50.76
+        case dither::Method::contrast_fs:
+            return Defaults{0.80f, 0.50f};  // S2 -50.70
+        case dither::Method::zhoufang:
+            return Defaults{0.70f, 0.35f};  // S2 -51.25
+        default:
+            return Defaults{0.76f, 0.50f};  // FS tuning as the bucket default
+        }
+    }
+    if (ctx.mode == amiga::Mode::thomson_to8_320x16) {
+        switch (ctx.method) {
+        case dither::Method::floyd_steinberg:
+            return Defaults{0.76f, 0.35f};  // S2 -24.22 (full examples-23)
+        case dither::Method::atkinson:
+            return Defaults{0.80f, 0.20f};  // S2 -6.08
+        case dither::Method::sierra_lite:
+            return Defaults{0.80f, 0.20f};  // S2 -5.88
+        case dither::Method::stucki:
+            return Defaults{0.80f, 0.20f};  // S2 -5.44
+        case dither::Method::jarvis:
+            return Defaults{0.90f, 0.20f};  // S2 -6.02
+        case dither::Method::gilbert:
+            return Defaults{0.50f, 0.35f};  // S2 -28.88 (poor fit; clamp unswept)
+        case dither::Method::riemersma:
+            return Defaults{0.60f, 0.35f};  // S2 -25.30 (poor fit; clamp unswept)
+        case dither::Method::structure_fs:
+            return Defaults{0.80f, 0.20f};  // S2 -7.39
+        case dither::Method::contrast_fs:
+            return Defaults{0.80f, 0.35f};  // S2 -8.76
+        case dither::Method::zhoufang:
+            return Defaults{0.80f, 0.20f};  // S2 -10.47
+        default:
+            return Defaults{0.76f, 0.35f};  // FS tuning as the bucket default
+        }
+    }
+    if (ctx.mode == amiga::Mode::ted_hires) {
+        switch (ctx.method) {
+        case dither::Method::floyd_steinberg:
+            return Defaults{0.70f, 0.50f};  // S2 -2.52 (full examples-23)
+        case dither::Method::atkinson:
+            return Defaults{0.60f, 0.50f};  // S2  -5.55
+        case dither::Method::sierra_lite:
+            return Defaults{0.60f, 0.50f};  // S2  -4.68
+        case dither::Method::stucki:
+            return Defaults{0.60f, 0.50f};  // S2  -6.10
+        case dither::Method::jarvis:
+            return Defaults{0.60f, 0.50f};  // S2  -6.40
+        case dither::Method::gilbert:
+            return Defaults{0.50f, 0.35f};  // S2 -25.02 (poor fit)
+        case dither::Method::riemersma:
+            return Defaults{0.50f, 0.35f};  // S2 -24.80 (poor fit)
+        case dither::Method::structure_fs:
+            return Defaults{0.60f, 0.50f};  // S2 -10.55
+        case dither::Method::contrast_fs:
+            return Defaults{0.70f, 0.50f};  // S2 -14.34
+        case dither::Method::zhoufang:
+            return Defaults{0.60f, 0.50f};  // S2 -10.56
+        default:
+            return Defaults{0.70f, 0.50f};  // FS tuning as the bucket default
+        }
+    }
+    if (ctx.mode == amiga::Mode::ted_multicolor) {
+        switch (ctx.method) {
+        case dither::Method::floyd_steinberg:
+            return Defaults{0.60f, 0.50f};  // S2 21.65 (full examples-23)
+        case dither::Method::atkinson:
+            return Defaults{0.60f, 0.50f};  // S2 17.62
+        case dither::Method::sierra_lite:
+            return Defaults{0.60f, 0.50f};  // S2 18.61
+        case dither::Method::stucki:
+            return Defaults{0.60f, 0.50f};  // S2 16.71
+        case dither::Method::jarvis:
+            return Defaults{0.70f, 0.50f};  // S2 16.17
+        case dither::Method::gilbert:
+            return Defaults{0.50f, 0.35f};  // S2  2.97 (poor fit)
+        case dither::Method::riemersma:
+            return Defaults{0.50f, 0.35f};  // S2  0.40 (poor fit)
+        case dither::Method::structure_fs:
+            return Defaults{0.60f, 0.50f};  // S2  8.67
+        case dither::Method::contrast_fs:
+            return Defaults{0.70f, 0.50f};  // S2  5.48
+        case dither::Method::zhoufang:
+            return Defaults{0.60f, 0.50f};  // S2  8.59
+        default:
+            return Defaults{0.60f, 0.50f};  // FS tuning as the bucket default
         }
     }
 

@@ -1,0 +1,26 @@
+[
+  {
+    "dither": "opt-checker",
+    "cell_refine": false,
+    "count": 6,
+    "mean_gain": 2.9550309578577676
+  },
+  {
+    "dither": "opt-checker",
+    "cell_refine": true,
+    "count": 6,
+    "mean_gain": 2.0756812871744237
+  },
+  {
+    "dither": "floyd-steinberg",
+    "cell_refine": false,
+    "count": 6,
+    "mean_gain": 4.458212365706761
+  },
+  {
+    "dither": "floyd-steinberg",
+    "cell_refine": true,
+    "count": 6,
+    "mean_gain": 4.4134979248046875
+  }
+]

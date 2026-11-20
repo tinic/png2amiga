@@ -1,0 +1,514 @@
+[
+  {
+    "input": "examples/grungy.png",
+    "mode": "lores",
+    "depth": 2,
+    "dither": "floyd-steinberg",
+    "directory": "lores-d2-floyd-steinberg-grungy",
+    "before": {
+      "s2": -42.64,
+      "seconds": 0.06783170904964209
+    },
+    "after": {
+      "s2": -42.64,
+      "seconds": 0.0897457089740783
+    },
+    "gain": 0.0
+  },
+  {
+    "input": "examples/makena.jpg",
+    "mode": "lores",
+    "depth": 2,
+    "dither": "floyd-steinberg",
+    "directory": "lores-d2-floyd-steinberg-makena",
+    "before": {
+      "s2": -55.14,
+      "seconds": 0.074970040936023
+    },
+    "after": {
+      "s2": -55.14,
+      "seconds": 0.10400162497535348
+    },
+    "gain": 0.0
+  },
+  {
+    "input": "examples/maui.jpg",
+    "mode": "lores",
+    "depth": 2,
+    "dither": "floyd-steinberg",
+    "directory": "lores-d2-floyd-steinberg-maui",
+    "before": {
+      "s2": -38.43,
+      "seconds": 0.10276870895177126
+    },
+    "after": {
+      "s2": -38.43,
+      "seconds": 0.1641510420013219
+    },
+    "gain": 0.0
+  },
+  {
+    "input": "examples/ramps.png",
+    "mode": "lores",
+    "depth": 2,
+    "dither": "floyd-steinberg",
+    "directory": "lores-d2-floyd-steinberg-ramps",
+    "before": {
+      "s2": -64.23,
+      "seconds": 0.09156745788641274
+    },
+    "after": {
+      "s2": -64.23,
+      "seconds": 0.14776579104363918
+    },
+    "gain": 0.0
+  },
+  {
+    "input": "examples/grungy.png",
+    "mode": "lores",
+    "depth": 3,
+    "dither": "floyd-steinberg",
+    "directory": "lores-d3-floyd-steinberg-grungy",
+    "before": {
+      "s2": 16.71,
+      "seconds": 0.08774708304554224
+    },
+    "after": {
+      "s2": 16.71,
+      "seconds": 0.12706454191356897
+    },
+    "gain": 0.0
+  },
+  {
+    "input": "examples/makena.jpg",
+    "mode": "lores",
+    "depth": 3,
+    "dither": "floyd-steinberg",
+    "directory": "lores-d3-floyd-steinberg-makena",
+    "before": {
+      "s2": 19.74,
+      "seconds": 0.18246166710741818
+    },
+    "after": {
+      "s2": 19.74,
+      "seconds": 0.2827769168652594
+    },
+    "gain": 0.0
+  },
+  {
+    "input": "examples/maui.jpg",
+    "mode": "lores",
+    "depth": 3,
+    "dither": "floyd-steinberg",
+    "directory": "lores-d3-floyd-steinberg-maui",
+    "before": {
+      "s2": 11.36,
+      "seconds": 0.1304808750282973
+    },
+    "after": {
+      "s2": 18.65,
+      "seconds": 0.22625275002792478
+    },
+    "gain": 7.289999999999999
+  },
+  {
+    "input": "examples/ramps.png",
+    "mode": "lores",
+    "depth": 3,
+    "dither": "floyd-steinberg",
+    "directory": "lores-d3-floyd-steinberg-ramps",
+    "before": {
+      "s2": -39.1,
+      "seconds": 0.1334028341807425
+    },
+    "after": {
+      "s2": -36.65,
+      "seconds": 0.2502110837958753
+    },
+    "gain": 2.450000000000003
+  },
+  {
+    "input": "examples/grungy.png",
+    "mode": "hires",
+    "depth": 2,
+    "dither": "floyd-steinberg",
+    "directory": "hires-d2-floyd-steinberg-grungy",
+    "before": {
+      "s2": -44.8,
+      "seconds": 0.07888045813888311
+    },
+    "after": {
+      "s2": -44.8,
+      "seconds": 0.14731770800426602
+    },
+    "gain": 0.0
+  },
+  {
+    "input": "examples/makena.jpg",
+    "mode": "hires",
+    "depth": 2,
+    "dither": "floyd-steinberg",
+    "directory": "hires-d2-floyd-steinberg-makena",
+    "before": {
+      "s2": -55.54,
+      "seconds": 0.08744920790195465
+    },
+    "after": {
+      "s2": -46.33,
+      "seconds": 0.6040351670235395
+    },
+    "gain": 9.21
+  },
+  {
+    "input": "examples/maui.jpg",
+    "mode": "hires",
+    "depth": 2,
+    "dither": "floyd-steinberg",
+    "directory": "hires-d2-floyd-steinberg-maui",
+    "before": {
+      "s2": -49.7,
+      "seconds": 0.0669839580077678
+    },
+    "after": {
+      "s2": -42.01,
+      "seconds": 0.2820493329782039
+    },
+    "gain": 7.690000000000005
+  },
+  {
+    "input": "examples/ramps.png",
+    "mode": "hires",
+    "depth": 2,
+    "dither": "floyd-steinberg",
+    "directory": "hires-d2-floyd-steinberg-ramps",
+    "before": {
+      "s2": -64.29,
+      "seconds": 0.048206000123173
+    },
+    "after": {
+      "s2": -64.19,
+      "seconds": 0.6418645828962326
+    },
+    "gain": 0.10000000000000853
+  },
+  {
+    "input": "examples/grungy.png",
+    "mode": "hires",
+    "depth": 3,
+    "dither": "floyd-steinberg",
+    "directory": "hires-d3-floyd-steinberg-grungy",
+    "before": {
+      "s2": 11.49,
+      "seconds": 0.26477779098786414
+    },
+    "after": {
+      "s2": 11.49,
+      "seconds": 0.23178049991838634
+    },
+    "gain": 0.0
+  },
+  {
+    "input": "examples/makena.jpg",
+    "mode": "hires",
+    "depth": 3,
+    "dither": "floyd-steinberg",
+    "directory": "hires-d3-floyd-steinberg-makena",
+    "before": {
+      "s2": -7.12,
+      "seconds": 0.09270008304156363
+    },
+    "after": {
+      "s2": 4.26,
+      "seconds": 0.4589425001759082
+    },
+    "gain": 11.379999999999999
+  },
+  {
+    "input": "examples/maui.jpg",
+    "mode": "hires",
+    "depth": 3,
+    "dither": "floyd-steinberg",
+    "directory": "hires-d3-floyd-steinberg-maui",
+    "before": {
+      "s2": 4.37,
+      "seconds": 0.086989542003721
+    },
+    "after": {
+      "s2": 12.5,
+      "seconds": 0.4387967078946531
+    },
+    "gain": 8.129999999999999
+  },
+  {
+    "input": "examples/ramps.png",
+    "mode": "hires",
+    "depth": 3,
+    "dither": "floyd-steinberg",
+    "directory": "hires-d3-floyd-steinberg-ramps",
+    "before": {
+      "s2": -59.73,
+      "seconds": 0.05971966590732336
+    },
+    "after": {
+      "s2": -54.93,
+      "seconds": 0.485533291939646
+    },
+    "gain": 4.799999999999997
+  },
+  {
+    "input": "examples/grungy.png",
+    "mode": "lores-lace",
+    "depth": 2,
+    "dither": "floyd-steinberg",
+    "directory": "lores-lace-d2-floyd-steinberg-grungy",
+    "before": {
+      "s2": -47.85,
+      "seconds": 0.07668737508356571
+    },
+    "after": {
+      "s2": -47.85,
+      "seconds": 0.14887108304537833
+    },
+    "gain": 0.0
+  },
+  {
+    "input": "examples/makena.jpg",
+    "mode": "lores-lace",
+    "depth": 2,
+    "dither": "floyd-steinberg",
+    "directory": "lores-lace-d2-floyd-steinberg-makena",
+    "before": {
+      "s2": -60.39,
+      "seconds": 0.08374962513335049
+    },
+    "after": {
+      "s2": -59.61,
+      "seconds": 0.2200830418150872
+    },
+    "gain": 0.7800000000000011
+  },
+  {
+    "input": "examples/maui.jpg",
+    "mode": "lores-lace",
+    "depth": 2,
+    "dither": "floyd-steinberg",
+    "directory": "lores-lace-d2-floyd-steinberg-maui",
+    "before": {
+      "s2": -55.64,
+      "seconds": 0.06425862503238022
+    },
+    "after": {
+      "s2": -47.43,
+      "seconds": 0.2661438330542296
+    },
+    "gain": 8.21
+  },
+  {
+    "input": "examples/ramps.png",
+    "mode": "lores-lace",
+    "depth": 2,
+    "dither": "floyd-steinberg",
+    "directory": "lores-lace-d2-floyd-steinberg-ramps",
+    "before": {
+      "s2": -64.89,
+      "seconds": 0.04495500004850328
+    },
+    "after": {
+      "s2": -64.29,
+      "seconds": 0.29571087495423853
+    },
+    "gain": 0.5999999999999943
+  },
+  {
+    "input": "examples/grungy.png",
+    "mode": "lores-lace",
+    "depth": 3,
+    "dither": "floyd-steinberg",
+    "directory": "lores-lace-d3-floyd-steinberg-grungy",
+    "before": {
+      "s2": 11.13,
+      "seconds": 0.08435587515123188
+    },
+    "after": {
+      "s2": 16.22,
+      "seconds": 0.2743190419860184
+    },
+    "gain": 5.089999999999998
+  },
+  {
+    "input": "examples/makena.jpg",
+    "mode": "lores-lace",
+    "depth": 3,
+    "dither": "floyd-steinberg",
+    "directory": "lores-lace-d3-floyd-steinberg-makena",
+    "before": {
+      "s2": -5.07,
+      "seconds": 0.08977608405984938
+    },
+    "after": {
+      "s2": 5.29,
+      "seconds": 0.5805204999633133
+    },
+    "gain": 10.36
+  },
+  {
+    "input": "examples/maui.jpg",
+    "mode": "lores-lace",
+    "depth": 3,
+    "dither": "floyd-steinberg",
+    "directory": "lores-lace-d3-floyd-steinberg-maui",
+    "before": {
+      "s2": -12.04,
+      "seconds": 0.07816029200330377
+    },
+    "after": {
+      "s2": 1.92,
+      "seconds": 0.44644354097545147
+    },
+    "gain": 13.959999999999999
+  },
+  {
+    "input": "examples/ramps.png",
+    "mode": "lores-lace",
+    "depth": 3,
+    "dither": "floyd-steinberg",
+    "directory": "lores-lace-d3-floyd-steinberg-ramps",
+    "before": {
+      "s2": -44.96,
+      "seconds": 0.04751954204402864
+    },
+    "after": {
+      "s2": -38.36,
+      "seconds": 0.4926495000254363
+    },
+    "gain": 6.600000000000001
+  },
+  {
+    "input": "examples/grungy.png",
+    "mode": "hires-lace",
+    "depth": 2,
+    "dither": "floyd-steinberg",
+    "directory": "hires-lace-d2-floyd-steinberg-grungy",
+    "before": {
+      "s2": -49.79,
+      "seconds": 0.13053570897318423
+    },
+    "after": {
+      "s2": -49.79,
+      "seconds": 0.2673969999887049
+    },
+    "gain": 0.0
+  },
+  {
+    "input": "examples/makena.jpg",
+    "mode": "hires-lace",
+    "depth": 2,
+    "dither": "floyd-steinberg",
+    "directory": "hires-lace-d2-floyd-steinberg-makena",
+    "before": {
+      "s2": -59.56,
+      "seconds": 0.12148558301851153
+    },
+    "after": {
+      "s2": -56.55,
+      "seconds": 0.7459304169751704
+    },
+    "gain": 3.010000000000005
+  },
+  {
+    "input": "examples/maui.jpg",
+    "mode": "hires-lace",
+    "depth": 2,
+    "dither": "floyd-steinberg",
+    "directory": "hires-lace-d2-floyd-steinberg-maui",
+    "before": {
+      "s2": -57.31,
+      "seconds": 0.11595266708172858
+    },
+    "after": {
+      "s2": -50.93,
+      "seconds": 0.5583672500215471
+    },
+    "gain": 6.380000000000003
+  },
+  {
+    "input": "examples/ramps.png",
+    "mode": "hires-lace",
+    "depth": 2,
+    "dither": "floyd-steinberg",
+    "directory": "hires-lace-d2-floyd-steinberg-ramps",
+    "before": {
+      "s2": -64.89,
+      "seconds": 0.09219808410853148
+    },
+    "after": {
+      "s2": -64.23,
+      "seconds": 0.9426944588776678
+    },
+    "gain": 0.6599999999999966
+  },
+  {
+    "input": "examples/grungy.png",
+    "mode": "hires-lace",
+    "depth": 3,
+    "dither": "floyd-steinberg",
+    "directory": "hires-lace-d3-floyd-steinberg-grungy",
+    "before": {
+      "s2": 3.96,
+      "seconds": 0.14604162517935038
+    },
+    "after": {
+      "s2": 8.98,
+      "seconds": 0.5262941250111908
+    },
+    "gain": 5.0200000000000005
+  },
+  {
+    "input": "examples/makena.jpg",
+    "mode": "hires-lace",
+    "depth": 3,
+    "dither": "floyd-steinberg",
+    "directory": "hires-lace-d3-floyd-steinberg-makena",
+    "before": {
+      "s2": -15.55,
+      "seconds": 0.14139758283272386
+    },
+    "after": {
+      "s2": -3.43,
+      "seconds": 1.1070973749738187
+    },
+    "gain": 12.120000000000001
+  },
+  {
+    "input": "examples/maui.jpg",
+    "mode": "hires-lace",
+    "depth": 3,
+    "dither": "floyd-steinberg",
+    "directory": "hires-lace-d3-floyd-steinberg-maui",
+    "before": {
+      "s2": -17.19,
+      "seconds": 0.13818204193376005
+    },
+    "after": {
+      "s2": -8.7,
+      "seconds": 0.8674269998446107
+    },
+    "gain": 8.490000000000002
+  },
+  {
+    "input": "examples/ramps.png",
+    "mode": "hires-lace",
+    "depth": 3,
+    "dither": "floyd-steinberg",
+    "directory": "hires-lace-d3-floyd-steinberg-ramps",
+    "before": {
+      "s2": -61.22,
+      "seconds": 0.1149909170344472
+    },
+    "after": {
+      "s2": -56.86,
+      "seconds": 0.9730610840488225
+    },
+    "gain": 4.359999999999999
+  }
+]

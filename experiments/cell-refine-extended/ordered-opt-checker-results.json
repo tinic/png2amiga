@@ -1,0 +1,2578 @@
+[
+  {
+    "mode": "c64-hires",
+    "image": "3macao.jpg",
+    "dither": "opt-checker",
+    "before": {
+      "s2": -30.57,
+      "seconds": 0.375,
+      "png": "c64-hires-3macao-before.png"
+    },
+    "after": {
+      "s2": -30.57,
+      "seconds": 0.578,
+      "png": "c64-hires-3macao-after.png"
+    },
+    "delta": 0.0
+  },
+  {
+    "mode": "c64-hires",
+    "image": "asterix.png",
+    "dither": "opt-checker",
+    "before": {
+      "s2": -32.64,
+      "seconds": 0.063,
+      "png": "c64-hires-asterix-before.png"
+    },
+    "after": {
+      "s2": -31.15,
+      "seconds": 0.617,
+      "png": "c64-hires-asterix-after.png"
+    },
+    "delta": 1.49
+  },
+  {
+    "mode": "c64-hires",
+    "image": "brick.png",
+    "dither": "opt-checker",
+    "before": {
+      "s2": -23.22,
+      "seconds": 0.029,
+      "png": "c64-hires-brick-before.png"
+    },
+    "after": {
+      "s2": -23.22,
+      "seconds": 0.558,
+      "png": "c64-hires-brick-after.png"
+    },
+    "delta": 0.0
+  },
+  {
+    "mode": "c64-hires",
+    "image": "chuck29.png",
+    "dither": "opt-checker",
+    "before": {
+      "s2": -64.22,
+      "seconds": 0.055,
+      "png": "c64-hires-chuck29-before.png"
+    },
+    "after": {
+      "s2": -64.01,
+      "seconds": 0.576,
+      "png": "c64-hires-chuck29-after.png"
+    },
+    "delta": 0.21
+  },
+  {
+    "mode": "c64-hires",
+    "image": "chuck30.png",
+    "dither": "opt-checker",
+    "before": {
+      "s2": -43.32,
+      "seconds": 0.056,
+      "png": "c64-hires-chuck30-before.png"
+    },
+    "after": {
+      "s2": -43.32,
+      "seconds": 0.591,
+      "png": "c64-hires-chuck30-after.png"
+    },
+    "delta": 0.0
+  },
+  {
+    "mode": "c64-hires",
+    "image": "chuck31.png",
+    "dither": "opt-checker",
+    "before": {
+      "s2": -59.44,
+      "seconds": 0.054,
+      "png": "c64-hires-chuck31-before.png"
+    },
+    "after": {
+      "s2": -59.44,
+      "seconds": 0.565,
+      "png": "c64-hires-chuck31-after.png"
+    },
+    "delta": 0.0
+  },
+  {
+    "mode": "c64-hires",
+    "image": "electrichues02.jpg",
+    "dither": "opt-checker",
+    "before": {
+      "s2": -64.23,
+      "seconds": 0.048,
+      "png": "c64-hires-electrichues02-before.png"
+    },
+    "after": {
+      "s2": -64.23,
+      "seconds": 0.58,
+      "png": "c64-hires-electrichues02-after.png"
+    },
+    "delta": 0.0
+  },
+  {
+    "mode": "c64-hires",
+    "image": "fantasy.png",
+    "dither": "opt-checker",
+    "before": {
+      "s2": -43.23,
+      "seconds": 0.06,
+      "png": "c64-hires-fantasy-before.png"
+    },
+    "after": {
+      "s2": -43.23,
+      "seconds": 0.602,
+      "png": "c64-hires-fantasy-after.png"
+    },
+    "delta": 0.0
+  },
+  {
+    "mode": "c64-hires",
+    "image": "fantasy1.png",
+    "dither": "opt-checker",
+    "before": {
+      "s2": -46.89,
+      "seconds": 0.061,
+      "png": "c64-hires-fantasy1-before.png"
+    },
+    "after": {
+      "s2": -46.89,
+      "seconds": 0.608,
+      "png": "c64-hires-fantasy1-after.png"
+    },
+    "delta": 0.0
+  },
+  {
+    "mode": "c64-hires",
+    "image": "fantasy2.png",
+    "dither": "opt-checker",
+    "before": {
+      "s2": -42.96,
+      "seconds": 0.06,
+      "png": "c64-hires-fantasy2-before.png"
+    },
+    "after": {
+      "s2": -42.96,
+      "seconds": 0.614,
+      "png": "c64-hires-fantasy2-after.png"
+    },
+    "delta": 0.0
+  },
+  {
+    "mode": "c64-hires",
+    "image": "fromthe.png",
+    "dither": "opt-checker",
+    "before": {
+      "s2": -51.82,
+      "seconds": 0.06,
+      "png": "c64-hires-fromthe-before.png"
+    },
+    "after": {
+      "s2": -51.82,
+      "seconds": 0.609,
+      "png": "c64-hires-fromthe-after.png"
+    },
+    "delta": 0.0
+  },
+  {
+    "mode": "c64-hires",
+    "image": "grungy.png",
+    "dither": "opt-checker",
+    "before": {
+      "s2": -60.93,
+      "seconds": 0.043,
+      "png": "c64-hires-grungy-before.png"
+    },
+    "after": {
+      "s2": -60.93,
+      "seconds": 0.56,
+      "png": "c64-hires-grungy-after.png"
+    },
+    "delta": 0.0
+  },
+  {
+    "mode": "c64-hires",
+    "image": "jungle.webp",
+    "dither": "opt-checker",
+    "before": {
+      "s2": -49.86,
+      "seconds": 0.037,
+      "png": "c64-hires-jungle-before.png"
+    },
+    "after": {
+      "s2": -49.86,
+      "seconds": 0.599,
+      "png": "c64-hires-jungle-after.png"
+    },
+    "delta": 0.0
+  },
+  {
+    "mode": "c64-hires",
+    "image": "logo.png",
+    "dither": "opt-checker",
+    "before": {
+      "s2": -24.23,
+      "seconds": 0.037,
+      "png": "c64-hires-logo-before.png"
+    },
+    "after": {
+      "s2": -24.23,
+      "seconds": 0.533,
+      "png": "c64-hires-logo-after.png"
+    },
+    "delta": 0.0
+  },
+  {
+    "mode": "c64-hires",
+    "image": "lovers.jpg",
+    "dither": "opt-checker",
+    "before": {
+      "s2": -53.59,
+      "seconds": 0.039,
+      "png": "c64-hires-lovers-before.png"
+    },
+    "after": {
+      "s2": -53.59,
+      "seconds": 0.581,
+      "png": "c64-hires-lovers-after.png"
+    },
+    "delta": 0.0
+  },
+  {
+    "mode": "c64-hires",
+    "image": "macaw.jpg",
+    "dither": "opt-checker",
+    "before": {
+      "s2": -40.47,
+      "seconds": 0.033,
+      "png": "c64-hires-macaw-before.png"
+    },
+    "after": {
+      "s2": -40.47,
+      "seconds": 0.565,
+      "png": "c64-hires-macaw-after.png"
+    },
+    "delta": 0.0
+  },
+  {
+    "mode": "c64-hires",
+    "image": "makena.jpg",
+    "dither": "opt-checker",
+    "before": {
+      "s2": -33.9,
+      "seconds": 0.052,
+      "png": "c64-hires-makena-before.png"
+    },
+    "after": {
+      "s2": -33.9,
+      "seconds": 0.577,
+      "png": "c64-hires-makena-after.png"
+    },
+    "delta": 0.0
+  },
+  {
+    "mode": "c64-hires",
+    "image": "maui.jpg",
+    "dither": "opt-checker",
+    "before": {
+      "s2": -40.97,
+      "seconds": 0.046,
+      "png": "c64-hires-maui-before.png"
+    },
+    "after": {
+      "s2": -40.97,
+      "seconds": 0.577,
+      "png": "c64-hires-maui-after.png"
+    },
+    "delta": 0.0
+  },
+  {
+    "mode": "c64-hires",
+    "image": "ocs_4096.png",
+    "dither": "opt-checker",
+    "before": {
+      "s2": -23.0,
+      "seconds": 0.022,
+      "png": "c64-hires-ocs_4096-before.png"
+    },
+    "after": {
+      "s2": -23.0,
+      "seconds": 0.501,
+      "png": "c64-hires-ocs_4096-after.png"
+    },
+    "delta": 0.0
+  },
+  {
+    "mode": "c64-hires",
+    "image": "photo.jpg",
+    "dither": "opt-checker",
+    "before": {
+      "s2": -59.47,
+      "seconds": 0.026,
+      "png": "c64-hires-photo-before.png"
+    },
+    "after": {
+      "s2": -59.47,
+      "seconds": 0.528,
+      "png": "c64-hires-photo-after.png"
+    },
+    "delta": 0.0
+  },
+  {
+    "mode": "c64-hires",
+    "image": "ramps.png",
+    "dither": "opt-checker",
+    "before": {
+      "s2": -60.34,
+      "seconds": 0.022,
+      "png": "c64-hires-ramps-before.png"
+    },
+    "after": {
+      "s2": -60.34,
+      "seconds": 0.516,
+      "png": "c64-hires-ramps-after.png"
+    },
+    "delta": 0.0
+  },
+  {
+    "mode": "c64-hires",
+    "image": "shooter.png",
+    "dither": "opt-checker",
+    "before": {
+      "s2": -62.98,
+      "seconds": 0.056,
+      "png": "c64-hires-shooter-before.png"
+    },
+    "after": {
+      "s2": -62.98,
+      "seconds": 0.58,
+      "png": "c64-hires-shooter-after.png"
+    },
+    "delta": 0.0
+  },
+  {
+    "mode": "c64-hires",
+    "image": "space3.png",
+    "dither": "opt-checker",
+    "before": {
+      "s2": -64.2,
+      "seconds": 0.025,
+      "png": "c64-hires-space3-before.png"
+    },
+    "after": {
+      "s2": -64.2,
+      "seconds": 0.557,
+      "png": "c64-hires-space3-after.png"
+    },
+    "delta": 0.0
+  },
+  {
+    "mode": "c64-multicolor",
+    "image": "3macao.jpg",
+    "dither": "opt-checker",
+    "before": {
+      "s2": 1.94,
+      "seconds": 0.027,
+      "png": "c64-multicolor-3macao-before.png"
+    },
+    "after": {
+      "s2": 13.51,
+      "seconds": 0.846,
+      "png": "c64-multicolor-3macao-after.png"
+    },
+    "delta": 11.57
+  },
+  {
+    "mode": "c64-multicolor",
+    "image": "asterix.png",
+    "dither": "opt-checker",
+    "before": {
+      "s2": -1.17,
+      "seconds": 0.057,
+      "png": "c64-multicolor-asterix-before.png"
+    },
+    "after": {
+      "s2": 22.29,
+      "seconds": 0.742,
+      "png": "c64-multicolor-asterix-after.png"
+    },
+    "delta": 23.46
+  },
+  {
+    "mode": "c64-multicolor",
+    "image": "brick.png",
+    "dither": "opt-checker",
+    "before": {
+      "s2": -7.95,
+      "seconds": 0.023,
+      "png": "c64-multicolor-brick-before.png"
+    },
+    "after": {
+      "s2": -4.88,
+      "seconds": 0.659,
+      "png": "c64-multicolor-brick-after.png"
+    },
+    "delta": 3.07
+  },
+  {
+    "mode": "c64-multicolor",
+    "image": "chuck29.png",
+    "dither": "opt-checker",
+    "before": {
+      "s2": -63.84,
+      "seconds": 0.049,
+      "png": "c64-multicolor-chuck29-before.png"
+    },
+    "after": {
+      "s2": -63.68,
+      "seconds": 0.68,
+      "png": "c64-multicolor-chuck29-after.png"
+    },
+    "delta": 0.16
+  },
+  {
+    "mode": "c64-multicolor",
+    "image": "chuck30.png",
+    "dither": "opt-checker",
+    "before": {
+      "s2": -33.29,
+      "seconds": 0.051,
+      "png": "c64-multicolor-chuck30-before.png"
+    },
+    "after": {
+      "s2": -31.0,
+      "seconds": 0.707,
+      "png": "c64-multicolor-chuck30-after.png"
+    },
+    "delta": 2.29
+  },
+  {
+    "mode": "c64-multicolor",
+    "image": "chuck31.png",
+    "dither": "opt-checker",
+    "before": {
+      "s2": -55.59,
+      "seconds": 0.05,
+      "png": "c64-multicolor-chuck31-before.png"
+    },
+    "after": {
+      "s2": -55.59,
+      "seconds": 0.658,
+      "png": "c64-multicolor-chuck31-after.png"
+    },
+    "delta": 0.0
+  },
+  {
+    "mode": "c64-multicolor",
+    "image": "electrichues02.jpg",
+    "dither": "opt-checker",
+    "before": {
+      "s2": -63.41,
+      "seconds": 0.042,
+      "png": "c64-multicolor-electrichues02-before.png"
+    },
+    "after": {
+      "s2": -62.65,
+      "seconds": 0.732,
+      "png": "c64-multicolor-electrichues02-after.png"
+    },
+    "delta": 0.76
+  },
+  {
+    "mode": "c64-multicolor",
+    "image": "fantasy.png",
+    "dither": "opt-checker",
+    "before": {
+      "s2": -10.09,
+      "seconds": 0.063,
+      "png": "c64-multicolor-fantasy-before.png"
+    },
+    "after": {
+      "s2": 3.83,
+      "seconds": 0.865,
+      "png": "c64-multicolor-fantasy-after.png"
+    },
+    "delta": 13.92
+  },
+  {
+    "mode": "c64-multicolor",
+    "image": "fantasy1.png",
+    "dither": "opt-checker",
+    "before": {
+      "s2": -19.15,
+      "seconds": 0.057,
+      "png": "c64-multicolor-fantasy1-before.png"
+    },
+    "after": {
+      "s2": -10.26,
+      "seconds": 0.716,
+      "png": "c64-multicolor-fantasy1-after.png"
+    },
+    "delta": 8.89
+  },
+  {
+    "mode": "c64-multicolor",
+    "image": "fantasy2.png",
+    "dither": "opt-checker",
+    "before": {
+      "s2": -16.42,
+      "seconds": 0.057,
+      "png": "c64-multicolor-fantasy2-before.png"
+    },
+    "after": {
+      "s2": -0.13,
+      "seconds": 0.72,
+      "png": "c64-multicolor-fantasy2-after.png"
+    },
+    "delta": 16.29
+  },
+  {
+    "mode": "c64-multicolor",
+    "image": "fromthe.png",
+    "dither": "opt-checker",
+    "before": {
+      "s2": -17.96,
+      "seconds": 0.055,
+      "png": "c64-multicolor-fromthe-before.png"
+    },
+    "after": {
+      "s2": -8.95,
+      "seconds": 0.705,
+      "png": "c64-multicolor-fromthe-after.png"
+    },
+    "delta": 9.01
+  },
+  {
+    "mode": "c64-multicolor",
+    "image": "grungy.png",
+    "dither": "opt-checker",
+    "before": {
+      "s2": -33.42,
+      "seconds": 0.037,
+      "png": "c64-multicolor-grungy-before.png"
+    },
+    "after": {
+      "s2": -33.42,
+      "seconds": 0.625,
+      "png": "c64-multicolor-grungy-after.png"
+    },
+    "delta": 0.0
+  },
+  {
+    "mode": "c64-multicolor",
+    "image": "jungle.webp",
+    "dither": "opt-checker",
+    "before": {
+      "s2": -8.91,
+      "seconds": 0.03,
+      "png": "c64-multicolor-jungle-before.png"
+    },
+    "after": {
+      "s2": -8.91,
+      "seconds": 0.67,
+      "png": "c64-multicolor-jungle-after.png"
+    },
+    "delta": 0.0
+  },
+  {
+    "mode": "c64-multicolor",
+    "image": "logo.png",
+    "dither": "opt-checker",
+    "before": {
+      "s2": 7.6,
+      "seconds": 0.032,
+      "png": "c64-multicolor-logo-before.png"
+    },
+    "after": {
+      "s2": 7.6,
+      "seconds": 0.599,
+      "png": "c64-multicolor-logo-after.png"
+    },
+    "delta": 0.0
+  },
+  {
+    "mode": "c64-multicolor",
+    "image": "lovers.jpg",
+    "dither": "opt-checker",
+    "before": {
+      "s2": -17.09,
+      "seconds": 0.045,
+      "png": "c64-multicolor-lovers-before.png"
+    },
+    "after": {
+      "s2": -17.09,
+      "seconds": 0.689,
+      "png": "c64-multicolor-lovers-after.png"
+    },
+    "delta": 0.0
+  },
+  {
+    "mode": "c64-multicolor",
+    "image": "macaw.jpg",
+    "dither": "opt-checker",
+    "before": {
+      "s2": -14.64,
+      "seconds": 0.027,
+      "png": "c64-multicolor-macaw-before.png"
+    },
+    "after": {
+      "s2": -14.64,
+      "seconds": 0.645,
+      "png": "c64-multicolor-macaw-after.png"
+    },
+    "delta": 0.0
+  },
+  {
+    "mode": "c64-multicolor",
+    "image": "makena.jpg",
+    "dither": "opt-checker",
+    "before": {
+      "s2": -8.05,
+      "seconds": 0.046,
+      "png": "c64-multicolor-makena-before.png"
+    },
+    "after": {
+      "s2": -8.05,
+      "seconds": 0.655,
+      "png": "c64-multicolor-makena-after.png"
+    },
+    "delta": 0.0
+  },
+  {
+    "mode": "c64-multicolor",
+    "image": "maui.jpg",
+    "dither": "opt-checker",
+    "before": {
+      "s2": -7.9,
+      "seconds": 0.04,
+      "png": "c64-multicolor-maui-before.png"
+    },
+    "after": {
+      "s2": -6.61,
+      "seconds": 0.667,
+      "png": "c64-multicolor-maui-after.png"
+    },
+    "delta": 1.29
+  },
+  {
+    "mode": "c64-multicolor",
+    "image": "ocs_4096.png",
+    "dither": "opt-checker",
+    "before": {
+      "s2": -1.28,
+      "seconds": 0.017,
+      "png": "c64-multicolor-ocs_4096-before.png"
+    },
+    "after": {
+      "s2": -1.28,
+      "seconds": 0.698,
+      "png": "c64-multicolor-ocs_4096-after.png"
+    },
+    "delta": 0.0
+  },
+  {
+    "mode": "c64-multicolor",
+    "image": "photo.jpg",
+    "dither": "opt-checker",
+    "before": {
+      "s2": -36.38,
+      "seconds": 0.02,
+      "png": "c64-multicolor-photo-before.png"
+    },
+    "after": {
+      "s2": -36.38,
+      "seconds": 0.711,
+      "png": "c64-multicolor-photo-after.png"
+    },
+    "delta": 0.0
+  },
+  {
+    "mode": "c64-multicolor",
+    "image": "ramps.png",
+    "dither": "opt-checker",
+    "before": {
+      "s2": -38.7,
+      "seconds": 0.017,
+      "png": "c64-multicolor-ramps-before.png"
+    },
+    "after": {
+      "s2": -38.7,
+      "seconds": 0.581,
+      "png": "c64-multicolor-ramps-after.png"
+    },
+    "delta": 0.0
+  },
+  {
+    "mode": "c64-multicolor",
+    "image": "shooter.png",
+    "dither": "opt-checker",
+    "before": {
+      "s2": -49.67,
+      "seconds": 0.05,
+      "png": "c64-multicolor-shooter-before.png"
+    },
+    "after": {
+      "s2": -46.77,
+      "seconds": 0.654,
+      "png": "c64-multicolor-shooter-after.png"
+    },
+    "delta": 2.9
+  },
+  {
+    "mode": "c64-multicolor",
+    "image": "space3.png",
+    "dither": "opt-checker",
+    "before": {
+      "s2": -60.67,
+      "seconds": 0.019,
+      "png": "c64-multicolor-space3-before.png"
+    },
+    "after": {
+      "s2": -58.15,
+      "seconds": 0.627,
+      "png": "c64-multicolor-space3-after.png"
+    },
+    "delta": 2.52
+  },
+  {
+    "mode": "c64-fli",
+    "image": "3macao.jpg",
+    "dither": "opt-checker",
+    "before": {
+      "s2": 3.96,
+      "seconds": 0.028,
+      "png": "c64-fli-3macao-before.png"
+    },
+    "after": {
+      "s2": 7.81,
+      "seconds": 0.693,
+      "png": "c64-fli-3macao-after.png"
+    },
+    "delta": 3.85
+  },
+  {
+    "mode": "c64-fli",
+    "image": "asterix.png",
+    "dither": "opt-checker",
+    "before": {
+      "s2": -17.24,
+      "seconds": 0.057,
+      "png": "c64-fli-asterix-before.png"
+    },
+    "after": {
+      "s2": -14.18,
+      "seconds": 0.747,
+      "png": "c64-fli-asterix-after.png"
+    },
+    "delta": 3.06
+  },
+  {
+    "mode": "c64-fli",
+    "image": "brick.png",
+    "dither": "opt-checker",
+    "before": {
+      "s2": -45.73,
+      "seconds": 0.022,
+      "png": "c64-fli-brick-before.png"
+    },
+    "after": {
+      "s2": -43.94,
+      "seconds": 0.679,
+      "png": "c64-fli-brick-after.png"
+    },
+    "delta": 1.79
+  },
+  {
+    "mode": "c64-fli",
+    "image": "chuck29.png",
+    "dither": "opt-checker",
+    "before": {
+      "s2": -77.85,
+      "seconds": 0.048,
+      "png": "c64-fli-chuck29-before.png"
+    },
+    "after": {
+      "s2": -71.44,
+      "seconds": 0.68,
+      "png": "c64-fli-chuck29-after.png"
+    },
+    "delta": 6.41
+  },
+  {
+    "mode": "c64-fli",
+    "image": "chuck30.png",
+    "dither": "opt-checker",
+    "before": {
+      "s2": -63.74,
+      "seconds": 0.05,
+      "png": "c64-fli-chuck30-before.png"
+    },
+    "after": {
+      "s2": -63.51,
+      "seconds": 0.709,
+      "png": "c64-fli-chuck30-after.png"
+    },
+    "delta": 0.23
+  },
+  {
+    "mode": "c64-fli",
+    "image": "chuck31.png",
+    "dither": "opt-checker",
+    "before": {
+      "s2": -64.29,
+      "seconds": 0.049,
+      "png": "c64-fli-chuck31-before.png"
+    },
+    "after": {
+      "s2": -64.23,
+      "seconds": 0.66,
+      "png": "c64-fli-chuck31-after.png"
+    },
+    "delta": 0.06
+  },
+  {
+    "mode": "c64-fli",
+    "image": "electrichues02.jpg",
+    "dither": "opt-checker",
+    "before": {
+      "s2": -76.89,
+      "seconds": 0.042,
+      "png": "c64-fli-electrichues02-before.png"
+    },
+    "after": {
+      "s2": -74.44,
+      "seconds": 0.676,
+      "png": "c64-fli-electrichues02-after.png"
+    },
+    "delta": 2.45
+  },
+  {
+    "mode": "c64-fli",
+    "image": "fantasy.png",
+    "dither": "opt-checker",
+    "before": {
+      "s2": -57.5,
+      "seconds": 0.052,
+      "png": "c64-fli-fantasy-before.png"
+    },
+    "after": {
+      "s2": -55.6,
+      "seconds": 0.717,
+      "png": "c64-fli-fantasy-after.png"
+    },
+    "delta": 1.9
+  },
+  {
+    "mode": "c64-fli",
+    "image": "fantasy1.png",
+    "dither": "opt-checker",
+    "before": {
+      "s2": -57.05,
+      "seconds": 0.053,
+      "png": "c64-fli-fantasy1-before.png"
+    },
+    "after": {
+      "s2": -55.25,
+      "seconds": 0.744,
+      "png": "c64-fli-fantasy1-after.png"
+    },
+    "delta": 1.8
+  },
+  {
+    "mode": "c64-fli",
+    "image": "fantasy2.png",
+    "dither": "opt-checker",
+    "before": {
+      "s2": -54.13,
+      "seconds": 0.054,
+      "png": "c64-fli-fantasy2-before.png"
+    },
+    "after": {
+      "s2": -52.77,
+      "seconds": 0.749,
+      "png": "c64-fli-fantasy2-after.png"
+    },
+    "delta": 1.36
+  },
+  {
+    "mode": "c64-fli",
+    "image": "fromthe.png",
+    "dither": "opt-checker",
+    "before": {
+      "s2": -64.08,
+      "seconds": 0.054,
+      "png": "c64-fli-fromthe-before.png"
+    },
+    "after": {
+      "s2": -63.83,
+      "seconds": 0.756,
+      "png": "c64-fli-fromthe-after.png"
+    },
+    "delta": 0.25
+  },
+  {
+    "mode": "c64-fli",
+    "image": "grungy.png",
+    "dither": "opt-checker",
+    "before": {
+      "s2": -65.19,
+      "seconds": 0.037,
+      "png": "c64-fli-grungy-before.png"
+    },
+    "after": {
+      "s2": -64.87,
+      "seconds": 0.664,
+      "png": "c64-fli-grungy-after.png"
+    },
+    "delta": 0.32
+  },
+  {
+    "mode": "c64-fli",
+    "image": "jungle.webp",
+    "dither": "opt-checker",
+    "before": {
+      "s2": -63.59,
+      "seconds": 0.031,
+      "png": "c64-fli-jungle-before.png"
+    },
+    "after": {
+      "s2": -63.35,
+      "seconds": 0.692,
+      "png": "c64-fli-jungle-after.png"
+    },
+    "delta": 0.24
+  },
+  {
+    "mode": "c64-fli",
+    "image": "logo.png",
+    "dither": "opt-checker",
+    "before": {
+      "s2": -63.84,
+      "seconds": 0.034,
+      "png": "c64-fli-logo-before.png"
+    },
+    "after": {
+      "s2": -63.83,
+      "seconds": 0.623,
+      "png": "c64-fli-logo-after.png"
+    },
+    "delta": 0.01
+  },
+  {
+    "mode": "c64-fli",
+    "image": "lovers.jpg",
+    "dither": "opt-checker",
+    "before": {
+      "s2": -64.2,
+      "seconds": 0.034,
+      "png": "c64-fli-lovers-before.png"
+    },
+    "after": {
+      "s2": -64.17,
+      "seconds": 0.693,
+      "png": "c64-fli-lovers-after.png"
+    },
+    "delta": 0.03
+  },
+  {
+    "mode": "c64-fli",
+    "image": "macaw.jpg",
+    "dither": "opt-checker",
+    "before": {
+      "s2": -60.3,
+      "seconds": 0.026,
+      "png": "c64-fli-macaw-before.png"
+    },
+    "after": {
+      "s2": -60.03,
+      "seconds": 0.661,
+      "png": "c64-fli-macaw-after.png"
+    },
+    "delta": 0.27
+  },
+  {
+    "mode": "c64-fli",
+    "image": "makena.jpg",
+    "dither": "opt-checker",
+    "before": {
+      "s2": -40.44,
+      "seconds": 0.046,
+      "png": "c64-fli-makena-before.png"
+    },
+    "after": {
+      "s2": -34.9,
+      "seconds": 0.678,
+      "png": "c64-fli-makena-after.png"
+    },
+    "delta": 5.54
+  },
+  {
+    "mode": "c64-fli",
+    "image": "maui.jpg",
+    "dither": "opt-checker",
+    "before": {
+      "s2": -58.16,
+      "seconds": 0.04,
+      "png": "c64-fli-maui-before.png"
+    },
+    "after": {
+      "s2": -56.17,
+      "seconds": 0.685,
+      "png": "c64-fli-maui-after.png"
+    },
+    "delta": 1.99
+  },
+  {
+    "mode": "c64-fli",
+    "image": "ocs_4096.png",
+    "dither": "opt-checker",
+    "before": {
+      "s2": -64.21,
+      "seconds": 0.017,
+      "png": "c64-fli-ocs_4096-before.png"
+    },
+    "after": {
+      "s2": -64.21,
+      "seconds": 0.6,
+      "png": "c64-fli-ocs_4096-after.png"
+    },
+    "delta": 0.0
+  },
+  {
+    "mode": "c64-fli",
+    "image": "photo.jpg",
+    "dither": "opt-checker",
+    "before": {
+      "s2": -38.33,
+      "seconds": 0.02,
+      "png": "c64-fli-photo-before.png"
+    },
+    "after": {
+      "s2": -36.89,
+      "seconds": 0.617,
+      "png": "c64-fli-photo-after.png"
+    },
+    "delta": 1.44
+  },
+  {
+    "mode": "c64-fli",
+    "image": "ramps.png",
+    "dither": "opt-checker",
+    "before": {
+      "s2": -64.23,
+      "seconds": 0.017,
+      "png": "c64-fli-ramps-before.png"
+    },
+    "after": {
+      "s2": -64.23,
+      "seconds": 0.603,
+      "png": "c64-fli-ramps-after.png"
+    },
+    "delta": 0.0
+  },
+  {
+    "mode": "c64-fli",
+    "image": "shooter.png",
+    "dither": "opt-checker",
+    "before": {
+      "s2": -64.23,
+      "seconds": 0.051,
+      "png": "c64-fli-shooter-before.png"
+    },
+    "after": {
+      "s2": -64.2,
+      "seconds": 0.689,
+      "png": "c64-fli-shooter-after.png"
+    },
+    "delta": 0.03
+  },
+  {
+    "mode": "c64-fli",
+    "image": "space3.png",
+    "dither": "opt-checker",
+    "before": {
+      "s2": -68.76,
+      "seconds": 0.02,
+      "png": "c64-fli-space3-before.png"
+    },
+    "after": {
+      "s2": -67.03,
+      "seconds": 0.668,
+      "png": "c64-fli-space3-after.png"
+    },
+    "delta": 1.73
+  },
+  {
+    "mode": "c64-afli",
+    "image": "3macao.jpg",
+    "dither": "opt-checker",
+    "before": {
+      "s2": -29.11,
+      "seconds": 0.043,
+      "png": "c64-afli-3macao-before.png"
+    },
+    "after": {
+      "s2": -20.43,
+      "seconds": 0.64,
+      "png": "c64-afli-3macao-after.png"
+    },
+    "delta": 8.68
+  },
+  {
+    "mode": "c64-afli",
+    "image": "asterix.png",
+    "dither": "opt-checker",
+    "before": {
+      "s2": -43.56,
+      "seconds": 0.073,
+      "png": "c64-afli-asterix-before.png"
+    },
+    "after": {
+      "s2": -38.85,
+      "seconds": 0.675,
+      "png": "c64-afli-asterix-after.png"
+    },
+    "delta": 4.71
+  },
+  {
+    "mode": "c64-afli",
+    "image": "brick.png",
+    "dither": "opt-checker",
+    "before": {
+      "s2": -55.07,
+      "seconds": 0.039,
+      "png": "c64-afli-brick-before.png"
+    },
+    "after": {
+      "s2": -52.29,
+      "seconds": 0.624,
+      "png": "c64-afli-brick-after.png"
+    },
+    "delta": 2.78
+  },
+  {
+    "mode": "c64-afli",
+    "image": "chuck29.png",
+    "dither": "opt-checker",
+    "before": {
+      "s2": -75.45,
+      "seconds": 0.064,
+      "png": "c64-afli-chuck29-before.png"
+    },
+    "after": {
+      "s2": -64.35,
+      "seconds": 0.641,
+      "png": "c64-afli-chuck29-after.png"
+    },
+    "delta": 11.1
+  },
+  {
+    "mode": "c64-afli",
+    "image": "chuck30.png",
+    "dither": "opt-checker",
+    "before": {
+      "s2": -64.04,
+      "seconds": 0.067,
+      "png": "c64-afli-chuck30-before.png"
+    },
+    "after": {
+      "s2": -62.82,
+      "seconds": 0.648,
+      "png": "c64-afli-chuck30-after.png"
+    },
+    "delta": 1.22
+  },
+  {
+    "mode": "c64-afli",
+    "image": "chuck31.png",
+    "dither": "opt-checker",
+    "before": {
+      "s2": -64.34,
+      "seconds": 0.064,
+      "png": "c64-afli-chuck31-before.png"
+    },
+    "after": {
+      "s2": -63.68,
+      "seconds": 0.626,
+      "png": "c64-afli-chuck31-after.png"
+    },
+    "delta": 0.66
+  },
+  {
+    "mode": "c64-afli",
+    "image": "electrichues02.jpg",
+    "dither": "opt-checker",
+    "before": {
+      "s2": -80.11,
+      "seconds": 0.057,
+      "png": "c64-afli-electrichues02-before.png"
+    },
+    "after": {
+      "s2": -66.27,
+      "seconds": 0.644,
+      "png": "c64-afli-electrichues02-after.png"
+    },
+    "delta": 13.84
+  },
+  {
+    "mode": "c64-afli",
+    "image": "fantasy.png",
+    "dither": "opt-checker",
+    "before": {
+      "s2": -62.64,
+      "seconds": 0.069,
+      "png": "c64-afli-fantasy-before.png"
+    },
+    "after": {
+      "s2": -59.64,
+      "seconds": 0.668,
+      "png": "c64-afli-fantasy-after.png"
+    },
+    "delta": 3.0
+  },
+  {
+    "mode": "c64-afli",
+    "image": "fantasy1.png",
+    "dither": "opt-checker",
+    "before": {
+      "s2": -63.01,
+      "seconds": 0.072,
+      "png": "c64-afli-fantasy1-before.png"
+    },
+    "after": {
+      "s2": -60.33,
+      "seconds": 0.676,
+      "png": "c64-afli-fantasy1-after.png"
+    },
+    "delta": 2.68
+  },
+  {
+    "mode": "c64-afli",
+    "image": "fantasy2.png",
+    "dither": "opt-checker",
+    "before": {
+      "s2": -61.2,
+      "seconds": 0.091,
+      "png": "c64-afli-fantasy2-before.png"
+    },
+    "after": {
+      "s2": -58.66,
+      "seconds": 1.415,
+      "png": "c64-afli-fantasy2-after.png"
+    },
+    "delta": 2.54
+  },
+  {
+    "mode": "c64-afli",
+    "image": "fromthe.png",
+    "dither": "opt-checker",
+    "before": {
+      "s2": -64.23,
+      "seconds": 0.091,
+      "png": "c64-afli-fromthe-before.png"
+    },
+    "after": {
+      "s2": -63.95,
+      "seconds": 1.629,
+      "png": "c64-afli-fromthe-after.png"
+    },
+    "delta": 0.28
+  },
+  {
+    "mode": "c64-afli",
+    "image": "grungy.png",
+    "dither": "opt-checker",
+    "before": {
+      "s2": -65.57,
+      "seconds": 0.059,
+      "png": "c64-afli-grungy-before.png"
+    },
+    "after": {
+      "s2": -64.28,
+      "seconds": 1.418,
+      "png": "c64-afli-grungy-after.png"
+    },
+    "delta": 1.29
+  },
+  {
+    "mode": "c64-afli",
+    "image": "jungle.webp",
+    "dither": "opt-checker",
+    "before": {
+      "s2": -64.17,
+      "seconds": 0.053,
+      "png": "c64-afli-jungle-before.png"
+    },
+    "after": {
+      "s2": -64.16,
+      "seconds": 2.289,
+      "png": "c64-afli-jungle-after.png"
+    },
+    "delta": 0.01
+  },
+  {
+    "mode": "c64-afli",
+    "image": "logo.png",
+    "dither": "opt-checker",
+    "before": {
+      "s2": -64.03,
+      "seconds": 0.052,
+      "png": "c64-afli-logo-before.png"
+    },
+    "after": {
+      "s2": -63.77,
+      "seconds": 1.992,
+      "png": "c64-afli-logo-after.png"
+    },
+    "delta": 0.26
+  },
+  {
+    "mode": "c64-afli",
+    "image": "lovers.jpg",
+    "dither": "opt-checker",
+    "before": {
+      "s2": -64.23,
+      "seconds": 0.057,
+      "png": "c64-afli-lovers-before.png"
+    },
+    "after": {
+      "s2": -64.21,
+      "seconds": 1.481,
+      "png": "c64-afli-lovers-after.png"
+    },
+    "delta": 0.02
+  },
+  {
+    "mode": "c64-afli",
+    "image": "macaw.jpg",
+    "dither": "opt-checker",
+    "before": {
+      "s2": -63.41,
+      "seconds": 0.058,
+      "png": "c64-afli-macaw-before.png"
+    },
+    "after": {
+      "s2": -63.27,
+      "seconds": 1.748,
+      "png": "c64-afli-macaw-after.png"
+    },
+    "delta": 0.14
+  },
+  {
+    "mode": "c64-afli",
+    "image": "makena.jpg",
+    "dither": "opt-checker",
+    "before": {
+      "s2": -50.72,
+      "seconds": 0.081,
+      "png": "c64-afli-makena-before.png"
+    },
+    "after": {
+      "s2": -45.04,
+      "seconds": 1.708,
+      "png": "c64-afli-makena-after.png"
+    },
+    "delta": 5.68
+  },
+  {
+    "mode": "c64-afli",
+    "image": "maui.jpg",
+    "dither": "opt-checker",
+    "before": {
+      "s2": -61.87,
+      "seconds": 0.067,
+      "png": "c64-afli-maui-before.png"
+    },
+    "after": {
+      "s2": -60.04,
+      "seconds": 1.295,
+      "png": "c64-afli-maui-after.png"
+    },
+    "delta": 1.83
+  },
+  {
+    "mode": "c64-afli",
+    "image": "ocs_4096.png",
+    "dither": "opt-checker",
+    "before": {
+      "s2": -64.2,
+      "seconds": 0.142,
+      "png": "c64-afli-ocs_4096-before.png"
+    },
+    "after": {
+      "s2": -64.2,
+      "seconds": 1.358,
+      "png": "c64-afli-ocs_4096-after.png"
+    },
+    "delta": 0.0
+  },
+  {
+    "mode": "c64-afli",
+    "image": "photo.jpg",
+    "dither": "opt-checker",
+    "before": {
+      "s2": -56.36,
+      "seconds": 0.048,
+      "png": "c64-afli-photo-before.png"
+    },
+    "after": {
+      "s2": -52.05,
+      "seconds": 1.684,
+      "png": "c64-afli-photo-after.png"
+    },
+    "delta": 4.31
+  },
+  {
+    "mode": "c64-afli",
+    "image": "ramps.png",
+    "dither": "opt-checker",
+    "before": {
+      "s2": -67.48,
+      "seconds": 0.05,
+      "png": "c64-afli-ramps-before.png"
+    },
+    "after": {
+      "s2": -65.96,
+      "seconds": 0.948,
+      "png": "c64-afli-ramps-after.png"
+    },
+    "delta": 1.52
+  },
+  {
+    "mode": "c64-afli",
+    "image": "shooter.png",
+    "dither": "opt-checker",
+    "before": {
+      "s2": -64.55,
+      "seconds": 0.108,
+      "png": "c64-afli-shooter-before.png"
+    },
+    "after": {
+      "s2": -64.22,
+      "seconds": 1.157,
+      "png": "c64-afli-shooter-after.png"
+    },
+    "delta": 0.33
+  },
+  {
+    "mode": "c64-afli",
+    "image": "space3.png",
+    "dither": "opt-checker",
+    "before": {
+      "s2": -71.48,
+      "seconds": 0.046,
+      "png": "c64-afli-space3-before.png"
+    },
+    "after": {
+      "s2": -65.11,
+      "seconds": 0.968,
+      "png": "c64-afli-space3-after.png"
+    },
+    "delta": 6.37
+  },
+  {
+    "mode": "c64-petscii",
+    "image": "3macao.jpg",
+    "dither": "opt-checker",
+    "before": {
+      "s2": -53.87,
+      "seconds": 0.158,
+      "png": "c64-petscii-3macao-before.png"
+    },
+    "after": {
+      "s2": -53.87,
+      "seconds": 3.084,
+      "png": "c64-petscii-3macao-after.png"
+    },
+    "delta": 0.0
+  },
+  {
+    "mode": "c64-petscii",
+    "image": "asterix.png",
+    "dither": "opt-checker",
+    "before": {
+      "s2": -58.82,
+      "seconds": 0.137,
+      "png": "c64-petscii-asterix-before.png"
+    },
+    "after": {
+      "s2": -57.85,
+      "seconds": 2.739,
+      "png": "c64-petscii-asterix-after.png"
+    },
+    "delta": 0.97
+  },
+  {
+    "mode": "c64-petscii",
+    "image": "brick.png",
+    "dither": "opt-checker",
+    "before": {
+      "s2": -42.56,
+      "seconds": 0.096,
+      "png": "c64-petscii-brick-before.png"
+    },
+    "after": {
+      "s2": -42.56,
+      "seconds": 2.698,
+      "png": "c64-petscii-brick-after.png"
+    },
+    "delta": 0.0
+  },
+  {
+    "mode": "c64-petscii",
+    "image": "chuck29.png",
+    "dither": "opt-checker",
+    "before": {
+      "s2": -64.22,
+      "seconds": 0.123,
+      "png": "c64-petscii-chuck29-before.png"
+    },
+    "after": {
+      "s2": -64.22,
+      "seconds": 3.065,
+      "png": "c64-petscii-chuck29-after.png"
+    },
+    "delta": 0.0
+  },
+  {
+    "mode": "c64-petscii",
+    "image": "chuck30.png",
+    "dither": "opt-checker",
+    "before": {
+      "s2": -59.65,
+      "seconds": 0.118,
+      "png": "c64-petscii-chuck30-before.png"
+    },
+    "after": {
+      "s2": -55.57,
+      "seconds": 2.424,
+      "png": "c64-petscii-chuck30-after.png"
+    },
+    "delta": 4.08
+  },
+  {
+    "mode": "c64-petscii",
+    "image": "chuck31.png",
+    "dither": "opt-checker",
+    "before": {
+      "s2": -62.97,
+      "seconds": 0.108,
+      "png": "c64-petscii-chuck31-before.png"
+    },
+    "after": {
+      "s2": -49.97,
+      "seconds": 2.396,
+      "png": "c64-petscii-chuck31-after.png"
+    },
+    "delta": 13.0
+  },
+  {
+    "mode": "c64-petscii",
+    "image": "electrichues02.jpg",
+    "dither": "opt-checker",
+    "before": {
+      "s2": -64.23,
+      "seconds": 0.107,
+      "png": "c64-petscii-electrichues02-before.png"
+    },
+    "after": {
+      "s2": -64.23,
+      "seconds": 2.392,
+      "png": "c64-petscii-electrichues02-after.png"
+    },
+    "delta": 0.0
+  },
+  {
+    "mode": "c64-petscii",
+    "image": "fantasy.png",
+    "dither": "opt-checker",
+    "before": {
+      "s2": -57.34,
+      "seconds": 0.112,
+      "png": "c64-petscii-fantasy-before.png"
+    },
+    "after": {
+      "s2": -57.34,
+      "seconds": 2.388,
+      "png": "c64-petscii-fantasy-after.png"
+    },
+    "delta": 0.0
+  },
+  {
+    "mode": "c64-petscii",
+    "image": "fantasy1.png",
+    "dither": "opt-checker",
+    "before": {
+      "s2": -59.14,
+      "seconds": 0.112,
+      "png": "c64-petscii-fantasy1-before.png"
+    },
+    "after": {
+      "s2": -59.14,
+      "seconds": 2.39,
+      "png": "c64-petscii-fantasy1-after.png"
+    },
+    "delta": 0.0
+  },
+  {
+    "mode": "c64-petscii",
+    "image": "fantasy2.png",
+    "dither": "opt-checker",
+    "before": {
+      "s2": -58.88,
+      "seconds": 0.112,
+      "png": "c64-petscii-fantasy2-before.png"
+    },
+    "after": {
+      "s2": -58.88,
+      "seconds": 2.407,
+      "png": "c64-petscii-fantasy2-after.png"
+    },
+    "delta": 0.0
+  },
+  {
+    "mode": "c64-petscii",
+    "image": "fromthe.png",
+    "dither": "opt-checker",
+    "before": {
+      "s2": -60.05,
+      "seconds": 0.113,
+      "png": "c64-petscii-fromthe-before.png"
+    },
+    "after": {
+      "s2": -60.05,
+      "seconds": 2.393,
+      "png": "c64-petscii-fromthe-after.png"
+    },
+    "delta": 0.0
+  },
+  {
+    "mode": "c64-petscii",
+    "image": "grungy.png",
+    "dither": "opt-checker",
+    "before": {
+      "s2": -61.15,
+      "seconds": 0.096,
+      "png": "c64-petscii-grungy-before.png"
+    },
+    "after": {
+      "s2": -59.1,
+      "seconds": 2.439,
+      "png": "c64-petscii-grungy-after.png"
+    },
+    "delta": 2.05
+  },
+  {
+    "mode": "c64-petscii",
+    "image": "jungle.webp",
+    "dither": "opt-checker",
+    "before": {
+      "s2": -60.41,
+      "seconds": 0.11,
+      "png": "c64-petscii-jungle-before.png"
+    },
+    "after": {
+      "s2": -60.41,
+      "seconds": 2.91,
+      "png": "c64-petscii-jungle-after.png"
+    },
+    "delta": 0.0
+  },
+  {
+    "mode": "c64-petscii",
+    "image": "logo.png",
+    "dither": "opt-checker",
+    "before": {
+      "s2": -45.47,
+      "seconds": 0.109,
+      "png": "c64-petscii-logo-before.png"
+    },
+    "after": {
+      "s2": -45.47,
+      "seconds": 2.645,
+      "png": "c64-petscii-logo-after.png"
+    },
+    "delta": 0.0
+  },
+  {
+    "mode": "c64-petscii",
+    "image": "lovers.jpg",
+    "dither": "opt-checker",
+    "before": {
+      "s2": -62.81,
+      "seconds": 0.107,
+      "png": "c64-petscii-lovers-before.png"
+    },
+    "after": {
+      "s2": -62.81,
+      "seconds": 2.627,
+      "png": "c64-petscii-lovers-after.png"
+    },
+    "delta": 0.0
+  },
+  {
+    "mode": "c64-petscii",
+    "image": "macaw.jpg",
+    "dither": "opt-checker",
+    "before": {
+      "s2": -60.69,
+      "seconds": 0.084,
+      "png": "c64-petscii-macaw-before.png"
+    },
+    "after": {
+      "s2": -60.69,
+      "seconds": 2.375,
+      "png": "c64-petscii-macaw-after.png"
+    },
+    "delta": 0.0
+  },
+  {
+    "mode": "c64-petscii",
+    "image": "makena.jpg",
+    "dither": "opt-checker",
+    "before": {
+      "s2": -52.47,
+      "seconds": 0.104,
+      "png": "c64-petscii-makena-before.png"
+    },
+    "after": {
+      "s2": -52.47,
+      "seconds": 2.399,
+      "png": "c64-petscii-makena-after.png"
+    },
+    "delta": 0.0
+  },
+  {
+    "mode": "c64-petscii",
+    "image": "maui.jpg",
+    "dither": "opt-checker",
+    "before": {
+      "s2": -57.2,
+      "seconds": 0.097,
+      "png": "c64-petscii-maui-before.png"
+    },
+    "after": {
+      "s2": -57.2,
+      "seconds": 2.394,
+      "png": "c64-petscii-maui-after.png"
+    },
+    "delta": 0.0
+  },
+  {
+    "mode": "c64-petscii",
+    "image": "ocs_4096.png",
+    "dither": "opt-checker",
+    "before": {
+      "s2": -43.41,
+      "seconds": 0.092,
+      "png": "c64-petscii-ocs_4096-before.png"
+    },
+    "after": {
+      "s2": -43.27,
+      "seconds": 2.371,
+      "png": "c64-petscii-ocs_4096-after.png"
+    },
+    "delta": 0.14
+  },
+  {
+    "mode": "c64-petscii",
+    "image": "photo.jpg",
+    "dither": "opt-checker",
+    "before": {
+      "s2": -52.28,
+      "seconds": 0.08,
+      "png": "c64-petscii-photo-before.png"
+    },
+    "after": {
+      "s2": -52.28,
+      "seconds": 2.382,
+      "png": "c64-petscii-photo-after.png"
+    },
+    "delta": 0.0
+  },
+  {
+    "mode": "c64-petscii",
+    "image": "ramps.png",
+    "dither": "opt-checker",
+    "before": {
+      "s2": -63.81,
+      "seconds": 0.075,
+      "png": "c64-petscii-ramps-before.png"
+    },
+    "after": {
+      "s2": -63.81,
+      "seconds": 2.348,
+      "png": "c64-petscii-ramps-after.png"
+    },
+    "delta": 0.0
+  },
+  {
+    "mode": "c64-petscii",
+    "image": "shooter.png",
+    "dither": "opt-checker",
+    "before": {
+      "s2": -60.84,
+      "seconds": 0.11,
+      "png": "c64-petscii-shooter-before.png"
+    },
+    "after": {
+      "s2": -60.84,
+      "seconds": 2.371,
+      "png": "c64-petscii-shooter-after.png"
+    },
+    "delta": 0.0
+  },
+  {
+    "mode": "c64-petscii",
+    "image": "space3.png",
+    "dither": "opt-checker",
+    "before": {
+      "s2": -64.2,
+      "seconds": 0.077,
+      "png": "c64-petscii-space3-before.png"
+    },
+    "after": {
+      "s2": -63.62,
+      "seconds": 2.787,
+      "png": "c64-petscii-space3-after.png"
+    },
+    "delta": 0.58
+  },
+  {
+    "mode": "c64-charset-hires",
+    "image": "3macao.jpg",
+    "dither": "opt-checker",
+    "before": {
+      "s2": -62.33,
+      "seconds": 0.13,
+      "png": "c64-charset-hires-3macao-before.png"
+    },
+    "after": {
+      "s2": -60.73,
+      "seconds": 0.166,
+      "png": "c64-charset-hires-3macao-after.png"
+    },
+    "delta": 1.6
+  },
+  {
+    "mode": "c64-charset-hires",
+    "image": "asterix.png",
+    "dither": "opt-checker",
+    "before": {
+      "s2": -62.86,
+      "seconds": 0.18,
+      "png": "c64-charset-hires-asterix-before.png"
+    },
+    "after": {
+      "s2": -62.86,
+      "seconds": 0.223,
+      "png": "c64-charset-hires-asterix-after.png"
+    },
+    "delta": 0.0
+  },
+  {
+    "mode": "c64-charset-hires",
+    "image": "brick.png",
+    "dither": "opt-checker",
+    "before": {
+      "s2": -52.95,
+      "seconds": 0.147,
+      "png": "c64-charset-hires-brick-before.png"
+    },
+    "after": {
+      "s2": -52.95,
+      "seconds": 0.19,
+      "png": "c64-charset-hires-brick-after.png"
+    },
+    "delta": 0.0
+  },
+  {
+    "mode": "c64-charset-hires",
+    "image": "chuck29.png",
+    "dither": "opt-checker",
+    "before": {
+      "s2": -76.02,
+      "seconds": 0.151,
+      "png": "c64-charset-hires-chuck29-before.png"
+    },
+    "after": {
+      "s2": -75.96,
+      "seconds": 0.181,
+      "png": "c64-charset-hires-chuck29-after.png"
+    },
+    "delta": 0.06
+  },
+  {
+    "mode": "c64-charset-hires",
+    "image": "chuck30.png",
+    "dither": "opt-checker",
+    "before": {
+      "s2": -63.99,
+      "seconds": 0.169,
+      "png": "c64-charset-hires-chuck30-before.png"
+    },
+    "after": {
+      "s2": -63.96,
+      "seconds": 0.205,
+      "png": "c64-charset-hires-chuck30-after.png"
+    },
+    "delta": 0.03
+  },
+  {
+    "mode": "c64-charset-hires",
+    "image": "chuck31.png",
+    "dither": "opt-checker",
+    "before": {
+      "s2": -64.23,
+      "seconds": 0.112,
+      "png": "c64-charset-hires-chuck31-before.png"
+    },
+    "after": {
+      "s2": -64.23,
+      "seconds": 0.14,
+      "png": "c64-charset-hires-chuck31-after.png"
+    },
+    "delta": 0.0
+  },
+  {
+    "mode": "c64-charset-hires",
+    "image": "electrichues02.jpg",
+    "dither": "opt-checker",
+    "before": {
+      "s2": -71.08,
+      "seconds": 0.107,
+      "png": "c64-charset-hires-electrichues02-before.png"
+    },
+    "after": {
+      "s2": -71.08,
+      "seconds": 0.143,
+      "png": "c64-charset-hires-electrichues02-after.png"
+    },
+    "delta": 0.0
+  },
+  {
+    "mode": "c64-charset-hires",
+    "image": "fantasy.png",
+    "dither": "opt-checker",
+    "before": {
+      "s2": -61.31,
+      "seconds": 0.172,
+      "png": "c64-charset-hires-fantasy-before.png"
+    },
+    "after": {
+      "s2": -61.2,
+      "seconds": 0.221,
+      "png": "c64-charset-hires-fantasy-after.png"
+    },
+    "delta": 0.11
+  },
+  {
+    "mode": "c64-charset-hires",
+    "image": "fantasy1.png",
+    "dither": "opt-checker",
+    "before": {
+      "s2": -62.33,
+      "seconds": 0.169,
+      "png": "c64-charset-hires-fantasy1-before.png"
+    },
+    "after": {
+      "s2": -61.41,
+      "seconds": 0.199,
+      "png": "c64-charset-hires-fantasy1-after.png"
+    },
+    "delta": 0.92
+  },
+  {
+    "mode": "c64-charset-hires",
+    "image": "fantasy2.png",
+    "dither": "opt-checker",
+    "before": {
+      "s2": -62.99,
+      "seconds": 0.173,
+      "png": "c64-charset-hires-fantasy2-before.png"
+    },
+    "after": {
+      "s2": -62.88,
+      "seconds": 0.209,
+      "png": "c64-charset-hires-fantasy2-after.png"
+    },
+    "delta": 0.11
+  },
+  {
+    "mode": "c64-charset-hires",
+    "image": "fromthe.png",
+    "dither": "opt-checker",
+    "before": {
+      "s2": -63.66,
+      "seconds": 0.171,
+      "png": "c64-charset-hires-fromthe-before.png"
+    },
+    "after": {
+      "s2": -63.18,
+      "seconds": 0.201,
+      "png": "c64-charset-hires-fromthe-after.png"
+    },
+    "delta": 0.48
+  },
+  {
+    "mode": "c64-charset-hires",
+    "image": "grungy.png",
+    "dither": "opt-checker",
+    "before": {
+      "s2": -62.85,
+      "seconds": 0.106,
+      "png": "c64-charset-hires-grungy-before.png"
+    },
+    "after": {
+      "s2": -62.85,
+      "seconds": 0.136,
+      "png": "c64-charset-hires-grungy-after.png"
+    },
+    "delta": 0.0
+  },
+  {
+    "mode": "c64-charset-hires",
+    "image": "jungle.webp",
+    "dither": "opt-checker",
+    "before": {
+      "s2": -63.8,
+      "seconds": 0.147,
+      "png": "c64-charset-hires-jungle-before.png"
+    },
+    "after": {
+      "s2": -63.8,
+      "seconds": 0.179,
+      "png": "c64-charset-hires-jungle-after.png"
+    },
+    "delta": 0.0
+  },
+  {
+    "mode": "c64-charset-hires",
+    "image": "logo.png",
+    "dither": "opt-checker",
+    "before": {
+      "s2": -45.4,
+      "seconds": 0.079,
+      "png": "c64-charset-hires-logo-before.png"
+    },
+    "after": {
+      "s2": -45.4,
+      "seconds": 0.11,
+      "png": "c64-charset-hires-logo-after.png"
+    },
+    "delta": 0.0
+  },
+  {
+    "mode": "c64-charset-hires",
+    "image": "lovers.jpg",
+    "dither": "opt-checker",
+    "before": {
+      "s2": -64.21,
+      "seconds": 0.131,
+      "png": "c64-charset-hires-lovers-before.png"
+    },
+    "after": {
+      "s2": -63.73,
+      "seconds": 0.166,
+      "png": "c64-charset-hires-lovers-after.png"
+    },
+    "delta": 0.48
+  },
+  {
+    "mode": "c64-charset-hires",
+    "image": "macaw.jpg",
+    "dither": "opt-checker",
+    "before": {
+      "s2": -63.06,
+      "seconds": 0.112,
+      "png": "c64-charset-hires-macaw-before.png"
+    },
+    "after": {
+      "s2": -63.06,
+      "seconds": 0.145,
+      "png": "c64-charset-hires-macaw-after.png"
+    },
+    "delta": 0.0
+  },
+  {
+    "mode": "c64-charset-hires",
+    "image": "makena.jpg",
+    "dither": "opt-checker",
+    "before": {
+      "s2": -56.12,
+      "seconds": 0.128,
+      "png": "c64-charset-hires-makena-before.png"
+    },
+    "after": {
+      "s2": -56.12,
+      "seconds": 0.163,
+      "png": "c64-charset-hires-makena-after.png"
+    },
+    "delta": 0.0
+  },
+  {
+    "mode": "c64-charset-hires",
+    "image": "maui.jpg",
+    "dither": "opt-checker",
+    "before": {
+      "s2": -58.16,
+      "seconds": 0.135,
+      "png": "c64-charset-hires-maui-before.png"
+    },
+    "after": {
+      "s2": -56.05,
+      "seconds": 0.175,
+      "png": "c64-charset-hires-maui-after.png"
+    },
+    "delta": 2.11
+  },
+  {
+    "mode": "c64-charset-hires",
+    "image": "ocs_4096.png",
+    "dither": "opt-checker",
+    "before": {
+      "s2": -48.52,
+      "seconds": 0.064,
+      "png": "c64-charset-hires-ocs_4096-before.png"
+    },
+    "after": {
+      "s2": -48.52,
+      "seconds": 0.095,
+      "png": "c64-charset-hires-ocs_4096-after.png"
+    },
+    "delta": 0.0
+  },
+  {
+    "mode": "c64-charset-hires",
+    "image": "photo.jpg",
+    "dither": "opt-checker",
+    "before": {
+      "s2": -52.74,
+      "seconds": 0.076,
+      "png": "c64-charset-hires-photo-before.png"
+    },
+    "after": {
+      "s2": -52.74,
+      "seconds": 0.109,
+      "png": "c64-charset-hires-photo-after.png"
+    },
+    "delta": 0.0
+  },
+  {
+    "mode": "c64-charset-hires",
+    "image": "ramps.png",
+    "dither": "opt-checker",
+    "before": {
+      "s2": -63.89,
+      "seconds": 0.065,
+      "png": "c64-charset-hires-ramps-before.png"
+    },
+    "after": {
+      "s2": -63.89,
+      "seconds": 0.099,
+      "png": "c64-charset-hires-ramps-after.png"
+    },
+    "delta": 0.0
+  },
+  {
+    "mode": "c64-charset-hires",
+    "image": "shooter.png",
+    "dither": "opt-checker",
+    "before": {
+      "s2": -61.41,
+      "seconds": 0.116,
+      "png": "c64-charset-hires-shooter-before.png"
+    },
+    "after": {
+      "s2": -61.41,
+      "seconds": 0.156,
+      "png": "c64-charset-hires-shooter-after.png"
+    },
+    "delta": 0.0
+  },
+  {
+    "mode": "c64-charset-hires",
+    "image": "space3.png",
+    "dither": "opt-checker",
+    "before": {
+      "s2": -64.42,
+      "seconds": 0.083,
+      "png": "c64-charset-hires-space3-before.png"
+    },
+    "after": {
+      "s2": -64.31,
+      "seconds": 0.118,
+      "png": "c64-charset-hires-space3-after.png"
+    },
+    "delta": 0.11
+  },
+  {
+    "mode": "c64-charset-multicolor",
+    "image": "3macao.jpg",
+    "dither": "opt-checker",
+    "before": {
+      "s2": -35.98,
+      "seconds": 0.555,
+      "png": "c64-charset-multicolor-3macao-before.png"
+    },
+    "after": {
+      "s2": -34.83,
+      "seconds": 0.578,
+      "png": "c64-charset-multicolor-3macao-after.png"
+    },
+    "delta": 1.15
+  },
+  {
+    "mode": "c64-charset-multicolor",
+    "image": "asterix.png",
+    "dither": "opt-checker",
+    "before": {
+      "s2": -54.76,
+      "seconds": 0.628,
+      "png": "c64-charset-multicolor-asterix-before.png"
+    },
+    "after": {
+      "s2": -52.24,
+      "seconds": 0.675,
+      "png": "c64-charset-multicolor-asterix-after.png"
+    },
+    "delta": 2.52
+  },
+  {
+    "mode": "c64-charset-multicolor",
+    "image": "brick.png",
+    "dither": "opt-checker",
+    "before": {
+      "s2": -35.27,
+      "seconds": 0.593,
+      "png": "c64-charset-multicolor-brick-before.png"
+    },
+    "after": {
+      "s2": -35.27,
+      "seconds": 0.603,
+      "png": "c64-charset-multicolor-brick-after.png"
+    },
+    "delta": 0.0
+  },
+  {
+    "mode": "c64-charset-multicolor",
+    "image": "chuck29.png",
+    "dither": "opt-checker",
+    "before": {
+      "s2": -64.43,
+      "seconds": 0.607,
+      "png": "c64-charset-multicolor-chuck29-before.png"
+    },
+    "after": {
+      "s2": -63.94,
+      "seconds": 0.645,
+      "png": "c64-charset-multicolor-chuck29-after.png"
+    },
+    "delta": 0.49
+  },
+  {
+    "mode": "c64-charset-multicolor",
+    "image": "chuck30.png",
+    "dither": "opt-checker",
+    "before": {
+      "s2": -51.43,
+      "seconds": 0.617,
+      "png": "c64-charset-multicolor-chuck30-before.png"
+    },
+    "after": {
+      "s2": -51.37,
+      "seconds": 0.674,
+      "png": "c64-charset-multicolor-chuck30-after.png"
+    },
+    "delta": 0.06
+  },
+  {
+    "mode": "c64-charset-multicolor",
+    "image": "chuck31.png",
+    "dither": "opt-checker",
+    "before": {
+      "s2": -62.7,
+      "seconds": 0.634,
+      "png": "c64-charset-multicolor-chuck31-before.png"
+    },
+    "after": {
+      "s2": -55.94,
+      "seconds": 0.593,
+      "png": "c64-charset-multicolor-chuck31-after.png"
+    },
+    "delta": 6.76
+  },
+  {
+    "mode": "c64-charset-multicolor",
+    "image": "electrichues02.jpg",
+    "dither": "opt-checker",
+    "before": {
+      "s2": -64.14,
+      "seconds": 0.584,
+      "png": "c64-charset-multicolor-electrichues02-before.png"
+    },
+    "after": {
+      "s2": -64.12,
+      "seconds": 0.596,
+      "png": "c64-charset-multicolor-electrichues02-after.png"
+    },
+    "delta": 0.02
+  },
+  {
+    "mode": "c64-charset-multicolor",
+    "image": "fantasy.png",
+    "dither": "opt-checker",
+    "before": {
+      "s2": -56.5,
+      "seconds": 0.621,
+      "png": "c64-charset-multicolor-fantasy-before.png"
+    },
+    "after": {
+      "s2": -54.07,
+      "seconds": 0.652,
+      "png": "c64-charset-multicolor-fantasy-after.png"
+    },
+    "delta": 2.43
+  },
+  {
+    "mode": "c64-charset-multicolor",
+    "image": "fantasy1.png",
+    "dither": "opt-checker",
+    "before": {
+      "s2": -49.62,
+      "seconds": 0.648,
+      "png": "c64-charset-multicolor-fantasy1-before.png"
+    },
+    "after": {
+      "s2": -48.52,
+      "seconds": 0.651,
+      "png": "c64-charset-multicolor-fantasy1-after.png"
+    },
+    "delta": 1.1
+  },
+  {
+    "mode": "c64-charset-multicolor",
+    "image": "fantasy2.png",
+    "dither": "opt-checker",
+    "before": {
+      "s2": -47.63,
+      "seconds": 0.613,
+      "png": "c64-charset-multicolor-fantasy2-before.png"
+    },
+    "after": {
+      "s2": -44.52,
+      "seconds": 0.642,
+      "png": "c64-charset-multicolor-fantasy2-after.png"
+    },
+    "delta": 3.11
+  },
+  {
+    "mode": "c64-charset-multicolor",
+    "image": "fromthe.png",
+    "dither": "opt-checker",
+    "before": {
+      "s2": -46.08,
+      "seconds": 0.613,
+      "png": "c64-charset-multicolor-fromthe-before.png"
+    },
+    "after": {
+      "s2": -44.64,
+      "seconds": 0.654,
+      "png": "c64-charset-multicolor-fromthe-after.png"
+    },
+    "delta": 1.44
+  },
+  {
+    "mode": "c64-charset-multicolor",
+    "image": "grungy.png",
+    "dither": "opt-checker",
+    "before": {
+      "s2": -48.17,
+      "seconds": 0.543,
+      "png": "c64-charset-multicolor-grungy-before.png"
+    },
+    "after": {
+      "s2": -48.17,
+      "seconds": 0.58,
+      "png": "c64-charset-multicolor-grungy-after.png"
+    },
+    "delta": 0.0
+  },
+  {
+    "mode": "c64-charset-multicolor",
+    "image": "jungle.webp",
+    "dither": "opt-checker",
+    "before": {
+      "s2": -54.62,
+      "seconds": 0.617,
+      "png": "c64-charset-multicolor-jungle-before.png"
+    },
+    "after": {
+      "s2": -54.59,
+      "seconds": 0.625,
+      "png": "c64-charset-multicolor-jungle-after.png"
+    },
+    "delta": 0.03
+  },
+  {
+    "mode": "c64-charset-multicolor",
+    "image": "logo.png",
+    "dither": "opt-checker",
+    "before": {
+      "s2": -19.07,
+      "seconds": 0.535,
+      "png": "c64-charset-multicolor-logo-before.png"
+    },
+    "after": {
+      "s2": -19.07,
+      "seconds": 0.548,
+      "png": "c64-charset-multicolor-logo-after.png"
+    },
+    "delta": 0.0
+  },
+  {
+    "mode": "c64-charset-multicolor",
+    "image": "lovers.jpg",
+    "dither": "opt-checker",
+    "before": {
+      "s2": -47.2,
+      "seconds": 0.599,
+      "png": "c64-charset-multicolor-lovers-before.png"
+    },
+    "after": {
+      "s2": -45.7,
+      "seconds": 0.619,
+      "png": "c64-charset-multicolor-lovers-after.png"
+    },
+    "delta": 1.5
+  },
+  {
+    "mode": "c64-charset-multicolor",
+    "image": "macaw.jpg",
+    "dither": "opt-checker",
+    "before": {
+      "s2": -51.44,
+      "seconds": 0.618,
+      "png": "c64-charset-multicolor-macaw-before.png"
+    },
+    "after": {
+      "s2": -50.56,
+      "seconds": 0.633,
+      "png": "c64-charset-multicolor-macaw-after.png"
+    },
+    "delta": 0.88
+  },
+  {
+    "mode": "c64-charset-multicolor",
+    "image": "makena.jpg",
+    "dither": "opt-checker",
+    "before": {
+      "s2": -48.34,
+      "seconds": 0.63,
+      "png": "c64-charset-multicolor-makena-before.png"
+    },
+    "after": {
+      "s2": -48.34,
+      "seconds": 0.636,
+      "png": "c64-charset-multicolor-makena-after.png"
+    },
+    "delta": 0.0
+  },
+  {
+    "mode": "c64-charset-multicolor",
+    "image": "maui.jpg",
+    "dither": "opt-checker",
+    "before": {
+      "s2": -47.04,
+      "seconds": 0.604,
+      "png": "c64-charset-multicolor-maui-before.png"
+    },
+    "after": {
+      "s2": -45.86,
+      "seconds": 0.599,
+      "png": "c64-charset-multicolor-maui-after.png"
+    },
+    "delta": 1.18
+  },
+  {
+    "mode": "c64-charset-multicolor",
+    "image": "ocs_4096.png",
+    "dither": "opt-checker",
+    "before": {
+      "s2": -17.34,
+      "seconds": 0.509,
+      "png": "c64-charset-multicolor-ocs_4096-before.png"
+    },
+    "after": {
+      "s2": -17.34,
+      "seconds": 0.541,
+      "png": "c64-charset-multicolor-ocs_4096-after.png"
+    },
+    "delta": 0.0
+  },
+  {
+    "mode": "c64-charset-multicolor",
+    "image": "photo.jpg",
+    "dither": "opt-checker",
+    "before": {
+      "s2": -37.18,
+      "seconds": 0.609,
+      "png": "c64-charset-multicolor-photo-before.png"
+    },
+    "after": {
+      "s2": -37.18,
+      "seconds": 0.519,
+      "png": "c64-charset-multicolor-photo-after.png"
+    },
+    "delta": 0.0
+  },
+  {
+    "mode": "c64-charset-multicolor",
+    "image": "ramps.png",
+    "dither": "opt-checker",
+    "before": {
+      "s2": -54.42,
+      "seconds": 0.531,
+      "png": "c64-charset-multicolor-ramps-before.png"
+    },
+    "after": {
+      "s2": -54.42,
+      "seconds": 0.546,
+      "png": "c64-charset-multicolor-ramps-after.png"
+    },
+    "delta": 0.0
+  },
+  {
+    "mode": "c64-charset-multicolor",
+    "image": "shooter.png",
+    "dither": "opt-checker",
+    "before": {
+      "s2": -51.41,
+      "seconds": 0.656,
+      "png": "c64-charset-multicolor-shooter-before.png"
+    },
+    "after": {
+      "s2": -51.41,
+      "seconds": 0.722,
+      "png": "c64-charset-multicolor-shooter-after.png"
+    },
+    "delta": 0.0
+  },
+  {
+    "mode": "c64-charset-multicolor",
+    "image": "space3.png",
+    "dither": "opt-checker",
+    "before": {
+      "s2": -63.52,
+      "seconds": 0.542,
+      "png": "c64-charset-multicolor-space3-before.png"
+    },
+    "after": {
+      "s2": -62.91,
+      "seconds": 0.797,
+      "png": "c64-charset-multicolor-space3-after.png"
+    },
+    "delta": 0.61
+  }
+]

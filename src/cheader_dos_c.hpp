@@ -26,9 +26,9 @@ namespace png2amiga::cheader_dos_c {
 // for CGA graphics modes — 16 KB data + a few hundred bytes of code +
 // newlib crt0) that multiple viewers fit on a single 360 KB disk.
 //
-// Supported modes: CGA graphics (cga_320, cga_640, cga_composite_hires),
+// Supported modes: CGA 160x100 fixed half-blocks (cga_160), CGA graphics (cga_320, cga_640, cga_composite_hires),
 // cga_text80x100, EGA graphics (ega_320, ega_640, ega_hi), VGA chunky
-// 13h, VGA planar 10h / 12h.
+// 13h, VGA planar 10h / 12h, native Tandy 160/320/640 modes.
 // ---------------------------------------------------------------------------
 
 struct Options {
@@ -64,7 +64,7 @@ struct Options {
 //   palette    — EGA modes: 16 bytes of ATC register values.
 //                VGA 13h: 768-byte DAC (256 × 3 RGB).
 //                VGA planar: 48-byte DAC (16 × 3 RGB).
-//                Empty for CGA modes.
+//                Tandy: 16 RGBI register bytes (0..15). Empty for CGA modes.
 //   options    — symbol name + CGA-specific palette variant.
 Result<std::string> generate(amiga::Mode mode,
                              std::size_t width,

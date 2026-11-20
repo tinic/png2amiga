@@ -76,6 +76,16 @@ void emit_strips_copper_list(std::string& out,
                        options.strips_label.empty() ? "unnamed" : options.strips_label,
                        options.strips_anchor_hpos,
                        options.strips_total_planes);
+    if (const int shift = options.strips_display_shift; shift > 0) {
+        out += std::format(
+            "// Display: bitplanes {0} px left of standard so MOVEs land on the slot "
+            "grid:\n//   DDFSTRT $30, BPLCON1 ${1:02X}, BPLxMOD -2 (one extra "
+            "fetch word), DIWSTRT/DIWSTOP H ${2:02X}/${3:02X}\n",
+            shift,
+            (16 - shift) * 0x11,
+            0x81 - shift,
+            0xC1 - shift);
+    }
 
     std::size_t strips_total_words = 0;
     for (auto& row : moves)
@@ -100,7 +110,8 @@ void emit_strips_copper_list(std::string& out,
                                                 (op.hpos & 0xFE) | 0x0001);
                 w1 = 0xFFFE;
                 if (patch_wrap_at_eol && i == row.size() - 1) {
-                    w0 = 0xFFDF;
+                    // Never pull a later EOL wait back into visible pixels.
+                    w0 = std::max<std::uint16_t>(w0, 0xFFDF);
                 }
             } else {
                 auto reg = static_cast<unsigned>(op.reg & 0x1F);
@@ -179,10 +190,59 @@ Result<std::string> generate(const bitplane::BitplaneData& planes,
 
     bool have_mask = !options.mask_plane.empty()
                   && options.mask_plane.size() >= planes.bytes_per_row * planes.height;
-    bool weave_mask_in_planes = have_mask && options.interleaved && !options.mask_layout.empty();
+    // Depth zones (sliced, progressive): one interleaved array whose rows
+    // hold only their zone's planes, then the zone table.
+    const auto zones = options.depth_zones;
+    const bool zoned = options.copper_changes && !options.copper_changes->empty() &&
+                       !options.interlace && !zones.empty();
+    bool weave_mask_in_planes =
+        have_mask && options.interleaved && !options.mask_layout.empty() && !zoned;
     bool replicated_layout = options.mask_layout == "replicated";
 
-    if (options.interleaved) {
+    if (zoned) {
+        auto bpr = planes.bytes_per_row;
+        out += std::format("const UWORD {}_planes[] = {{\n", sym);
+        auto total_words = copper::zoned_plane_bytes(zones, planes.height, bpr) / 2;
+        std::size_t word_count = 0;
+        std::size_t z = 0;
+        for (std::size_t y = 0; y < planes.height; ++y) {
+            while (z + 1 < zones.size() && zones[z + 1].start_row <= y)
+                ++z;
+            out += std::format("    /* row {}, {} planes */\n", y, zones[z].depth);
+            for (std::size_t p = 0; p < zones[z].depth; ++p) {
+                out += "    ";
+                for (std::size_t w = 0; w < words_per_row; ++w) {
+                    ++word_count;
+                    out += std::format("0x{:04X}", fetch_row_word(p, y, w));
+                    if (word_count < total_words) out += ",";
+                }
+                out += "\n";
+            }
+        }
+        out += "};\n\n";
+
+        std::string rows, depths, offsets;
+        std::size_t off = 0;
+        for (std::size_t i = 0; i < zones.size(); ++i) {
+            auto sep = i ? ", " : "";
+            auto end = i + 1 < zones.size() ? zones[i + 1].start_row : planes.height;
+            rows += std::format("{}{}", sep, zones[i].start_row);
+            depths += std::format("{}{}", sep, zones[i].depth);
+            offsets += std::format("{}{}", sep, off);
+            off += (end - zones[i].start_row) * zones[i].depth * bpr;
+        }
+        out += "/* Depth zones: zone i covers rows zone_row[i] up to the next zone's row\n"
+               "   with zone_depth[i] planes. Each row of _planes holds only its zone's\n"
+               "   planes (interleaved); zone_offset[i] is the byte offset of the zone's\n"
+               "   first row. In the horizontal blank before a zone's first row, write\n"
+               "   BPLCON0 (BPU = depth) and BPL1MOD/BPL2MOD = BPR * (depth - 1). Plane p\n"
+               "   on in consecutive zones runs on by itself; when it turns on after a\n"
+               "   gap, set BPLxPT = _planes + zone_offset[i] + p * BPR there. */\n";
+        out += std::format("#define {}_ZONES {}\n", SYM, zones.size());
+        out += std::format("const UWORD {}_zone_row[] = {{ {} }};\n", sym, rows);
+        out += std::format("const UWORD {}_zone_depth[] = {{ {} }};\n", sym, depths);
+        out += std::format("const ULONG {}_zone_offset[] = {{ {} }};\n\n", sym, offsets);
+    } else if (options.interleaved) {
         // Single interleaved array: all planes for row 0, then row 1, etc.
         // When weaving the mask in:
         //   replicated → each plane row is followed by a mask row.
@@ -465,6 +525,15 @@ Result<std::string> generate_viewer(const bitplane::BitplaneData& planes,
             mode_label += " + Strips";
         else if (_has_cop)
             mode_label += " + Sliced";
+        if (_has_cop && !options.depth_zones.empty() && !options.interlace) {
+            mode_label += " + Zones (";
+            for (std::size_t z = 0; z < options.depth_zones.size(); ++z)
+                mode_label += std::format("{}row {}: {}bpl",
+                                          z ? ", " : "",
+                                          options.depth_zones[z].start_row,
+                                          options.depth_zones[z].depth);
+            mode_label += ")";
+        }
         const char* chipset_str = options.aga ? "AGA" : "OCS";
         out += std::format("// Image:    {}x{}, {} ({}-bit palette)\n",
                            width,
@@ -472,8 +541,13 @@ Result<std::string> generate_viewer(const bitplane::BitplaneData& planes,
                            chipset_str,
                            options.aga ? 24 : 12);
         out += std::format("// Mode:     {}\n", mode_label);
-        out += std::format(
-            "// Bitplane: {} bytes ({} planes, {} bytes/row)\n", planes.total_bytes(), depth, bpr);
+        bool _zoned = _has_cop && !options.depth_zones.empty() && !options.interlace;
+        out += std::format("// Bitplane: {} bytes ({} planes{}, {} bytes/row)\n",
+                           _zoned ? copper::zoned_plane_bytes(options.depth_zones, height, bpr)
+                                  : planes.total_bytes(),
+                           depth,
+                           _zoned ? " at most" : "",
+                           bpr);
         std::size_t visible_pal_count = options.dpf ? (std::size_t{1} << (depth / 2)) : pal_count;
         out += std::format("// Palette:  {} colors\n", visible_pal_count);
         if (options.total_unique_colors > 0) {
@@ -624,8 +698,26 @@ Result<std::string> generate_viewer(const bitplane::BitplaneData& planes,
     // strips supplies its own per-line copper ops and replaces the sliced
     // emission path. They never compose in the same viewer.
     if (has_scap) has_copper = false;
+    // Strips display shift (see CHeaderOptions::strips_display_shift).
+    const int strips_shift = has_scap ? options.strips_display_shift : 0;
     bool is_lace = options.interlace;
     bool need_fmode3 = ((depth > 6) && has_copper) || (is_hires && depth > 4);
+
+    // Depth zones (sliced, progressive): rows hold only their zone's planes.
+    const auto zones = options.depth_zones;
+    const bool zoned = has_copper && !is_lace && !zones.empty();
+    auto zone_end = [&](std::size_t z) {
+        return z + 1 < zones.size() ? zones[z + 1].start_row : height;
+    };
+    // Byte offset of each zone's first row in the packed data.
+    std::vector<std::size_t> zone_offset;
+    if (zoned) {
+        std::size_t off = 0;
+        for (std::size_t z = 0; z < zones.size(); ++z) {
+            zone_offset.push_back(off);
+            off += (zone_end(z) - zones[z].start_row) * zones[z].depth * bpr;
+        }
+    }
 
     out += std::format("// {}x{}, {} bitplanes, CAMG 0x{:04X}\n", width, height, depth, camg);
     // 8-byte alignment when FMODE=3 (64-bit DMA fetch); 2-byte otherwise.
@@ -741,10 +833,15 @@ Result<std::string> generate_viewer(const bitplane::BitplaneData& planes,
                            " __attribute__((section(\".MEMF_CHIP\"))) = {{\n",
                            sym,
                            align);
-        auto total_words = words_per_row * depth * height;
+        auto total_words =
+            zoned ? copper::zoned_plane_bytes(zones, height, bpr) / 2 : words_per_row * depth * height;
         std::size_t word_count = 0;
+        std::size_t zone = 0;
         for (std::size_t y = 0; y < height; ++y) {
-            for (std::size_t p = 0; p < depth; ++p) {
+            while (zoned && y >= zone_end(zone))
+                ++zone;
+            const std::size_t row_planes = zoned ? zones[zone].depth : depth;
+            for (std::size_t p = 0; p < row_planes; ++p) {
                 out += "    ";
                 auto offset = planes.plane_row_offset(p, y);
                 for (std::size_t w = 0; w < words_per_row; ++w) {
@@ -967,6 +1064,51 @@ Result<std::string> generate_viewer(const bitplane::BitplaneData& planes,
         }
     }
 
+    // Depth zone switches, one entry per boundary (zones 1..N-1): the row,
+    // BPLCON0 and modulo for the new depth, and the planes that turn back on
+    // after a gap with their pointer offset into the packed data.
+    const int zone_mod_adjust = need_fmode3 ? 8 : 0;
+    auto zone_bplcon0 = [&](std::size_t d) {
+        return static_cast<unsigned>(((d & 7) << 12) | (d == 8 ? (1 << 4) : 0) | (1 << 9) |
+                                     (is_hires ? (1 << 15) : 0));
+    };
+    std::size_t zone_switch_bytes = 0;
+    if (zoned) {
+        auto n = zones.size() - 1;
+        std::string rows, cons, mods, firsts = "0", reload_planes, reload_offs;
+        std::size_t reloads = 0;
+        for (std::size_t z = 1; z < zones.size(); ++z) {
+            auto sep = z > 1 ? ", " : "";
+            rows += std::format("{}{}", sep, zones[z].start_row);
+            cons += std::format("{}0x{:04X}", sep, zone_bplcon0(zones[z].depth));
+            mods += std::format("{}{}",
+                                sep,
+                                static_cast<int>(bpr * (zones[z].depth - 1)) - zone_mod_adjust);
+            for (auto p : copper::zone_plane_reloads(zones, z)) {
+                auto rsep = reloads ? ", " : "";
+                reload_planes += std::format("{}{}", rsep, p);
+                reload_offs += std::format("{}{}", rsep, zone_offset[z] + p * bpr);
+                ++reloads;
+            }
+            firsts += std::format(", {}", reloads);
+            zone_switch_bytes += copper::zone_switch_moves(zones, z) * 4;
+        }
+        out += "// Depth zones: BPLCON0 and the modulos switch in the horizontal blank\n";
+        out += "// before each boundary row; a plane that turns back on after a gap\n";
+        out += "// gets its pointer reloaded there.\n";
+        out += std::format("#define {}_ZONE_SWITCHES {}\n", to_upper(sym), n);
+        out += std::format("static const UWORD {}_zone_row[] = {{ {} }};\n", sym, rows);
+        out += std::format("static const UWORD {}_zone_bplcon0[] = {{ {} }};\n", sym, cons);
+        out += std::format("static const WORD {}_zone_mod[] = {{ {} }};\n", sym, mods);
+        out += std::format("static const UBYTE {}_zone_reload_first[] = {{ {} }};\n", sym, firsts);
+        out += std::format("static const UBYTE {}_zone_reload_plane[] = {{ {} }};\n",
+                           sym,
+                           reloads ? reload_planes : "0");
+        out += std::format("static const ULONG {}_zone_reload_off[] = {{ {} }};\n\n",
+                           sym,
+                           reloads ? reload_offs : "0");
+    }
+
     // --- Copper list builder helper ---
     // --- strips raw copper list (calibration / mid-line palette mode) ---
     //
@@ -1153,6 +1295,7 @@ Result<std::string> generate_viewer(const bitplane::BitplaneData& planes,
         cop_size += options.copper_changes_per_line * 4;
         if (options.aga) cop_size += 8 + options.copper_changes_per_line * 4;
     }
+    cop_size += zone_switch_bytes;
     cop_size += 128;  // padding for blank-below, 256-boundary WAITs, end markers
 
     // MEMF_CLEAR: zero the tail past our end-sentinel. Empirically the
@@ -1185,6 +1328,10 @@ Result<std::string> generate_viewer(const bitplane::BitplaneData& planes,
     } else if (is_hires) {
         out += "    *cl++ = offsetof(struct Custom, ddfstrt); *cl++ = 0x003C;  // hires standard\n";
         out += "    *cl++ = offsetof(struct Custom, ddfstop); *cl++ = 0x00D4;\n";
+    } else if (strips_shift > 0) {
+        out += "    *cl++ = offsetof(struct Custom, ddfstrt); *cl++ = 0x0030;  "
+               "// lores, one extra fetch word for the strips display shift\n";
+        out += "    *cl++ = offsetof(struct Custom, ddfstop); *cl++ = 0x00D0;\n";
     } else {
         auto lores_ddfstrt = need_fmode3 ? 0x0030 : 0x0038;
         out += std::format(
@@ -1198,9 +1345,9 @@ Result<std::string> generate_viewer(const bitplane::BitplaneData& planes,
     // VSTART=44 (PAL standard), HSTART=0x81. DIWSTOP=0x2CC1 covers full PAL height.
     out += "    // Display window start/stop — visible area on screen\n";
     out += std::format("    *cl++ = offsetof(struct Custom, diwstrt); "
-                       "*cl++ = ({}<<8)|0x81;  // VSTART={}, HSTART=$81\n",
+                       "*cl++ = ({0}<<8)|0x{1:02X};  // VSTART={0}, HSTART=${1:02X}\n",
                        y_start,
-                       y_start);
+                       0x81 - strips_shift);
     {
         // Close DIWSTOP V at exactly the image bottom so the display window
         // ends there. Stops bitplane DMA at the hardware level — much more
@@ -1213,9 +1360,10 @@ Result<std::string> generate_viewer(const bitplane::BitplaneData& planes,
         auto last_line = y_start + static_cast<int>(field_lines);
         auto stop_v = last_line & 0xFF;
         out += std::format("    *cl++ = offsetof(struct Custom, diwstop); "
-                           "*cl++ = ({}<<8)|0xC1;  // VSTOP={}, HSTOP=$C1\n",
+                           "*cl++ = ({0}<<8)|0x{2:02X};  // VSTOP={1}, HSTOP=${2:02X}\n",
                            stop_v,
-                           last_line);
+                           last_line,
+                           0xC1 - strips_shift);
     }
 
     // FMODE: AGA fetch mode. 0=16-bit (OCS compatible), 3=64-bit (needed
@@ -1235,8 +1383,10 @@ Result<std::string> generate_viewer(const bitplane::BitplaneData& planes,
     // Bit 9: COLOR (color composite output enable, always set)
     // Bit 4: BPU3 (8th bitplane on AGA)
     // Bit 2: LACE (interlace enable)
-    auto bpu = static_cast<int>(depth) & 7;
-    auto bpu3 = (depth == 8) ? (1 << 4) : 0;
+    // Depth zones start at zone 0's depth.
+    const std::size_t shown_depth = zoned ? zones[0].depth : depth;
+    auto bpu = static_cast<int>(shown_depth) & 7;
+    auto bpu3 = (shown_depth == 8) ? (1 << 4) : 0;
     auto bplcon0 = (bpu << 12) | bpu3 | (1 << 9);
     if (is_ham) bplcon0 |= (1 << 11);
     if (is_hires) bplcon0 |= (1 << 15);
@@ -1257,14 +1407,24 @@ Result<std::string> generate_viewer(const bitplane::BitplaneData& planes,
                        "*cl++ = {};  // 0x{:04X}\n",
                        bplcon0_expr,
                        bplcon0);
-    out += "    *cl++ = offsetof(struct Custom, bplcon1); *cl++ = 0;  // scroll offset = 0\n";
+    if (strips_shift > 0)
+        out += std::format("    *cl++ = offsetof(struct Custom, bplcon1); *cl++ = 0x{:02X};  "
+                           "// delay {} px on both playfields\n",
+                           (16 - strips_shift) * 0x11,
+                           16 - strips_shift);
+    else
+        out += "    *cl++ = offsetof(struct Custom, bplcon1); *cl++ = 0;  // scroll offset = 0\n";
 
     // BPLCON2: playfield priority and KILLEHB
     // Bit 9: KILLEHB — prevents 6-plane non-EHB from triggering Extra Half-Brite
     //                  (not applicable in DPF mode — bit 9 is unused there)
     // Bit 6: PF2PRI = 0 (PF1 in front of PF2). With DPF and PF1 zeroed,
     //        leaving PF2 behind means transparent PF1 lets PF2 show through.
-    auto bplcon2 = (depth == 6 && !params.is_ehb && !is_ham && !options.dpf) ? 0x0200 : 0x0000;
+    // A depth zone of 6 planes needs it too.
+    bool six_planes = depth == 6 || (zoned && std::ranges::any_of(zones, [](auto& z) {
+                                         return z.depth == 6;
+                                     }));
+    auto bplcon2 = (six_planes && !params.is_ehb && !is_ham && !options.dpf) ? 0x0200 : 0x0000;
     if (bplcon2)
         out += std::format("    *cl++ = offsetof(struct Custom, bplcon2); "
                            "*cl++ = 0x{:04X};  // KILLEHB\n",
@@ -1313,9 +1473,11 @@ Result<std::string> generate_viewer(const bitplane::BitplaneData& planes,
     // block, so the next row is already at +bpr — no skip, mod = 0.
     // FMODE=3 reads 8 bytes past the visible area as overread, so the
     // pointer has advanced bpr+8 instead of bpr — subtract 8.
+    // The strips display shift fetches one extra word per row: -2.
     int mod = is_batch ? -(need_fmode3 ? 8 : 0)
-                       : static_cast<int>(bpr) * (static_cast<int>(depth) * (is_lace ? 2 : 1) - 1) -
-                             (need_fmode3 ? 8 : 0);
+                       : static_cast<int>(bpr) *
+                                 (static_cast<int>(shown_depth) * (is_lace ? 2 : 1) - 1) -
+                             (need_fmode3 ? 8 : 0) - (strips_shift > 0 ? 2 : 0);
     out += std::format("    *cl++ = offsetof(struct Custom, bpl1mod); "
                        "*cl++ = {};\n",
                        mod);
@@ -1344,6 +1506,18 @@ Result<std::string> generate_viewer(const bitplane::BitplaneData& planes,
         out += std::format("    for (int i = 0; i < {}; i++)\n", depth);
         out += std::format("        planes[i] = {}_frame_planes[0][i];\n", sym);
         out += "    USHORT* bpl_slot = cl;\n";
+        out += std::format("    cl = copSetPlanes(cl, planes, {});\n\n", depth);
+    } else if (zoned) {
+        // Each plane starts at the first zone that shows it; planes on in
+        // consecutive zones run on into the next zone's rows by themselves.
+        out += std::format("    const UBYTE* planes[{}];\n", depth);
+        for (std::size_t p = 0; p < depth; ++p) {
+            std::size_t z = 0;
+            while (z < zones.size() && zones[z].depth <= p)
+                ++z;
+            auto off = z < zones.size() ? zone_offset[z] + p * bpr : 0;
+            out += std::format("    planes[{}] = (const UBYTE*){}_planes + {};\n", p, sym, off);
+        }
         out += std::format("    cl = copSetPlanes(cl, planes, {});\n\n", depth);
     } else {
         out += std::format("    const UBYTE* planes[{}];\n", depth);
@@ -1523,15 +1697,10 @@ Result<std::string> generate_viewer(const bitplane::BitplaneData& planes,
     };
 
     if (has_copper) {
-        // Write palette changes right after the last bitplane fetch completes.
-        // Encoded byte 0xDD = binary 11011101, which puts the copper WAIT H
-        // comparator at 0x6E * 2 = 0xDC (= 220 color clocks). For hires
-        // FMODE=3, DDFSTOP is 0xD4 = 212 and the 64-bit fetch overread
-        // extends ~8 CCK past DDFSTOP, so the last fetch completes right
-        // around 220. Waking at 220 reclaims the ~2 CCK of dead time that
-        // the previous H=0xDE/222 position left on the table — visible in
-        // the e9k-debugger copper overlay. For non-FMODE=3 modes the fetch
-        // ends even earlier (no overread), so 0xDD is still safe.
+        // Palette writes must wait for displayed pixels, not merely the
+        // last bitplane fetch. $DD can recolor the right edge after DMA
+        // has already fetched those pixels. Progressive uses $E1; lace
+        // retains its later $E3 wait.
         // Line 0: write changes before display starts (no WAIT).
         // In interlace mode, field 1 renders even image rows (0, 2, 4, ...)
         // so row 0's changes go here; field 2 renders odd rows so its
@@ -1559,10 +1728,8 @@ Result<std::string> generate_viewer(const bitplane::BitplaneData& planes,
                                  std::size_t rows_in_field,
                                  int vpos_step,
                                  int vpos_first) {
-            // Interlace needs the WAIT HP pushed later (0xE3 = HPOS 226) —
-            // with 0xDD (220) the MOVEs land inside the last ~16 lores pixels
-            // of the scanline still being drawn. Progressive keeps 0xDD.
-            auto hp_byte = is_lace ? "0xE3" : "0xDD";
+            auto hp_byte = is_lace ? "0xE3" : "0xE1";
+            if (zoned) out += "    int zi = 0;  // next depth zone switch\n";
             out += std::format("    for (int y = 1; y < {}; y++) {{\n", rows_in_field);
             if (options.copper_wait_h_only) {
                 // Experimental V-mask path. First WAIT anchors V to the
@@ -1587,18 +1754,29 @@ Result<std::string> generate_viewer(const bitplane::BitplaneData& planes,
                 out += std::format("        USHORT line = (y - 1) * {} + {};\n",
                                    vpos_step,
                                    vpos_first);
-                // Special case: at line==255 use 0xFFDF — this specific
-                // pattern activates the copper's "past 0xFF" state so
-                // subsequent WAITs with wrapped vp values (vp=256, 258 ...)
-                // match correctly.
-                out += std::format("        if (line == 255) {{\n"
-                                   "            *{0}++ = 0xFFDF;\n"
-                                   "        }} else {{\n"
-                                   "            *{0}++ = ((line & 0xFF) << 8) | {1};\n"
-                                   "        }}\n",
-                                   cl_var,
-                                   hp_byte);
+                // Keep the late horizontal position on line 255 too;
+                // substituting $FFDF would reopen the right-edge race.
+                out += std::format("        *{0}++ = ((line & 0xFF) << 8) | {1};\n",
+                                   cl_var, hp_byte);
                 out += std::format("        *{0}++ = 0xfffe;\n", cl_var);
+            }
+            if (zoned) {
+                out += std::format(
+                    "        if (zi < {0}_ZONE_SWITCHES && y == {1}_zone_row[zi]) {{\n"
+                    "            *{2}++ = offsetof(struct Custom, bplcon0); *{2}++ = {1}_zone_bplcon0[zi];\n"
+                    "            *{2}++ = offsetof(struct Custom, bpl1mod); *{2}++ = {1}_zone_mod[zi];\n"
+                    "            *{2}++ = offsetof(struct Custom, bpl2mod); *{2}++ = {1}_zone_mod[zi];\n"
+                    "            for (int r = {1}_zone_reload_first[zi]; r < {1}_zone_reload_first[zi + 1]; r++) {{\n"
+                    "                ULONG a = (ULONG){1}_planes + {1}_zone_reload_off[r];\n"
+                    "                UWORD reg = 0x00E0 + {1}_zone_reload_plane[r] * 4;  // BPLxPTH\n"
+                    "                *{2}++ = reg; *{2}++ = (UWORD)(a >> 16);\n"
+                    "                *{2}++ = reg + 2; *{2}++ = (UWORD)a;\n"
+                    "            }}\n"
+                    "            zi++;\n"
+                    "        }}\n",
+                    to_upper(sym),
+                    sym,
+                    cl_var);
             }
             emit_copper_changes(cl_var, row_expr, aga_banks);
             out += "    }\n\n";
@@ -1629,11 +1807,11 @@ Result<std::string> generate_viewer(const bitplane::BitplaneData& planes,
         auto field_lines = is_lace ? static_cast<int>(height / 2) : static_cast<int>(height);
         auto last_line = vpos_y_start + field_lines * vpos_stride;
         auto loop_max_line = vpos_y_start + (field_lines - 2) * vpos_stride;
-        // If the per-line loop already emitted 0xFFDF (loop reached line=255
+        // If the per-line loop already waited past line 255 (loop reached line=255
         // or beyond), don't emit it here — a second 0xFFDF after we've passed
         // vp=0xFF hangs forever. Only emit in blank-below when loop is too
         // short to have emitted one itself.
-        // The strips path bakes its own 0xFFDF marker into the static table
+        // The strips path bakes its own late line-255 wait into the static table
         // when needed (see strips_copper_list emitter); suppress here so we
         // don't double-emit and hang past vp=0xFF.
         // copper_wait_h_only mode skips the per-line wrap marker entirely
@@ -1839,11 +2017,7 @@ Result<std::string> generate_viewer(const bitplane::BitplaneData& planes,
                                    y_start);
             } else {
                 out += std::format("        USHORT line = (y - 1) + {};\n", y_start);
-                out += "        if (line == 255) {\n";
-                out += "            *cl2++ = 0xFFDF;  // activates past-0xFF state\n";
-                out += "        } else {\n";
-                out += "            *cl2++ = ((line & 0xFF) << 8) | 0xE3;\n";
-                out += "        }\n";
+                out += "        *cl2++ = ((line & 0xFF) << 8) | 0xE3;\n";
                 out += "        *cl2++ = 0xfffe;\n";
             }
             emit_copper_changes("cl2", "(y * 2 + 1)", aga_banks);

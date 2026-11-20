@@ -1,0 +1,72 @@
+[
+  {
+    "mode": "c64-hires",
+    "count": 23,
+    "before": -46.80347826086957,
+    "after": -46.729565217391304,
+    "delta": 0.07391304347826377,
+    "wins": 2,
+    "ties": 21,
+    "losses": 0
+  },
+  {
+    "mode": "c64-multicolor",
+    "count": 23,
+    "before": -24.175652173913043,
+    "after": -19.99608695652174,
+    "delta": 4.179565217391303,
+    "wins": 13,
+    "ties": 10,
+    "losses": 0
+  },
+  {
+    "mode": "c64-fli",
+    "count": 23,
+    "before": -56.08782608695652,
+    "after": -54.576521739130435,
+    "delta": 1.5113043478260835,
+    "wins": 21,
+    "ties": 2,
+    "losses": 0
+  },
+  {
+    "mode": "c64-afli",
+    "count": 23,
+    "before": -61.775217391304345,
+    "after": -58.59043478260869,
+    "delta": 3.184782608695656,
+    "wins": 22,
+    "ties": 1,
+    "losses": 0
+  },
+  {
+    "mode": "c64-petscii",
+    "count": 23,
+    "before": -57.67260869565217,
+    "after": -56.76739130434783,
+    "delta": 0.9052173913043404,
+    "wins": 6,
+    "ties": 17,
+    "losses": 0
+  },
+  {
+    "mode": "c64-charset-hires",
+    "count": 23,
+    "before": -61.23173913043478,
+    "after": -60.97043478260869,
+    "delta": 0.2613043478260906,
+    "wins": 10,
+    "ties": 13,
+    "losses": 0
+  },
+  {
+    "mode": "c64-charset-multicolor",
+    "count": 23,
+    "before": -48.186521739130434,
+    "after": -47.17434782608696,
+    "delta": 1.0121739130434761,
+    "wins": 15,
+    "ties": 8,
+    "losses": 0
+  }
+]

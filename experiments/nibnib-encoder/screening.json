@@ -1,0 +1,161 @@
+{
+  "note": "Seed ablation; full 256-state candidates; timings are not an isolated speed benchmark. Warm control starts from old Best. Scores do not include the final new refinement.",
+  "cases": [
+    {
+      "case": "macaw160",
+      "variants": [
+        {
+          "variant": "baseline",
+          "s2": 52.9078
+        },
+        {
+          "variant": "diverse-target",
+          "s2": 56.6541,
+          "seconds": 1.14451
+        },
+        {
+          "variant": "diverse-source",
+          "s2": 56.8636,
+          "seconds": 1.13374
+        },
+        {
+          "variant": "gentle-target",
+          "s2": 52.1734,
+          "seconds": 1.05686
+        },
+        {
+          "variant": "gentle-source",
+          "s2": 55.3488,
+          "seconds": 1.06324
+        },
+        {
+          "variant": "warm-target",
+          "s2": 54.6138,
+          "seconds": 1.02888
+        },
+        {
+          "variant": "warm-source",
+          "s2": 52.7012,
+          "seconds": 1.04447
+        }
+      ]
+    },
+    {
+      "case": "logo160",
+      "variants": [
+        {
+          "variant": "baseline",
+          "s2": 40.3172
+        },
+        {
+          "variant": "diverse-target",
+          "s2": 38.0433,
+          "seconds": 1.26876
+        },
+        {
+          "variant": "diverse-source",
+          "s2": 40.0351,
+          "seconds": 1.31603
+        },
+        {
+          "variant": "gentle-target",
+          "s2": 38.9581,
+          "seconds": 1.30133
+        },
+        {
+          "variant": "gentle-source",
+          "s2": 38.8594,
+          "seconds": 1.26923
+        },
+        {
+          "variant": "warm-target",
+          "s2": 39.0249,
+          "seconds": 1.15667
+        },
+        {
+          "variant": "warm-source",
+          "s2": 40.3172,
+          "seconds": 1.16781
+        }
+      ]
+    },
+    {
+      "case": "macaw320",
+      "variants": [
+        {
+          "variant": "baseline",
+          "s2": 77.6621
+        },
+        {
+          "variant": "diverse-target",
+          "s2": 78.5059,
+          "seconds": 4.43599
+        },
+        {
+          "variant": "diverse-source",
+          "s2": 79.2203,
+          "seconds": 4.60707
+        },
+        {
+          "variant": "gentle-target",
+          "s2": 77.5646,
+          "seconds": 4.32302
+        },
+        {
+          "variant": "gentle-source",
+          "s2": 76.6408,
+          "seconds": 4.42359
+        },
+        {
+          "variant": "warm-target",
+          "s2": 75.9368,
+          "seconds": 4.5041
+        },
+        {
+          "variant": "warm-source",
+          "s2": 77.227,
+          "seconds": 4.74465
+        }
+      ]
+    },
+    {
+      "case": "makena320",
+      "variants": [
+        {
+          "variant": "baseline",
+          "s2": 83.4458
+        },
+        {
+          "variant": "diverse-target",
+          "s2": 84.16,
+          "seconds": 4.32149
+        },
+        {
+          "variant": "diverse-source",
+          "s2": 84.5337,
+          "seconds": 4.1956
+        },
+        {
+          "variant": "gentle-target",
+          "s2": 81.8279,
+          "seconds": 3.56789
+        },
+        {
+          "variant": "gentle-source",
+          "s2": 81.4204,
+          "seconds": 3.63251
+        },
+        {
+          "variant": "warm-target",
+          "s2": 83.551,
+          "seconds": 3.67466
+        },
+        {
+          "variant": "warm-source",
+          "s2": 83.4458,
+          "seconds": 3.65467
+        }
+      ]
+    }
+  ]
+}

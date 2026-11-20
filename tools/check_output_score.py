@@ -13,6 +13,10 @@ per-mode quality number we want to gate on.
 We assert score >= threshold (one-sided): regressions fail; tools that
 get smarter and score higher don't trip the test.
 
+--not-below-without NAME also encodes without the forwarded flag --NAME
+and fails when the score is below that run's (NAME=best: --best must
+never score below the plain encode).
+
 Usage:
     check_output_score.py --cli ./png2amiga --in src.png --out /tmp/x.iff \\
         --score-min 70.0 -- --mode ham6
@@ -30,6 +34,39 @@ import tempfile
 _S2_RE = re.compile(r"S2:\s*(-?\d+(?:\.\d+)?)")
 
 
+def encode(cli: str, src: str, out_name: str,
+           forward: list[str]) -> tuple[float | None, list[str]]:
+    """Run one encode; return (S2, cmd). S2 is None on a reported failure."""
+    # Use a temp-dir so concurrent ctests don't fight over the path.
+    with tempfile.TemporaryDirectory() as td:
+        out_path = os.path.join(td, os.path.basename(out_name))
+        cmd = [cli, *forward, src, out_path]
+        try:
+            r = subprocess.run(cmd, capture_output=True, text=True, check=False)
+        except FileNotFoundError as e:
+            print(f"FAIL - cli not found: {e}", file=sys.stderr)
+            return None, cmd
+        if r.returncode != 0:
+            print(f"FAIL - png2amiga exited {r.returncode}", file=sys.stderr)
+            print(r.stderr, file=sys.stderr)
+            return None, cmd
+        if not os.path.exists(out_path):
+            print(f"FAIL - output file not produced: {out_path}",
+                  file=sys.stderr)
+            return None, cmd
+        size = os.path.getsize(out_path)
+        if size == 0:
+            print(f"FAIL - output file empty: {out_path}", file=sys.stderr)
+            return None, cmd
+
+    matches = _S2_RE.findall(r.stdout)
+    if not matches:
+        print("FAIL - no 'S2:' line in stdout", file=sys.stderr)
+        print(r.stdout, file=sys.stderr)
+        return None, cmd
+    return float(matches[-1]), cmd
+
+
 def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--cli", required=True, help="path to png2amiga binary")
@@ -40,6 +77,9 @@ def main() -> int:
                     help="minimum SSIMULACRA2 score for PASS")
     ap.add_argument("--print-score", action="store_true",
                     help="don't compare; just print the parsed score")
+    ap.add_argument("--not-below-without", dest="without", default=None,
+                    help="flag name (no dashes) dropped for a reference run "
+                         "the score must not fall below")
     ap.add_argument("forward", nargs=argparse.REMAINDER,
                     help="args to forward to png2amiga (after --)")
     args = ap.parse_args()
@@ -48,34 +88,9 @@ def main() -> int:
     if forward and forward[0] == "--":
         forward = forward[1:]
 
-    # Use a temp-dir so concurrent ctests don't fight over the path.
-    with tempfile.TemporaryDirectory() as td:
-        out_path = os.path.join(td, os.path.basename(args.out))
-        cmd = [args.cli, *forward, args.src, out_path]
-        try:
-            r = subprocess.run(cmd, capture_output=True, text=True, check=False)
-        except FileNotFoundError as e:
-            print(f"FAIL - cli not found: {e}", file=sys.stderr)
-            return 2
-        if r.returncode != 0:
-            print(f"FAIL - png2amiga exited {r.returncode}", file=sys.stderr)
-            print(r.stderr, file=sys.stderr)
-            return 1
-        if not os.path.exists(out_path):
-            print(f"FAIL - output file not produced: {out_path}",
-                  file=sys.stderr)
-            return 1
-        size = os.path.getsize(out_path)
-        if size == 0:
-            print(f"FAIL - output file empty: {out_path}", file=sys.stderr)
-            return 1
-
-    matches = _S2_RE.findall(r.stdout)
-    if not matches:
-        print("FAIL - no 'S2:' line in stdout", file=sys.stderr)
-        print(r.stdout, file=sys.stderr)
+    score, cmd = encode(args.cli, args.src, args.out, forward)
+    if score is None:
         return 1
-    score = float(matches[-1])
 
     if args.print_score:
         print(f"{score:.4f}")
@@ -92,6 +107,19 @@ def main() -> int:
         return 1
     print(f"PASS - S2 {score:.4f} >= {args.score_min:.4f}  "
           f"({os.path.basename(args.out)})")
+
+    if args.without:
+        flag = "--" + args.without
+        ref, _ = encode(args.cli, args.src, args.out,
+                        [a for a in forward if a != flag])
+        if ref is None:
+            return 1
+        if score < ref:
+            print(f"FAIL - S2 {score:.4f} < {ref:.4f} without {flag}",
+                  file=sys.stderr)
+            print(f"  cmd: {' '.join(cmd)}", file=sys.stderr)
+            return 1
+        print(f"PASS - S2 {score:.4f} >= {ref:.4f} without {flag}")
     return 0
 
 

@@ -1,0 +1,15 @@
+{
+  "gallery": "/Users/turo/png2amiga/build/cell-refine-extended/final/comparison.html",
+  "command": "python3 tools/bench_cell_refine.py --out build/cell-refine-extended/final --resume",
+  "cases": 391,
+  "baseline": "Current encoder with shared C64 multicolor background and gray FLI/AFLI edge fixes; not the previous invalid preview.",
+  "vice": "28 full-frame comparisons: seven modes \u00d7 default/refined; PAL c64/maui and c64c/grungy. Charset uses native-data test loader; other modes use exported PRG.",
+  "notes": "screen/lab/pass4.json are preliminary experiments, superseded by results.json.",
+  "source_sha256": {
+    "src/cell_graph_refine.hpp": "cf8d5116e1ea6408afc99115e7c7c97d349b39ad3e233e231db4e0c3223678ee",
+    "src/cell_refine.hpp": "dd5fe8b1d83afba0688bc3bcf2a141555073238ffca250fdd7ee0bb7746d6ee1",
+    "src/c64.cpp": "338a9ec027cbe663dcefa276f3d23d7c1f449bc86dd606784335afd8eb393ad7",
+    "src/ted.cpp": "ec02522d1258ced259c6ab21a189ffecb233b98f3d00bfb88395d80208d7eef5",
+    "src/api.cpp": "a4c701b8379d59a06da24ce5f19902bf44e2b62e3d17735389c6e5677ccfe7df"
+  }
+}

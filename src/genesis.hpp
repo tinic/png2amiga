@@ -80,6 +80,12 @@ struct GenesisResult {
 // caller fills them via the dither driver.
 GenesisResult cluster_tiles_into_palettes(const Image& image, float palette_diversity);
 
+// The tile → palette assignment step on its own (OKLab centroid k-means
+// with farthest-point seeding), for any palette count. Row-major over
+// the 8×8 tile grid, values in [0, palette_count). Also used by the
+// Master System / Game Gear encoder (2 palettes).
+std::vector<std::uint8_t> cluster_tiles(const Image& image, std::size_t palette_count);
+
 // Same as above + per-tile shadow flag (for S/H modes). After base
 // palettes are picked, each tile chooses normal vs shadowed based on
 // which gives lower nearest-neighbor OKLab² error against the assigned

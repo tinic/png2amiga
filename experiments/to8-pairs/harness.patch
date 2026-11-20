@@ -1,0 +1,19 @@
+--- a/tools/api_pipeline_smoke.cpp
++++ b/tools/api_pipeline_smoke.cpp
+@@ -27,6 +27,7 @@
+ #include "check_ordered_refine.hpp"
+ #include "check_palette_pairs.hpp"
+ #include "check_ehb_pairs.hpp"
++#include "../experiments/to8-pairs/experiment.hpp"
+ #include "ham.hpp"
+ #include "png_io.hpp"
+ #include <nlohmann/json.hpp>
+@@ -118,6 +119,8 @@
+ }  // namespace
+ 
+ int main(int argc, char** argv) {
++    if (argc == 6 && std::strcmp(argv[1], "--experiment-to8-pairs") == 0)
++        return to8_pair_experiment::run("to8",argv[2],argv[3],argv[4],std::string_view(argv[5]) == "1");
+     if (argc == 3 && std::strcmp(argv[1], "--check-ehb-pairs") == 0)
+         return check_ehb_pairs(argv[2]);
+     if (argc == 3 && std::strcmp(argv[1], "--check-palette-pairs") == 0)

@@ -1,0 +1,60 @@
+{
+  "settings": {
+    "dither": "floyd-steinberg",
+    "strength": 0.76,
+    "error_clamp": 0.12,
+    "resize": "Lanczos-3"
+  },
+  "note": "Old complete Best versus new screened diverse-seed Best. Pixel-exact independent decoding checked. One sequential native runtime comparison is included; not a general speed benchmark.",
+  "results": [
+    {
+      "s2": 58.6882,
+      "bytes": 9428,
+      "seconds": 7.96371,
+      "pair_rows": 0,
+      "image": "macaw.jpg",
+      "width": 160,
+      "height": 100,
+      "before_s2": 52.9078
+    },
+    {
+      "s2": 40.3172,
+      "bytes": 9428,
+      "seconds": 8.00579,
+      "pair_rows": 0,
+      "image": "logo.png",
+      "width": 160,
+      "height": 100,
+      "before_s2": 40.3172
+    },
+    {
+      "s2": 80.093,
+      "bytes": 33828,
+      "seconds": 31.0554,
+      "pair_rows": 0,
+      "image": "macaw.jpg",
+      "width": 320,
+      "height": 200,
+      "before_s2": 77.6621
+    },
+    {
+      "s2": 84.9201,
+      "bytes": 33828,
+      "seconds": 28.2832,
+      "pair_rows": 0,
+      "image": "makena.jpg",
+      "width": 320,
+      "height": 200,
+      "before_s2": 83.4458
+    }
+  ],
+  "runtime_comparison": {
+    "image": "macaw.jpg",
+    "width": 320,
+    "height": 200,
+    "old_seconds": 27.7781,
+    "new_seconds": 31.0554,
+    "ratio": 1.118,
+    "note": "Sequential native runs on this machine; not a general speed benchmark."
+  }
+}

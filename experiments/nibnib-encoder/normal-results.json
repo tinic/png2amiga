@@ -1,0 +1,163 @@
+{
+  "settings": {
+    "dither": "floyd-steinberg",
+    "strength": 0.76,
+    "error_clamp": 0.12,
+    "resize": "Lanczos-3"
+  },
+  "note": "Sequential native runs; independent decoding checked for every output.",
+  "results": [
+    {
+      "image": "macaw.jpg",
+      "width": 160,
+      "height": 100,
+      "before": {
+        "s2": 49.7072,
+        "bytes": 9428,
+        "seconds": 1.14249,
+        "pair_rows": 0
+      },
+      "after": {
+        "s2": 55.7122,
+        "bytes": 9428,
+        "seconds": 0.562743,
+        "pair_rows": 0
+      },
+      "s2_gain": 6.005,
+      "speedup": 2.03
+    },
+    {
+      "image": "logo.png",
+      "width": 160,
+      "height": 100,
+      "before": {
+        "s2": 32.8327,
+        "bytes": 9428,
+        "seconds": 1.14214,
+        "pair_rows": 0
+      },
+      "after": {
+        "s2": 39.5971,
+        "bytes": 9428,
+        "seconds": 0.619783,
+        "pair_rows": 0
+      },
+      "s2_gain": 6.7644,
+      "speedup": 1.843
+    },
+    {
+      "image": "macaw.jpg",
+      "width": 320,
+      "height": 200,
+      "before": {
+        "s2": 75.2439,
+        "bytes": 33828,
+        "seconds": 3.89567,
+        "pair_rows": 0
+      },
+      "after": {
+        "s2": 78.9555,
+        "bytes": 33828,
+        "seconds": 2.29947,
+        "pair_rows": 0
+      },
+      "s2_gain": 3.7116,
+      "speedup": 1.694
+    },
+    {
+      "image": "makena.jpg",
+      "width": 320,
+      "height": 200,
+      "before": {
+        "s2": 81.6563,
+        "bytes": 33828,
+        "seconds": 3.23471,
+        "pair_rows": 0
+      },
+      "after": {
+        "s2": 84.247,
+        "bytes": 33828,
+        "seconds": 2.11512,
+        "pair_rows": 0
+      },
+      "s2_gain": 2.5907,
+      "speedup": 1.529
+    },
+    {
+      "image": "jungle.webp",
+      "width": 320,
+      "height": 200,
+      "before": {
+        "s2": 77.4295,
+        "bytes": 33828,
+        "seconds": 3.3253,
+        "pair_rows": 0
+      },
+      "after": {
+        "s2": 79.5071,
+        "bytes": 33828,
+        "seconds": 2.15497,
+        "pair_rows": 0
+      },
+      "s2_gain": 2.0776,
+      "speedup": 1.543
+    },
+    {
+      "image": "shooter.png",
+      "width": 160,
+      "height": 100,
+      "before": {
+        "s2": 50.0358,
+        "bytes": 9428,
+        "seconds": 1.16486,
+        "pair_rows": 0
+      },
+      "after": {
+        "s2": 50.6576,
+        "bytes": 9428,
+        "seconds": 0.562532,
+        "pair_rows": 0
+      },
+      "s2_gain": 0.6218,
+      "speedup": 2.071
+    },
+    {
+      "image": "brick.png",
+      "width": 160,
+      "height": 100,
+      "before": {
+        "s2": 85.1182,
+        "bytes": 9428,
+        "seconds": 0.479252,
+        "pair_rows": 0
+      },
+      "after": {
+        "s2": 87.4673,
+        "bytes": 9428,
+        "seconds": 0.286048,
+        "pair_rows": 0
+      },
+      "s2_gain": 2.3491,
+      "speedup": 1.675
+    },
+    {
+      "image": "gradient.png",
+      "width": 96,
+      "height": 72,
+      "before": {
+        "s2": 83.6424,
+        "bytes": 4772,
+        "seconds": 0.042884,
+        "pair_rows": 0
+      },
+      "after": {
+        "s2": 88.3223,
+        "bytes": 4772,
+        "seconds": 0.0266961,
+        "pair_rows": 0
+      },
+      "s2_gain": 4.6799,
+      "speedup": 1.606
+    }
+  ]
+}

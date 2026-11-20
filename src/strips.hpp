@@ -6,6 +6,7 @@
 #include "ham.hpp"
 #include "types.hpp"
 
+#include <array>
 #include <cstddef>
 #include <cstdint>
 #include <functional>
@@ -63,6 +64,13 @@ struct ScapSlotTable {
     int line_gate_hpos{};    // WAIT(hp=this, vp=N) opens the strips chain
     int end_of_line_hpos{};  // WAIT(hp=this, vp=N) closes the chain
     std::vector<ScapSlot> slots;
+    // false: the chain always runs past the end of its line, so no
+    // end-of-line WAIT is emitted (one on line 255 would never match).
+    bool end_of_line_wait{true};
+    // Lores pixels the viewer moves the bitplanes left (one extra fetch
+    // word + BPLCON1 delay 16-shift, DIW moved with them) so copper MOVE
+    // landings fall exactly on the slot grid. 0 = standard placement.
+    int display_shift_px{};
 };
 
 // kStrips6bplOcs — OCS DPF, 6 bitplanes, lores 320 px display.
@@ -97,7 +105,7 @@ inline const ScapSlotTable kStrips6bplOcs{
                               // is enough for the extra preload.
                               // ADJUST via --strips-debug if hw
                               // landings differ.
-    /*end_of_line_hpos=*/0xDD,
+    /*end_of_line_hpos=*/0xE1,
     /*slots=*/
     {
         // pixel_x — first pixel of the strip this slot's MOVE applies to.
@@ -142,22 +150,22 @@ inline const ScapSlotTable kStrips6bplOcs{
 //
 // Same DMA shape as 6-plane DPF (6 plane fetches per 16 lores px) but
 // EHB has no PF2OF / DBLPF combiner machinery, so the actual MOVE
-// landing positions on the bus differ from DPF in subtle ways. This
-// table starts at the clean naive 16-px grid (8, 24, 40, ..., 296) —
-// no per-slot offset corrections yet. Calibrate empirically with
-// --strips-debug + the stripe tuner: each visible black/white transition
-// position is the actual MOVE landing for that slot. Adjust below.
+// landing positions on the bus differ from DPF in subtle ways.
+//
+// Calibrated on Copperline (A500 OCS, 68000) with --strips-debug, where
+// each stripe edge is one MOVE landing: MOVE k lands at x = 16k + 7,
+// one pixel before the naive 16k + 8 grid. Same landings as HAM6.
 constexpr int kEHB = -1;
 inline const ScapSlotTable kStrips6bplEhb{
     /*total_planes=*/6,
     /*line_gate_hpos=*/0x3C,
-    /*end_of_line_hpos=*/0xDD,
+    /*end_of_line_hpos=*/0xE1,  // Keep next-row resets past the visible right edge.
     /*slots=*/
     {
-        {8 - kEHB},   {24 - kEHB},  {40 - kEHB},  {56 - kEHB},  {72 - kEHB},
-        {88 - kEHB},  {104 - kEHB}, {120 - kEHB}, {136 - kEHB}, {152 - kEHB},
-        {168 - kEHB}, {184 - kEHB}, {200 - kEHB}, {216 - kEHB}, {232 - kEHB},
-        {248 - kEHB}, {264 - kEHB}, {280 - kEHB}, {296 - kEHB},
+        {8 + kEHB},   {24 + kEHB},  {40 + kEHB},  {56 + kEHB},  {72 + kEHB},
+        {88 + kEHB},  {104 + kEHB}, {120 + kEHB}, {136 + kEHB}, {152 + kEHB},
+        {168 + kEHB}, {184 + kEHB}, {200 + kEHB}, {216 + kEHB}, {232 + kEHB},
+        {248 + kEHB}, {264 + kEHB}, {280 + kEHB}, {296 + kEHB},
     }};
 
 // kStrips6bplHam6 — OCS HAM6, 6 bitplanes, lores 320 px display.
@@ -173,7 +181,7 @@ constexpr int kHAM6 = -1;
 inline const ScapSlotTable kStrips6bplHam6{
     /*total_planes=*/6,
     /*line_gate_hpos=*/0x3C,
-    /*end_of_line_hpos=*/0xDD,
+    /*end_of_line_hpos=*/0xE1,
     /*slots=*/
     {
         {8 + kHAM6},   {24 + kHAM6},  {40 + kHAM6},  {56 + kHAM6},  {72 + kHAM6},
@@ -182,16 +190,87 @@ inline const ScapSlotTable kStrips6bplHam6{
         {248 + kHAM6}, {264 + kHAM6}, {280 + kHAM6}, {296 + kHAM6},
     }};
 
+// kStrips4bplLores — OCS lores, 1-4 bitplanes, 320 px display.
+//
+// With at most 4 lores planes, bitplane DMA uses only odd cycles, so the
+// copper gets every even cycle: one MOVE per 4 CCK = 8 lores px. The
+// plane count does not change the timing for 1-4 planes.
+//
+// Calibrated on Copperline (A500 OCS, 68000) with --strips-debug, where
+// each stripe edge is one MOVE landing. With standard bitplane placement,
+// MOVE k lands at x = 8k-13 / 8k-9 / 8k-5 / 8k-1 for gate 0x38 / 0x3A /
+// 0x3C / 0x3E: 4-px steps that never reach x = 8k. The viewer moves the
+// bitplanes 5 px left (display_shift_px), so gate 0x3C lands MOVE k at
+// exactly x = 8k: slot 0 at x=0, slot 39 at x=312, and the unlocked-
+// COLOR00 restore after it at x=320, the first right-border pixel.
+// Gate 0x3E with a 1-px shift gives the same grid, but there the restore
+// is the MOVE that crosses the line end and lands one copper cycle late
+// (x=324).
+//
+// The chain always runs past the end of its line, so there is no
+// end-of-line WAIT: on line 255 one (VP $FF) would be checked on line 256
+// (VP $00) and stall the copper for the rest of the frame.
+inline const ScapSlotTable kStrips4bplLores{
+    /*total_planes=*/4,
+    /*line_gate_hpos=*/0x3C,
+    /*end_of_line_hpos=*/0,
+    /*slots=*/
+    {
+        {0},   {8},   {16},  {24},  {32},  {40},  {48},  {56},  {64},  {72},
+        {80},  {88},  {96},  {104}, {112}, {120}, {128}, {136}, {144}, {152},
+        {160}, {168}, {176}, {184}, {192}, {200}, {208}, {216}, {224}, {232},
+        {240}, {248}, {256}, {264}, {272}, {280}, {288}, {296}, {304}, {312},
+    },
+    /*end_of_line_wait=*/false,
+    /*display_shift_px=*/5,
+};
+
+// Upper bound on slots per table; planner beam nodes size their per-slot
+// decision arrays from it.
+constexpr std::size_t kMaxStripsSlots = 48;
+
 // Deferred — populated when we run an AGA probe.
 inline const ScapSlotTable kStrips8bplAga{
     /*total_planes=*/8,
     /*line_gate_hpos=*/0x40,
-    /*end_of_line_hpos=*/0xDD,
+    /*end_of_line_hpos=*/0xE1,
     /*slots=*/{},
 };
 
 inline const ScapSlotTable& strips_table_for(int total_planes) {
     return (total_planes == 8) ? kStrips8bplAga : kStrips6bplOcs;
+}
+
+// Strips variant per (mode, dpf): slot table, copper-list label and the
+// CLI mode name. Single source for the encoder dispatch and every export.
+struct StripsVariant {
+    amiga::Mode mode;
+    bool dpf;
+    const ScapSlotTable* table;
+    std::string_view label;
+    std::string_view name;
+};
+
+inline const std::array<StripsVariant, 4> kStripsVariants{{
+    {amiga::Mode::lores, true, &kStrips6bplOcs, "strips_dpf_ocs", "OCS DPF"},
+    {amiga::Mode::lores, false, &kStrips4bplLores, "strips_lores_ocs", "OCS lores"},
+    {amiga::Mode::ehb, false, &kStrips6bplEhb, "strips_ehb_ocs", "OCS EHB 6bpp"},
+    {amiga::Mode::ham6, false, &kStrips6bplHam6, "strips_ham6_ocs", "OCS HAM6"},
+}};
+
+// nullptr when (mode, dpf) has no strips variant. dpf only selects
+// between the two lores rows.
+inline const StripsVariant* strips_variant_for(amiga::Mode mode, bool dpf) {
+    const bool lores_dpf = dpf && mode == amiga::Mode::lores;
+    for (const auto& v : kStripsVariants)
+        if (v.mode == mode && v.dpf == lores_dpf) return &v;
+    return nullptr;
+}
+
+// Lores strips at depth 1 has two colours; reserving COLOR00 for black
+// would leave one, so the colour-0 lock is forced off.
+constexpr bool strips_forces_color0_unlocked(amiga::Mode mode, bool dpf, std::size_t depth) {
+    return mode == amiga::Mode::lores && !dpf && depth == 1;
 }
 
 // ---------------------------------------------------------------------------
@@ -322,6 +401,40 @@ Result<ScapResult> encode_strips_dpf_ocs(
     bool sliced_beam = false);
 
 // ---------------------------------------------------------------------------
+// strips for plain OCS lores, 1-4 bitplanes (2-16 colors, COLOR00..).
+//
+// Same planner as encode_strips_dpf_ocs, on the kStrips4bplLores 8-px
+// grid and the plain register layout (index k = COLORk). reserved_slots /
+// locked_slots use palette indices 0..2^depth-1 directly. debug_overlay
+// emits the stripe calibration pattern instead of an encode.
+//
+// Without lock_color0, COLOR00 carries an image colour but must stay black
+// outside the picture (it is the border colour): hblank never writes it,
+// slot 0 (x=0) loads it, a MOVE after slot 39 (x=320) restores black, and
+// the frame-start palette has COLOR00 black. Callers force lock_color0
+// off at depth 1 (strips_forces_color0_unlocked).
+// ---------------------------------------------------------------------------
+Result<ScapResult> encode_strips_lores_ocs(
+    const Image& image,
+    int width,
+    int height,
+    int depth,
+    bool lock_color0 = true,
+    const dither::Settings& dither_settings = {},
+    bool debug_overlay = false,
+    std::size_t copper_changes_override = 0,
+    int palette_diversity = 0,
+    std::function<void(float, std::string_view)> on_progress = {},
+    bool enable_best = false,
+    int sliced_spread_radius = -1,
+    float sliced_spread_decay = -1.0f,
+    bool sliced_vertical_dither = false,
+    std::span<const Color3f> external_palette = {},
+    const std::vector<std::pair<std::size_t, Color3f>>& reserved_slots = {},
+    const std::vector<std::pair<std::size_t, Color3f>>& locked_slots = {},
+    bool sliced_beam = false);
+
+// ---------------------------------------------------------------------------
 // strips for EHB (Extra Half-Brite, 6 bitplanes, 32 base + 32 hardware-derived
 // half-brite colors).
 //
@@ -377,7 +490,10 @@ Result<ScapResult> encode_strips_ehb_ocs(
 // Output: 6-plane bitplane data, 16-entry base palette, per-line strips
 // MOVE tables, and a rendered preview Image.
 //
-// v0: single greedy pass, no joint refinement, no best wiring.
+// Rows are planned in order (13-write hblank restore). Each slot takes the
+// swap with the lowest row HAM-DP error from a HAM-aware candidate
+// pre-screen; written colours are then refit over their register
+// lifetimes. --best sweeps jitter seeds, dither strengths and diversities.
 // ---------------------------------------------------------------------------
 Result<ScapResult> encode_strips_ham6_ocs(
     const Image& image,

@@ -1,8 +1,10 @@
 #include "api.hpp"
+#include "thomson_k7.hpp"
 #include "amiga.hpp"
 #include "bitplane.hpp"
 #include "cga_composite.hpp"
 #include "cga_text.hpp"
+#include "tandy.hpp"
 #include "cheader.hpp"
 #include "cheader_dos_c.hpp"
 #include "color_space.hpp"
@@ -17,9 +19,18 @@
 #include "cheader_genesis.hpp"
 #include "genesis.hpp"
 #include "c64.hpp"
+#include "cpc.hpp"
+#include "sms.hpp"
 #include "c64_prg.hpp"
+#include "thomson.hpp"
+#include "msx.hpp"
+#include "nibnib.hpp"
+#include "retro.hpp"
+#include "thomson_palette_refine.hpp"
+#include "ted.hpp"
 #include "snes_io.hpp"
 #include "palette.hpp"
+#include "palette_pairs.hpp"
 #include "palette_io.hpp"
 #include "palette_locks.hpp"
 #include "palette_search.hpp"
@@ -32,7 +43,6 @@
 #include "png_io.hpp"
 #include "preprocess.hpp"
 #include "quantize.hpp"
-#include "quantize_metal.hpp"
 #include "scale.hpp"
 #include "types.hpp"
 
@@ -43,6 +53,7 @@
 
 #include <algorithm>
 #include <array>
+#include <atomic>
 #include <cmath>
 #include <cstdint>
 #include <format>
@@ -91,6 +102,11 @@ amiga::Mode parse_mode(const std::string& s) {
     if (s == "vga-10h") return amiga::Mode::vga_10h;
     if (s == "vga-12h") return amiga::Mode::vga_12h;
     if (s == "vga-13h") return amiga::Mode::vga_13h;
+    if (s == "tandy-160") return amiga::Mode::tandy_160;
+    if (s == "tandy-320") return amiga::Mode::tandy_320;
+    if (s == "tandy-640") return amiga::Mode::tandy_640;
+    if (s == "cga-160x200") return amiga::Mode::cga_160x200;
+    if (s == "cga-160" || s == "cga-160x100") return amiga::Mode::cga_160;
     if (s == "cga-320") return amiga::Mode::cga_320;
     if (s == "cga-640") return amiga::Mode::cga_640;
     if (s == "cga-composite" || s == "cga-composite-hires")
@@ -103,6 +119,9 @@ amiga::Mode parse_mode(const std::string& s) {
     if (s == "cga-text40x100") return amiga::Mode::cga_text40x100;
     if (s == "snes-mode7-256") return amiga::Mode::snes_mode7_256;
     if (s == "snes-mode7-direct") return amiga::Mode::snes_mode7_direct;
+    if (s == "gba-mode3") return amiga::Mode::gba_mode3;
+    if (s == "gba-mode4") return amiga::Mode::gba_mode4;
+    if (s == "gba-mode5") return amiga::Mode::gba_mode5;
     if (s == "genesis-h32") return amiga::Mode::genesis_h32;
     if (s == "genesis-h40") return amiga::Mode::genesis_h40;
     if (s == "genesis-h32-sh") return amiga::Mode::genesis_h32_sh;
@@ -117,6 +136,30 @@ amiga::Mode parse_mode(const std::string& s) {
     if (s == "etc2" || s == "etc2-rgb" || s == "etc2-rgb8") return amiga::Mode::etc2;
     if (s == "bc1" || s == "dxt1" || s == "bc1-rgb") return amiga::Mode::bc1;
     if (s == "bc7" || s == "bc7-rgba") return amiga::Mode::bc7;
+    if (s == "zx-spectrum") return amiga::Mode::zx_spectrum;
+    if (s == "stf-spectrum512") return amiga::Mode::stf_spectrum512;
+    if (s == "ste-spectrum4096") return amiga::Mode::ste_spectrum4096;
+    if (s == "msx1-screen2") return amiga::Mode::msx1_screen2;
+    if (s == "msx2-screen5") return amiga::Mode::msx2_screen5;
+    if (s == "msx2-screen6") return amiga::Mode::msx2_screen6;
+    if (s == "msx2-screen7") return amiga::Mode::msx2_screen7;
+    if (s == "msx2-screen8") return amiga::Mode::msx2_screen8;
+    if (s == "thomson-to7-320x16") return amiga::Mode::thomson_to7_320x16;
+    if (s == "thomson-to8-320x16") return amiga::Mode::thomson_to8_320x16;
+    if (s == "thomson-to8-160x16") return amiga::Mode::thomson_to8_160x16;
+    if (s == "thomson-to8-320x4") return amiga::Mode::thomson_to8_320x4;
+    if (s == "thomson-to8-640x2") return amiga::Mode::thomson_to8_640x2;
+    if (s == "ted-hires") return amiga::Mode::ted_hires;
+    if (s == "ted-multicolor") return amiga::Mode::ted_multicolor;
+    if (s == "sms-mode4") return amiga::Mode::sms_mode4;
+    if (s == "gg-mode4") return amiga::Mode::gg_mode4;
+    if (s == "cpc-mode0") return amiga::Mode::cpc_mode0;
+    if (s == "cpc-mode1") return amiga::Mode::cpc_mode1;
+    if (s == "cpc-mode2") return amiga::Mode::cpc_mode2;
+    if (s == "cpc-plus-mode0") return amiga::Mode::cpc_plus_mode0;
+    if (s == "cpc-plus-mode1") return amiga::Mode::cpc_plus_mode1;
+    if (s == "cpc-plus-mode2") return amiga::Mode::cpc_plus_mode2;
+    if (s == "nibnib") return amiga::Mode::nibnib;
     return amiga::Mode::lores;
 }
 
@@ -450,7 +493,9 @@ Result<Image> load_and_preprocess(const std::uint8_t* input_data,
     if (image.width() != target_w || image.height() != target_h) {
         // Interlace needs even height. If only 1 row short, pad instead of
         // resampling the entire image (avoids blur from bicubic).
-        if (image.width() == target_w && target_h == image.height() + 1) {
+        if ((amiga::is_cga_pixels(parse_mode(options.mode)) || amiga::is_tandy(parse_mode(options.mode)))) {
+            image = scale::nearest(image, target_w, target_h);
+        } else if (image.width() == target_w && target_h == image.height() + 1) {
             Image padded(target_w, target_h);
             for (std::size_t y = 0; y < image.height(); ++y)
                 for (std::size_t x = 0; x < target_w; ++x)
@@ -513,6 +558,37 @@ TargetDims compute_target_dims(std::size_t src_w,
     bool interlace = options.interlace || params.is_interlaced;
     if (options.interlace && !params.is_interlaced) par *= 2.0;
 
+    if (amiga::is_cga_pixels(mode)) return {160, params.screen_height};
+
+    // nibnib: free size, square pixels, like lores but without the PAR
+    // terms. Default = screen_width (320), never upscaled; the height
+    // follows the source aspect. Pixel pairs need an even width, so a
+    // derived odd width rounds down (an explicit odd --width is rejected
+    // in run_pipeline_core, as the CLI does).
+    if (amiga::is_nibnib(mode)) {
+        bool nw = options.width > 0, nh = options.height > 0;
+        std::size_t w, h;
+        if (nw && nh) {
+            w = static_cast<std::size_t>(options.width);
+            h = static_cast<std::size_t>(options.height);
+        } else if (nw) {
+            w = static_cast<std::size_t>(options.width);
+            h = static_cast<std::size_t>(std::lround(static_cast<double>(w) / src_aspect));
+        } else if (nh) {
+            h = static_cast<std::size_t>(options.height);
+            w = static_cast<std::size_t>(std::lround(static_cast<double>(h) * src_aspect));
+        } else {
+            w = std::min(mode_w, src_w);
+            h = static_cast<std::size_t>(std::lround(static_cast<double>(w) / src_aspect));
+        }
+        if (w % 2 != 0 && !nw) w = std::max<std::size_t>(2, w - 1);
+        return {w, std::max<std::size_t>(1, h)};
+    }
+
+    // Authored native Tandy pixel art must not be rescaled for display PAR.
+    if (amiga::is_tandy(mode) && src_w == params.screen_width && src_h == params.screen_height)
+        return {src_w, src_h};
+
     bool have_w = options.width > 0;
     bool have_h = options.height > 0;
 
@@ -529,8 +605,10 @@ TargetDims compute_target_dims(std::size_t src_w,
     // encoder receives those (rounded up to 8×8 / 4×8); otherwise the
     // fixed-buf default still applies.
     bool is_fixed_buf = amiga::is_atari(mode) || amiga::is_vga(mode) || amiga::is_ega(mode) ||
-                        amiga::is_cga(mode) || amiga::is_cga_text(mode) || amiga::is_snes(mode) ||
-                        amiga::is_genesis(mode) || amiga::is_c64(mode);
+                        (amiga::is_cga(mode) || amiga::is_tandy(mode)) || amiga::is_cga_text(mode) || amiga::is_snes(mode) ||
+                        amiga::is_genesis(mode) || amiga::is_c64(mode) || amiga::is_gba(mode) ||
+                        (amiga::is_thomson(mode) || amiga::is_msx(mode) || amiga::is_retro_raster(mode)) || amiga::is_ted(mode) ||
+                        amiga::is_sms(mode) || amiga::is_cpc(mode);
     // Tile-based platforms with freeform sizing — Genesis (8×8 cells)
     // and SNES Mode 7 (8×8 cells) use the same 1:1 source-pixel
     // convention as c64-charset-hires. No multicolor halving.
@@ -627,20 +705,26 @@ TargetDims compute_target_dims(std::size_t src_w,
         auto w = static_cast<std::size_t>(std::lround(static_cast<double>(h) * src_aspect / par));
         return {w, h};
     }
-    // Neither: use mode default width, but don't upscale small images
-    auto w = std::min(mode_w, src_w);
-    // For Amiga hires, always use the full mode width.
-    if (params.is_hires) w = mode_w;
-    auto h = round_height(static_cast<double>(w) * par / src_aspect, interlace);
-    // Fixed-buffer modes (Atari, VGA, EGA, CGA): by default stretch-fit the
-    // source to the full hardware buffer. With --native-par, preserve source
-    // aspect by reducing target_h (letterbox) or target_w (pillarbox).
+    // Fixed-buffer modes (Atari, VGA, EGA, CGA, ...): by default stretch-fit
+    // the source to the full hardware buffer. With --native-par, preserve
+    // source aspect by reducing target_h (letterbox) or target_w (pillarbox).
     auto mode_h = params.screen_height;
+    bool is_fixed_buffer = mode_h > 0 &&
+                           (amiga::is_atari(mode) || amiga::is_vga(mode) ||
+                            amiga::is_ega(mode) || (amiga::is_cga(mode) || amiga::is_tandy(mode)) ||
+                            amiga::is_cga_text(mode) || amiga::is_snes(mode) ||
+                            amiga::is_genesis(mode) || amiga::is_c64(mode) ||
+                            amiga::is_gba(mode) || (amiga::is_thomson(mode) || amiga::is_msx(mode) || amiga::is_retro_raster(mode)) ||
+                            amiga::is_ted(mode) || amiga::is_sms(mode) ||
+                            amiga::is_cpc(mode));
+    // Neither: use mode default width, but don't upscale small images.  Amiga
+    // hires and every fixed-buffer mode always take the full width: the buffer
+    // is the display, so a small source is fitted into it, not left small
+    // inside black bars.
+    auto w = std::min(mode_w, src_w);
+    if (params.is_hires || is_fixed_buffer) w = mode_w;
+    auto h = round_height(static_cast<double>(w) * par / src_aspect, interlace);
     if (mode_h > 0) {
-        bool is_fixed_buffer = amiga::is_atari(mode) || amiga::is_vga(mode) ||
-                               amiga::is_ega(mode) || amiga::is_cga(mode) ||
-                               amiga::is_cga_text(mode) || amiga::is_snes(mode) ||
-                               amiga::is_genesis(mode) || amiga::is_c64(mode);
         if (is_fixed_buffer && !options.native_par) {
             h = mode_h;  // stretch to fill
         } else if (h > mode_h) {
@@ -765,6 +849,7 @@ static std::vector<bool> tile_crop_centre_mask(const std::vector<bool>& tiled,
 static Result<void> tile_crop_result(
     PipelineResult& r, std::size_t w, std::size_t h, std::size_t depth, bitplane::Layout layout) {
     r.indices = tile_crop_centre_indices(r.indices, w, h);
+    r.pixel_deviation = tile_crop_centre_indices(r.pixel_deviation, w, h);
     r.rendered = tile_crop_centre_image(r.rendered, w, h);
     if (!r.transparency_mask.empty())
         r.transparency_mask = tile_crop_centre_mask(r.transparency_mask, w, h);
@@ -804,8 +889,12 @@ struct PlainAutoTrial {
     bitplane::BitplaneData planes;
     Image rendered;
     float total_error;
+    dither::Settings dith;  // the settings this trial was dithered with
 };
 
+// `start`: re-encode that trial's palette (and locked mask) instead of
+// quantizing — skips quantize, match_range and refine_with_dither; the
+// dither, pair fitting and tail run as usual.
 Result<PlainAutoTrial> encode_plain_auto(const Image& img,
                                          std::size_t depth,
                                          std::size_t max_colors,
@@ -821,7 +910,10 @@ Result<PlainAutoTrial> encode_plain_auto(const Image& img,
                                          const std::vector<LockSpec>& locks,
                                          const std::vector<ReserveSpec>& reserves,
                                          const std::vector<PinSpec>& pins,
-                                         const std::vector<bool>& tmask) {
+                                         const std::vector<bool>& tmask,
+                                         bool fit_pairs = false,
+                                         const PlainAutoTrial* start = nullptr,
+                                         int pnn_bins = 0) {
     // Atari uses the full palette (no border slot tied to index 0).
     bool is_atari_local = amiga::is_atari(mode);
     bool lock_zero = lock_color0 && (has_transparency || !is_atari_local);
@@ -879,54 +971,63 @@ Result<PlainAutoTrial> encode_plain_auto(const Image& img,
         if (r.index >= 0 && i < max_colors) reserved_mask[i] = true;
     }
 
-    // Quantize + assemble. EGA modes (ega-hi specifically — the 200-line
-    // ega_320/640 use kCgaHw and take a separate non-auto path at the
-    // call site) go through ega_histogram on a pre-snapped image.
-    auto qc = palette_locks::quant_counts_for_assemble(max_colors, locks, reserve_count, lock_zero);
-    Image ega_snapped;
-    const bool is_ega_mode = amiga::is_ega(mode);
-    if (is_ega_mode) {
-        ega_snapped = Image(img.width(), img.height());
-        for (std::size_t y = 0; y < img.height(); ++y)
-            for (std::size_t x = 0; x < img.width(); ++x)
-                ega_snapped[x, y] = palette::quantize_to_ega(img[x, y]);
-    }
-    auto qfn = [&](std::size_t k) -> Result<Palette> {
-        if (is_ega_mode) return quantize::ega_histogram(ega_snapped, k);
-        return quantize::quantize(img, k, quantize_algo(chipset, mode), palette_diversity);
-    };
-    auto quantized = palette_locks::two_pass_quantize(qfn, qc.qcount, qc.kfallback, lock_zero);
-    if (!quantized) return std::unexpected{quantized.error()};
-    if (amiga::is_stf(mode) || amiga::is_vga(mode)) snap_to_chipset(*quantized, chipset, mode);
-    auto assembled = palette_locks::assemble_with_reserves(
-        *quantized, locks, reserves, max_colors, lock_zero, chipset, mode);
-
     PlainAutoTrial out;
-    out.pal = std::move(assembled.palette);
-    out.locked_mask = std::move(assembled.locked);
-    out.pal_size = std::min(out.pal.size(), max_colors);
+    out.dith = dith;
+    if (start) {
+        out.pal = start->pal;
+        out.locked_mask = start->locked_mask;
+        out.pal_size = start->pal_size;
+    } else {
+        // Quantize + assemble. EGA modes (ega-hi specifically — the 200-line
+        // ega_320/640 use kCgaHw and take a separate non-auto path at the
+        // call site) go through ega_histogram on a pre-snapped image.
+        auto qc = palette_locks::quant_counts_for_assemble(
+            max_colors, locks, reserve_count, lock_zero);
+        Image ega_snapped;
+        const bool is_ega_mode = amiga::is_ega(mode);
+        if (is_ega_mode) {
+            ega_snapped = Image(img.width(), img.height());
+            for (std::size_t y = 0; y < img.height(); ++y)
+                for (std::size_t x = 0; x < img.width(); ++x)
+                    ega_snapped[x, y] = palette::quantize_to_ega(img[x, y]);
+        }
+        auto qfn = [&](std::size_t k) -> Result<Palette> {
+            if (is_ega_mode) return quantize::ega_histogram(ega_snapped, k);
+            return quantize::quantize(
+                img, k, quantize_algo(chipset, mode), palette_diversity, pnn_bins);
+        };
+        auto quantized = palette_locks::two_pass_quantize(qfn, qc.qcount, qc.kfallback, lock_zero);
+        if (!quantized) return std::unexpected{quantized.error()};
+        if (amiga::is_stf(mode) || amiga::is_vga(mode)) snap_to_chipset(*quantized, chipset, mode);
+        auto assembled = palette_locks::assemble_with_reserves(
+            *quantized, locks, reserves, max_colors, lock_zero, chipset, mode);
 
-    if (match_range) preprocess::match_palette_range(const_cast<Image&>(img), out.pal);
+        out.pal = std::move(assembled.palette);
+        out.locked_mask = std::move(assembled.locked);
+        out.pal_size = std::min(out.pal.size(), max_colors);
 
-    // Dither-aware refinement (auto-palette only). Same gates as the
-    // pre-extraction non-best path. The locked_mask flow keeps slot 0
-    // (when lock_color0 is true) at pure black across iterations.
-    if (refine_iterations > 0 && dith.method != dither::Method::none && reserve_count == 0 &&
-        !amiga::is_cga(mode) && !amiga::is_chunky(mode) && !amiga::is_ega(mode) &&
-        !amiga::is_atari_hi(mode)) {
-        auto refined = quantize::refine_with_dither(
-            img,
-            Palette{"refined",
-                    {out.pal.colors.begin(),
-                     out.pal.colors.begin() + static_cast<std::ptrdiff_t>(out.pal_size)}},
-            dith,
-            chipset,
-            mode,
-            static_cast<std::size_t>(refine_iterations),
-            out.locked_mask);
-        if (refined) {
-            out.pal.colors = std::move(refined->colors);
-            out.pal_size = out.pal.colors.size();
+        if (match_range) preprocess::match_palette_range(const_cast<Image&>(img), out.pal);
+
+        // Dither-aware refinement (auto-palette only). Same gates as the
+        // pre-extraction non-best path. The locked_mask flow keeps slot 0
+        // (when lock_color0 is true) at pure black across iterations.
+        if (refine_iterations > 0 && dith.method != dither::Method::none && reserve_count == 0 &&
+            !(amiga::is_cga(mode) || amiga::is_tandy(mode)) && !amiga::is_chunky(mode) && !amiga::is_ega(mode) &&
+            !amiga::is_atari_hi(mode)) {
+            auto refined = quantize::refine_with_dither(
+                img,
+                Palette{"refined",
+                        {out.pal.colors.begin(),
+                         out.pal.colors.begin() + static_cast<std::ptrdiff_t>(out.pal_size)}},
+                dith,
+                chipset,
+                mode,
+                static_cast<std::size_t>(refine_iterations),
+                out.locked_mask);
+            if (refined) {
+                out.pal.colors = std::move(refined->colors);
+                out.pal_size = out.pal.colors.size();
+            }
         }
     }
 
@@ -957,6 +1058,24 @@ Result<PlainAutoTrial> encode_plain_auto(const Image& img,
         }
     } else {
         dr = dither::apply(img, pal_span, dith);
+    }
+    if (fit_pairs && palette_pairs::plain_fit_mode(mode) && depth >= 2 && depth <= 8 &&
+        reserve_count == 0 && !has_transparency) {
+        out.pal.colors.resize(out.pal_size);
+        palette_pairs::joint_refit(
+            img,
+            out.pal.colors,
+            dr,
+            out.locked_mask,
+            palette_pairs::grid_for(chipset, mode),
+            false,
+            [&](const std::vector<Color3f>& p) {
+                return dither::apply(img, std::span<const Color3f>(p), dith);
+            },
+            /*concurrent=*/true);
+        palette_pairs::refine(
+            img, out.pal.colors, dr, dith, out.locked_mask, palette_pairs::grid_for(chipset, mode));
+        pal_span = std::span<const Color3f>(out.pal.colors);
     }
     out.indices = std::move(dr.indices);
     out.total_error = dr.total_error;
@@ -1023,18 +1142,23 @@ Result<void> check_best_supported(const Options& options, amiga::Mode mode, bool
     bool copper_best = options.copper;
     bool scap_best = options.scap;
     bool snes_best = (mode == amiga::Mode::snes_mode7_256);
-    if (ham_best || ehb_best || plain_best || copper_best || scap_best || snes_best) return {};
+    bool thomson_fc_best = amiga::is_thomson_formecouleur(mode);
+    bool nibnib_best = amiga::is_nibnib(mode);
+    if (ham_best || ehb_best || plain_best || copper_best || scap_best || snes_best ||
+        thomson_fc_best || nibnib_best)
+        return {};
     return std::unexpected{Error{ErrorCode::unsupported_mode,
                                  "--best is not supported in this configuration. "
                                  "Supported: HAM6/HAM8, plain EHB (no user palette), "
                                  "plain lores/hires (no --copper, no --scap, no --dpf, "
                                  "no --tile, no --palette), sliced (--copper), strips "
-                                 "(--scap), and snes-mode7-256. Drop --best or change "
-                                 "one of those "
-                                 "options."}};
+                                 "(--scap), snes-mode7-256, and Thomson forme-couleur "
+                                 "(thomson-to7-320x16 / thomson-to8-320x16), and nibnib. "
+                                 "Drop --best "
+                                 "or change one of those options."}};
 }
 
-Result<PipelineResult> run_pipeline(const std::uint8_t* input_data,
+static Result<PipelineResult> run_pipeline_core(const std::uint8_t* input_data,
                                     std::size_t input_size,
                                     const Options& orig_options,
                                     // When set, bypass decode + scale +
@@ -1077,7 +1201,8 @@ Result<PipelineResult> run_pipeline(const std::uint8_t* input_data,
                                                            : amiga::Chipset::ocs;
         auto tune = dither_tuning::defaults_for(dither_tuning::Context{
             .mode = mode,
-            .depth = std::clamp(options.depth, 1, 8),
+            // nibnib: 16 bits per pixel, as the CLI passes it.
+            .depth = amiga::is_nibnib(mode) ? 16 : std::clamp(options.depth, 1, 8),
             .dpf = options.dual_playfield,
             .scap = options.scap,
             .copper = options.copper,
@@ -1093,6 +1218,18 @@ Result<PipelineResult> run_pipeline(const std::uint8_t* input_data,
         options.palette_diversity = 5;
     }
 
+    if (amiga::is_tandy(mode) && has_user_palette(options))
+        return std::unexpected{Error{ErrorCode::unsupported_mode,
+            "Tandy modes use the fixed RGBI gamut; custom palettes are not supported"}};
+
+    if (options.cell_refine &&
+        (!amiga::is_thomson_formecouleur(mode) && mode != amiga::Mode::msx1_screen2 && !amiga::is_c64(mode) && !amiga::is_ted(mode) &&
+         !(amiga::is_cga_text(mode) && options.cga_text_metric == "blur"))) {
+        return std::unexpected{Error{ErrorCode::unsupported_mode,
+                                     "--cell-refine requires MSX1/Thomson attribute, C64, TED, or CGA "
+                                     "text with the blur metric"}};
+    }
+
     // Reject dither methods that don't apply to the chosen mode rather
     // than silently fall through to a degraded encode. SNES Mode 7
     // Direct has no palette table at all so palette-aware methods are
@@ -1104,6 +1241,13 @@ Result<PipelineResult> run_pipeline(const std::uint8_t* input_data,
     // on HAM6/HAM7/HAM8 (including --sliced). Web frontend's
     // HAM_INCOMPATIBLE_DITHERS list should be kept in sync.
     if (auto dm = parse_dither(options.dither); dither::needs_discrete_palette(dm)) {
+        if (dm == dither::Method::smooth && amiga::is_ham(mode)) {
+            return std::unexpected{Error{
+                ErrorCode::unsupported_mode,
+                "Dither '" + options.dither + "' plans colour pairs from a palette "
+                "and has no equivalent on HAM modes.",
+            }};
+        }
         if (amiga::is_ham(mode) && dm == dither::Method::dbs) {
             return std::unexpected{Error{
                 ErrorCode::unsupported_mode,
@@ -1119,6 +1263,33 @@ Result<PipelineResult> run_pipeline(const std::uint8_t* input_data,
                     "' is palette-aware but "
                     "Mode 7 Direct has no palette table. Use a non-yliluoma "
                     "method (atkinson, floyd-steinberg, ordered).",
+            }};
+        }
+    }
+
+    // nibnib codes pixel-pair deltas: there is no palette of colours for
+    // a palette-picking dither to choose from (same rule as the CLI), and
+    // no palette slot to reserve, lock or load.
+    if (amiga::is_nibnib(mode)) {
+        if (auto dm = parse_dither(options.dither); dither::needs_discrete_palette(dm)) {
+            return std::unexpected{Error{
+                ErrorCode::unsupported_mode,
+                "Dither '" + options.dither + "' needs a palette of colours; nibnib codes "
+                "pixel-pair deltas. Use an error-diffusion or ordered method.",
+            }};
+        }
+        if (!options.reserves.empty() || !options.locks.empty() || !options.pins.empty() ||
+            has_user_palette(options)) {
+            return std::unexpected{Error{
+                ErrorCode::unsupported_mode,
+                "--reserve-range / --lock-index / --pin-index-at / --palette: not supported "
+                "in nibnib (RGB565 pair deltas; there is no palette of colours)",
+            }};
+        }
+        if (options.width > 0 && options.width % 2 != 0) {
+            return std::unexpected{Error{
+                ErrorCode::invalid_dimensions,
+                std::format("nibnib needs an even width (got {})", options.width),
             }};
         }
     }
@@ -1155,9 +1326,77 @@ Result<PipelineResult> run_pipeline(const std::uint8_t* input_data,
             return reject("not supported in C64 modes (VIC-II palette is "
                           "fixed in hardware; --lock-color0 covers the "
                           "common 'pin background' use-case)");
-        if (amiga::is_cga(mode) || amiga::is_cga_text(mode))
+        if (amiga::is_sms(mode) || amiga::is_cpc(mode))
+            return reject("not supported in Master System / Game Gear / CPC modes "
+                          "(auto-quantized palette)");
+        if (amiga::is_ted(mode))
+            return reject("not supported in TED modes (the Plus/4/C16 palette "
+                          "is fixed in hardware)");
+        if ((amiga::is_thomson(mode) || amiga::is_msx(mode) || amiga::is_retro_raster(mode)))
+            return reject("not supported in ZX/Atari Spectrum/MSX/Thomson modes (fixed or auto-quantized palette; "
+                          "or auto-quantized TO8 palette)");
+        if ((amiga::is_cga(mode) || amiga::is_tandy(mode)) || amiga::is_cga_text(mode))
             return reject("not supported in CGA modes (palette is "
                           "hardware-fixed)");
+        if (amiga::is_gba_direct(mode))
+            return reject("not supported in GBA direct-color modes "
+                          "(16bpp BGR555 per pixel — there is no palette)");
+    }
+
+    // GBA direct-color modes (mode3/mode5) have no palette, so the other
+    // palette-pinning flags are meaningless there — reject rather than
+    // silently ignore.
+    if (amiga::is_gba_direct(mode) &&
+        (!options.locks.empty() || !options.pins.empty() || has_user_palette(options))) {
+        return std::unexpected{Error{
+            ErrorCode::unsupported_mode,
+            "--lock-index / --pin-index-at / --palette: not supported in GBA "
+            "direct-color modes (16bpp BGR555 per pixel — there is no palette)",
+        }};
+    }
+
+    // Thomson + TED modes use a fixed (TO7/70, TED) or auto-quantized (TO8)
+    // palette — no slot to lock/pin and no external palette load. Reject
+    // rather than silently ignore, matching the C64 convention.
+    if (((amiga::is_thomson(mode) || amiga::is_msx(mode) || amiga::is_retro_raster(mode)) || amiga::is_ted(mode) || amiga::is_sms(mode) ||
+         amiga::is_cpc(mode)) &&
+        (!options.locks.empty() || !options.pins.empty() || has_user_palette(options))) {
+        return std::unexpected{Error{
+            ErrorCode::unsupported_mode,
+            "--lock-index / --pin-index-at / --palette: not supported in "
+            "ZX / Atari Spectrum / MSX / Thomson / TED / Master System / CPC modes (palette is fixed or "
+            "auto-quantized)",
+        }};
+    }
+    // No transparency-slot-0 semantics on these targets either: a forced
+    // black slot would just waste one of 16 entries. Hard-off regardless
+    // of the flag so no generic path can ever apply it.
+    if ((amiga::is_thomson(mode) || amiga::is_msx(mode) || amiga::is_retro_raster(mode)) || amiga::is_ted(mode) || amiga::is_sms(mode) ||
+        amiga::is_cpc(mode))
+        options.lock_color0 = false;
+
+    // Sliced palette (--sliced/--copper), strip palette (--strips), and dual
+    // playfield (--dpf) are Amiga copper / bitplane features (OCS/ECS/AGA
+    // lores/hires/HAM/EHB). Every other target is a fixed hardware buffer
+    // with no copper — reject rather than silently ignore (or, for VGA,
+    // wrongly fall into the Amiga sliced path).
+    if (options.copper || options.scap || options.dual_playfield) {
+        bool non_amiga = amiga::is_atari(mode) || amiga::is_vga(mode) || amiga::is_ega(mode) ||
+                         (amiga::is_cga(mode) || amiga::is_tandy(mode)) || amiga::is_c64(mode) || amiga::is_snes(mode) ||
+                         amiga::is_genesis(mode) || amiga::is_gba(mode) ||
+                         (amiga::is_thomson(mode) || amiga::is_msx(mode) || amiga::is_retro_raster(mode)) || amiga::is_ted(mode) ||
+                         amiga::is_sms(mode) || amiga::is_cpc(mode) || amiga::is_nibnib(mode) || amiga::is_block_compressed(mode);
+        if (non_amiga) {
+            std::string which;
+            if (options.copper) which += "--sliced/--copper ";
+            if (options.scap) which += "--strips ";
+            if (options.dual_playfield) which += "--dpf ";
+            return std::unexpected{Error{
+                ErrorCode::unsupported_mode,
+                which + "require an Amiga bitplane mode (lores / hires / HAM / EHB); "
+                        "not supported on this target.",
+            }};
+        }
     }
 
     // We need source dimensions to compute the target size.
@@ -1195,17 +1434,21 @@ Result<PipelineResult> run_pipeline(const std::uint8_t* input_data,
     auto depth = static_cast<std::size_t>(std::clamp(options.depth, 1, 8));
     // Atari modes have fixed depth
     if (amiga::is_atari(mode)) depth = amiga::get_mode_params(mode).bitplane_depth;
-    // DOS + SNES + Genesis modes: depth also fixed by the hardware buffer.
-    if (amiga::is_vga(mode) || amiga::is_ega(mode) || amiga::is_cga(mode) || amiga::is_snes(mode) ||
-        amiga::is_genesis(mode))
+    // DOS + SNES + Genesis + GBA modes: depth also fixed by the hardware
+    // buffer (GBA mode4 = 8bpp; the direct modes don't use depth at all).
+    if (amiga::is_vga(mode) || amiga::is_ega(mode) || (amiga::is_cga(mode) || amiga::is_tandy(mode)) || amiga::is_snes(mode) ||
+        amiga::is_genesis(mode) || amiga::is_gba(mode) || (amiga::is_thomson(mode) || amiga::is_msx(mode) || amiga::is_retro_raster(mode)) ||
+        amiga::is_ted(mode) || amiga::is_sms(mode) || amiga::is_cpc(mode))
         depth = amiga::get_mode_params(mode).bitplane_depth;
+    if (options.scap && strips::strips_forces_color0_unlocked(mode, options.dual_playfield, depth))
+        options.lock_color0 = false;
 
     // Dual-playfield: encode the image into PF2 only with a constrained
     // sub-depth (3 OCS / 4 AGA). The remaining planes (PF1 = foreground)
     // are zeroed and emitted as part of the final 6 / 8-plane output.
     bool use_dpf = options.dual_playfield && !amiga::is_ham(mode) && mode != amiga::Mode::ehb &&
                    !amiga::is_atari(mode) && !amiga::is_vga(mode) && !amiga::is_ega(mode) &&
-                   !amiga::is_cga(mode);
+                   !(amiga::is_cga(mode) || amiga::is_tandy(mode));
     if (use_dpf) {
         auto cs = (options.chipset == "aga") ? amiga::Chipset::aga : amiga::Chipset::ocs;
         depth = (cs == amiga::Chipset::aga) ? 4 : 3;
@@ -1271,8 +1514,10 @@ Result<PipelineResult> run_pipeline(const std::uint8_t* input_data,
     auto mode_h = mparams.screen_height;
     auto mode_w_fixed = mparams.screen_width;
     bool is_fixed_buffer = amiga::is_atari(mode) || amiga::is_vga(mode) || amiga::is_ega(mode) ||
-                           amiga::is_cga(mode) || amiga::is_cga_text(mode) ||
-                           amiga::is_snes(mode) || amiga::is_genesis(mode);
+                           (amiga::is_cga(mode) || amiga::is_tandy(mode)) || amiga::is_cga_text(mode) ||
+                           amiga::is_snes(mode) || amiga::is_genesis(mode) || amiga::is_gba(mode) ||
+                           (amiga::is_thomson(mode) || amiga::is_msx(mode) || amiga::is_retro_raster(mode)) || amiga::is_ted(mode) ||
+                           amiga::is_sms(mode) || amiga::is_cpc(mode);
     // cga-text accepts arbitrary multiples of 8×2 in freeform (--width
     // / --height set). Don't center-pad freeform input up to the
     // canonical 640×200 buffer — that would silently turn a 200×400
@@ -1304,6 +1549,138 @@ Result<PipelineResult> run_pipeline(const std::uint8_t* input_data,
 
     auto chipset = resolve_chipset(options.chipset, mode);
     bool is_aga = (chipset == amiga::Chipset::aga);
+
+    // depth_auto: the fewest planes that keep the image 1:1 at chipset
+    // precision; with the sliced palette the encoder picks depth zones.
+    std::optional<std::vector<copper::DepthZone>> depth_zones;
+    if (options.depth_auto) {
+        bool plain = (mode == amiga::Mode::lores || mode == amiga::Mode::hires ||
+                      mode == amiga::Mode::lores_interlace ||
+                      mode == amiga::Mode::hires_interlace) &&
+                     !use_dpf && !options.scap && !tile_active;
+        if (!plain) {
+            return std::unexpected{Error{ErrorCode::unsupported_mode,
+                                         "Auto depth needs lores or hires (no HAM, EHB, dual "
+                                         "playfield, strips or tile)"}};
+        }
+        auto max_d = amiga::max_user_depth(mode, chipset);
+        if (options.copper) {
+            if (options.interlace || options.best) {
+                return std::unexpected{Error{
+                    ErrorCode::unsupported_mode,
+                    "Depth zones (sliced with auto depth) are progressive only and plan "
+                    "exactly, so best has nothing to search"}};
+            }
+            depth = max_d;
+            depth_zones.emplace();
+        } else {
+            depth = copper::min_exact_depth(*image, max_d, chipset, options.lock_color0);
+        }
+    }
+
+    // --- nibnib (RGB565 pair-delta format) ---
+    // nibnib::encode does the RGB565 dither, palette fit and row search;
+    // raw_frame is the complete .nibnib file. Same steps as the CLI's
+    // nibnib block in main.cpp.
+    if (amiga::is_nibnib(mode)) {
+        if (has_transparency) {
+            for (std::size_t i = 0; i < tmask.size(); ++i)
+                if (tmask[i]) image->pixels()[i] = Color3f{0, 0, 0};
+        }
+        nibnib::Options nopts;
+        nopts.dither.method = parse_dither(options.dither);
+        nopts.dither.strength = options.dither_strength;
+        nopts.dither.error_clamp = options.error_clamp;
+        nopts.best = options.best;
+        nopts.on_progress = options.on_progress;
+        auto enc = nibnib::encode(*image, nopts);
+        if (!enc) return std::unexpected{enc.error()};
+
+        PipelineResult result;
+        result.rendered = std::move(enc->rendered);
+        result.palette.clear();  // pair deltas, not colours
+        result.indices.clear();
+        result.planes.depth = 16;  // conceptual: bits per pixel, not planes
+        result.mode = mode;
+        result.hires = false;
+        result.interlace = false;
+        result.has_transparency = has_transparency;
+        result.transparency_mask = tmask;
+        result.finalize_psnr(*image, enc->quant_error);
+        result.raw_frame = std::move(enc->file);
+        return result;
+    }
+
+    // CGA direct pixels: two independent RGBI pixels per text cell.
+    // 0xDE is the ROM right-half block: BG is left, FG is right.
+    // Keep the logical grid in the result; only the DOS viewer expands it.
+    if (amiga::is_cga_pixels(mode) || amiga::is_tandy(mode)) {
+        PipelineResult result;
+        result.mode = mode;
+        const auto params = amiga::get_mode_params(mode);
+        auto width = params.screen_width;
+        auto height = params.screen_height;
+        auto count = width * height;
+        if (image->width() != width || image->height() != height)
+            return std::unexpected{Error{ErrorCode::invalid_dimensions,
+                std::format("Direct RGBI mode requires {}x{} pixels", width, height)}};
+        result.rendered = Image(width, height);
+        if (has_transparency)
+            for (std::size_t i = 0; i < count; ++i)
+                if (tmask[i]) image->pixels()[i] = {0, 0, 0};
+        // Standard RGBI swatches, including the brown correction. Other
+        // CGA converters use calibrated display colours; this pixel-art
+        // mode must round-trip the conventional indexed CGA palette.
+        if (mode == amiga::Mode::tandy_640) result.palette = tandy::four_colors(*image);
+        else for (auto rgb : tandy::rgbi)
+            result.palette.push_back(color_space::srgb_hex_to_linear(rgb));
+        std::array<color_space::OKLab, 16> lab;
+        for (std::size_t i = 0; i < result.palette.size(); ++i)
+            lab[i] = color_space::linear_to_oklab(result.palette[i]);
+        result.indices.resize(count);
+        result.raw_frame.resize(count);
+        float error = 0;
+        bool exact = true;
+        for (std::size_t i = 0; i < count; ++i) {
+            auto pixel = image->pixels()[i];
+            auto target = color_space::linear_to_oklab(pixel);
+            float best = std::numeric_limits<float>::max();
+            std::uint8_t index = 0;
+            for (std::uint8_t k = 0; k < result.palette.size(); ++k) {
+                float d = color_space::fma_dist_sq(target.L - lab[k].L,
+                                                  target.a - lab[k].a,
+                                                  target.b - lab[k].b);
+                if (d < best) { best = d; index = k; }
+            }
+            result.indices[i] = index;
+            result.rendered.pixels()[i] = result.palette[index];
+            error += best;
+            exact = exact && best < 1e-12f;
+        }
+        // Valid RGBI pixel art needs no quantization. For other images,
+        // dither on the logical pixel grid before packing half-blocks.
+        if (!exact) {
+            auto dr = dither::apply(*image, result.palette, {
+                .method = parse_dither(options.dither),
+                .strength = options.dither_strength,
+                .error_clamp = options.error_clamp,
+            });
+            result.indices = std::move(dr.indices);
+            error = dr.total_error;
+            for (std::size_t i = 0; i < count; ++i)
+                result.rendered.pixels()[i] = result.palette[result.indices[i]];
+        }
+        if (amiga::is_tandy(mode)) result.raw_frame = tandy::pack(result.indices, mode);
+        else for (std::size_t i = 0; i < count; i += 2) {
+            result.raw_frame[i] = 0xDE;
+            result.raw_frame[i + 1] = static_cast<std::uint8_t>(
+                (result.indices[i] << 4) | result.indices[i + 1]);
+        }
+        result.planes.depth = params.bitplane_depth;
+        if (amiga::is_cga_pixels(mode)) result.text_cell_height = height == 100 ? 2 : 1;
+        result.finalize_psnr(*image, error);
+        return result;
+    }
 
     // ---- IBM PC DOS: glyph-matched text modes ----
     // Pre-dither to the 16-entry CGA master palette (so the glyph matcher
@@ -1397,8 +1774,15 @@ Result<PipelineResult> run_pipeline(const std::uint8_t* input_data,
         // offset. Letting the encoder pick from rows 2..3 / 4..5 /
         // etc. would give a prettier preview but pixels the actual
         // hardware can't produce. See main.cpp for the same fix.
-        auto res = cga_text::encode(
-            dithered, mode, {}, text_pal, /*fixed_offset=*/0, cga_metric, cga_kernel, options.on_progress);
+        auto res = cga_text::encode(dithered,
+                                    mode,
+                                    {},
+                                    text_pal,
+                                    /*fixed_offset=*/0,
+                                    cga_metric,
+                                    cga_kernel,
+                                    options.on_progress,
+                                    options.cell_refine);
         if (!res) return std::unexpected{res.error()};
         auto preview = cga_text::render(*res);
         // No post-double here: result.rendered stays at hardware-pixel
@@ -1688,6 +2072,10 @@ Result<PipelineResult> run_pipeline(const std::uint8_t* input_data,
         auto qr = palette_locks::two_pass_quantize(
             qfn, qc_vga.qcount, qc_vga.kfallback, options.lock_color0);
         if (!qr) return std::unexpected{qr.error()};
+        // Snap before assembly (as the CLI does) so a centroid that lands on
+        // a locked colour is dropped rather than duplicated.
+        for (auto& c : qr->colors)
+            c = palette::quantize_to_vga(c);
         auto assembled = palette_locks::assemble_with_reserves(
             *qr, options.locks, options.reserves, max_colors, options.lock_color0, chipset, mode);
         Palette pal = std::move(assembled.palette);
@@ -1723,6 +2111,21 @@ Result<PipelineResult> run_pipeline(const std::uint8_t* input_data,
                 idx = cand_to_full[idx];
         } else {
             dith_result = dither::apply(*image, pal.colors, dith);
+            if (!has_transparency) {
+                palette_pairs::joint_refit(
+                    *image,
+                    pal.colors,
+                    dith_result,
+                    assembled.locked,
+                    palette_pairs::kVga,
+                    false,
+                    [&](const std::vector<Color3f>& p) {
+                        return dither::apply(*image, std::span<const Color3f>(p), dith);
+                    },
+                    /*concurrent=*/true);
+                palette_pairs::refine(
+                    *image, pal.colors, dith_result, dith, assembled.locked, palette_pairs::kVga);
+            }
         }
         // Reseat `quantized` so the rest of the block can keep using
         // its name without further surgery.
@@ -1868,6 +2271,10 @@ Result<PipelineResult> run_pipeline(const std::uint8_t* input_data,
         }();
         if (!enc) return std::unexpected{enc.error()};
 
+        if (options.cell_refine)
+            c64::refine_cells(
+                *image, *enc, mode, pal_choice, options.c64_petscii_graphics_only, dith);
+
         PipelineResult result;
         result.rendered = std::move(enc->rendered);
         auto pal_span = c64::palette_colors(pal_choice);
@@ -1916,6 +2323,350 @@ Result<PipelineResult> run_pipeline(const std::uint8_t* input_data,
             result.genesis_total_cells = enc->cols * enc->rows;
             result.tile_data_bytes = enc->unique_glyphs * 8;
         }
+        return result;
+    }
+
+    // --- Thomson TO7/70 + TO8 ---
+    // forme-couleur (8×1 attribute cells) + the 3 bitmap modes. The image
+    // already arrives at the native buffer size (fixed-buffer padding above).
+    // raw_frame holds pageA followed by pageB; the TO8 palette (if any) is
+    // carried in result.palette and written as a companion .pal by
+    // convert_raw / emitted as 4-bit channels in the .h.
+    if (amiga::is_retro_raster(mode)) {
+        if (has_transparency)
+            for (std::size_t i = 0; i < tmask.size(); ++i)
+                if (tmask[i]) image->pixels()[i] = Color3f{0, 0, 0};
+        dither::Settings dith;
+        dith.method = parse_dither(options.dither);
+        dith.strength = options.dither_strength;
+        dith.error_clamp = options.error_clamp;
+        dith.serpentine = true;
+        auto enc = retro::encode(*image, mode, dith);
+        if (!enc) return std::unexpected{enc.error()};
+        PipelineResult result;
+        result.rendered = std::move(enc->rendered);
+        result.palette = std::move(enc->palette);
+        result.raw_frame = std::move(enc->bytes);
+        result.planes.depth = amiga::get_mode_params(mode).bitplane_depth;
+        result.mode = mode;
+        result.hires = false;
+        result.interlace = false;
+        result.has_transparency = has_transparency;
+        result.transparency_mask = tmask;
+        result.finalize_psnr(*image, enc->total_error);
+        return result;
+    }
+    if (amiga::is_msx(mode)) {
+        if (has_transparency)
+            for (std::size_t i = 0; i < tmask.size(); ++i)
+                if (tmask[i]) image->pixels()[i] = Color3f{0, 0, 0};
+        dither::Settings dith;
+        dith.method = parse_dither(options.dither);
+        dith.strength = options.dither_strength;
+        dith.error_clamp = options.error_clamp;
+        dith.serpentine = true;
+        auto enc = msx::encode(*image, mode, dith, options.cell_refine);
+        if (!enc) return std::unexpected{enc.error()};
+        PipelineResult result;
+        result.rendered = std::move(enc->rendered);
+        result.palette = std::move(enc->palette);
+        result.raw_frame = std::move(enc->vram);
+        result.planes.depth = amiga::get_mode_params(mode).bitplane_depth;
+        result.mode = mode;
+        result.hires = false;
+        result.interlace = false;
+        result.has_transparency = has_transparency;
+        result.transparency_mask = tmask;
+        result.finalize_psnr(*image, enc->total_error);
+        return result;
+    }
+
+    if (amiga::is_thomson(mode)) {
+        if (has_transparency) {
+            for (std::size_t i = 0; i < tmask.size(); ++i)
+                if (tmask[i]) image->pixels()[i] = Color3f{0, 0, 0};
+        }
+        dither::Settings dith;
+        dith.method = parse_dither(options.dither);
+        dith.strength = options.dither_strength;
+        dith.error_clamp = options.error_clamp;
+        dith.serpentine = true;
+
+        Result<thomson::EncodeResult> enc = std::unexpected{
+            Error{ErrorCode::unsupported_mode, "thomson: no encode ran"}};
+        if (options.best && amiga::is_thomson_formecouleur(mode)) {
+            // forme-couleur --best: grid sweep over the pair-selection
+            // weights (mix-noise λ × chroma weight × coherence) crossed with
+            // dither-strength multipliers, ranked by SSIMULACRA2 vs the
+            // source. Trial 0 is the exact default configuration so the
+            // sweep can never lose to a plain encode. The per-image optimum
+            // of these weights varies a lot more than for the global-palette
+            // modes — the TO7 fixed palette has no dark colors, so the
+            // noise-vs-hue tradeoff is content-dependent.
+            struct Trial {
+                thomson::FormeCouleurParams fc;
+                float strength;
+            };
+            std::vector<Trial> trials;
+            trials.push_back({thomson::FormeCouleurParams{}, dith.strength});  // baseline
+            // No chroma weight below 2: cw=1 is the hue coin-flip regime
+            // (every dark target pairs against black with near-equal ΔL, and
+            // S2 at this mode's deep-negative floor rewards the smooth
+            // wrong-hue winner — kodim06's teal water comes back pink).
+            // 2400-trial grid (~17 s at 320×200); strength multipliers match
+            // pipeline::best_sweep's standard five. Feedback 0 keeps the
+            // static pair pick reachable — regular textures (brick) churn
+            // under ED-feedback steering and S2 ranks them back to static.
+            constexpr float kLambdas[] = {
+                0.0f, 0.046875f, 0.09375f, 0.140625f, 0.1875f, 0.28125f, 0.375f, 0.5f};
+            constexpr float kChromaWeights[] = {2.0f, 2.5f, 3.0f, 3.75f, 4.5f, 6.0f};
+            constexpr float kCoherences[] = {0.0f, 0.005f, 0.01f, 0.02f, 0.04f};
+            constexpr float kStrengthMul[] = {0.7f, 0.85f, 1.0f, 1.15f, 1.3f};
+            constexpr float kFeedbacks[] = {0.0f, 0.5f};
+            for (float lam : kLambdas)
+                for (float cwt : kChromaWeights)
+                    for (float coh : kCoherences)
+                        for (float sm : kStrengthMul)
+                            for (float fb : kFeedbacks)
+                                trials.push_back({{lam, cwt, coh, fb},
+                                                  std::clamp(dith.strength * sm, 0.0f, 2.0f)});
+
+            // TO8 phase 1: population palette search (encode-in-the-loop
+            // fitness — median-cut centroids are systematically wrong for
+            // a pair-mixing encoder, which wants segment endpoints). The
+            // GA seeds from the median-cut palette so it can never lose
+            // to the default; the winner feeds every grid trial below.
+            // Progress: pop search = first half, grid = second half.
+            std::optional<std::vector<thomson::PaletteEntry>> pop_pal;
+            const bool pop_phase = (mode == amiga::Mode::thomson_to8_320x16);
+            if (pop_phase) {
+                thomson::PopSearchOptions pso;
+                if (options.on_progress) {
+                    pso.on_progress = [&](float f, std::string_view label) {
+                        options.on_progress(f * 0.5f, label);
+                    };
+                }
+                auto pr = thomson::formecouleur_palette_search(*image, dith, pso);
+                if (!pr) return std::unexpected{pr.error()};
+                pop_pal = std::move(*pr);
+            }
+
+            ssimulacra2::PrecomputedSource src_pre;
+            src_pre.prepare(image->pixels(), image->width(), image->height());
+
+            std::optional<thomson::EncodeResult> best;
+            std::size_t best_trial = 0;
+            float best_s2 = -std::numeric_limits<float>::infinity();
+            std::mutex best_mu;
+            std::atomic<std::size_t> done{0};
+            pipeline::parallel_for(trials.size(), [&](std::size_t i) {
+                auto d = dith;
+                d.strength = trials[i].strength;
+                auto r = thomson::encode(
+                    *image, mode, d, trials[i].fc, pop_pal ? &*pop_pal : nullptr);
+                auto n_done = done.fetch_add(1) + 1;
+                float label_best = -1.0f;
+                bool have_best = false;
+                if (r) {
+                    float score = ssimulacra2::compute(src_pre, r->rendered.pixels());
+                    std::lock_guard lk(best_mu);
+                    if (!best.has_value() || score > best_s2) {
+                        best = std::move(*r);
+                        best_s2 = score;
+                        best_trial = i;
+                    }
+                    label_best = best_s2;
+                    have_best = true;
+                } else {
+                    std::lock_guard lk(best_mu);
+                    if (best.has_value()) {
+                        label_best = best_s2;
+                        have_best = true;
+                    }
+                }
+                if (options.on_progress) {
+                    char label[48];
+                    if (have_best) {
+                        std::snprintf(label,
+                                      sizeof(label),
+                                      "best  S2=%.2f",
+                                      static_cast<double>(label_best));
+                    } else {
+                        std::snprintf(label, sizeof(label), "best");
+                    }
+                    float frac =
+                        static_cast<float>(n_done) / static_cast<float>(trials.size());
+                    options.on_progress(pop_phase ? 0.5f + frac * 0.5f : frac, label);
+                }
+            });
+            if (options.on_progress) options.on_progress(1.0f, "done");
+            if (!best) {
+                return std::unexpected{Error{ErrorCode::unsupported_mode,
+                                             "thomson --best sweep produced no result"}};
+            }
+            enc = std::move(*best);
+            if (options.cell_refine) {
+                // Refine the winning seed once, not every candidate in the
+                // parameter sweep. The S2 guard keeps at least the best seed.
+                auto d = dith;
+                d.strength = trials[best_trial].strength;
+                enc = thomson::encode(
+                    *image, mode, d, trials[best_trial].fc, pop_pal ? &*pop_pal : nullptr, true);
+                if (best_trial != 0) {
+                    // Refinement can change the ranking of seeds. Include the
+                    // ordinary refined result so --best cannot lose to it.
+                    auto ordinary = thomson::encode(*image, mode, dith, {}, nullptr, true);
+                    if (ordinary &&
+                        (!enc || ssimulacra2::compute(src_pre, ordinary->rendered.pixels()) >
+                                     ssimulacra2::compute(src_pre, enc->rendered.pixels()))) {
+                        enc = std::move(*ordinary);
+                    }
+                }
+            }
+        } else {
+            enc = thomson::encode(*image, mode, dith, {}, nullptr, options.cell_refine);
+            if (enc && amiga::is_thomson_programmable(mode))
+                enc = thomson::fit_palette(*image, std::move(*enc), mode, dith, options.cell_refine);
+            if (enc && mode == amiga::Mode::thomson_to8_320x16)
+                enc = thomson::refine_palette(*image, std::move(*enc), dith, options.cell_refine);
+        }
+        if (!enc) return std::unexpected{enc.error()};
+
+        PipelineResult result;
+        result.rendered = std::move(enc->rendered);
+        // Surface the chosen colors as linear RGB for preview / palette dump.
+        result.palette.clear();
+        for (auto& e : enc->palette)
+            result.palette.push_back(color_space::srgb_hex_to_linear(
+                palette::thomson_rgb_hex(e.r, e.g, e.b)));
+        result.indices.clear();
+        result.planes.depth = amiga::get_mode_params(mode).bitplane_depth;
+        result.mode = mode;
+        result.hires = false;
+        result.interlace = false;
+        result.has_transparency = has_transparency;
+        result.transparency_mask = tmask;
+        result.finalize_psnr(*image, enc->total_error);
+        // raw_frame = pageA ++ pageB (natural hardware order).
+        std::vector<std::uint8_t> raw;
+        raw.reserve(enc->page_a.size() + enc->page_b.size());
+        raw.insert(raw.end(), enc->page_a.begin(), enc->page_a.end());
+        raw.insert(raw.end(), enc->page_b.begin(), enc->page_b.end());
+        result.raw_frame = std::move(raw);
+        return result;
+    }
+
+    // --- Commodore TED (Plus/4, C16) ---
+    // hires (2 colors / 8×8 cell) + multicolor (4 colors / 4×8 cell, 2 global
+    // + 2 per-cell). raw_frame = bitmap ++ luma ++ chroma (++ bg0,bg1 for mc).
+    if (amiga::is_ted(mode)) {
+        if (has_transparency) {
+            for (std::size_t i = 0; i < tmask.size(); ++i)
+                if (tmask[i]) image->pixels()[i] = Color3f{0, 0, 0};
+        }
+        dither::Settings dith;
+        dith.method = parse_dither(options.dither);
+        dith.strength = options.dither_strength;
+        dith.error_clamp = options.error_clamp;
+        dith.serpentine = true;
+
+        auto enc = ted::encode(*image, mode, dith);
+        if (!enc) return std::unexpected{enc.error()};
+
+        if (options.cell_refine) ted::refine_cells(*image, *enc, mode, dith);
+
+        PipelineResult result;
+        result.rendered = std::move(enc->rendered);
+        result.palette.clear();  // fixed 121-color palette — not a slot list
+        result.indices.clear();
+        result.planes.depth = amiga::get_mode_params(mode).bitplane_depth;
+        result.mode = mode;
+        result.hires = false;
+        result.interlace = false;
+        result.has_transparency = has_transparency;
+        result.transparency_mask = tmask;
+        result.finalize_psnr(*image, enc->total_error);
+        std::vector<std::uint8_t> raw;
+        raw.reserve(enc->bitmap.size() + enc->luma.size() + enc->chroma.size() + 2);
+        raw.insert(raw.end(), enc->bitmap.begin(), enc->bitmap.end());
+        raw.insert(raw.end(), enc->luma.begin(), enc->luma.end());
+        raw.insert(raw.end(), enc->chroma.begin(), enc->chroma.end());
+        if (amiga::is_ted_multicolor(mode)) {
+            raw.push_back(enc->bg0);
+            raw.push_back(enc->bg1);
+        }
+        result.raw_frame = std::move(raw);
+        // Reuse c64_mc1/mc2 to carry the 2 global TED color bytes downstream.
+        result.c64_mc1 = enc->bg0;
+        result.c64_mc2 = enc->bg1;
+        return result;
+    }
+
+    // --- Sega Master System / Game Gear (VDP mode 4) ---
+    // 2 × 16-color palettes, 8×8 planar tiles + tilemap, ≤ 448 unique
+    // tiles. raw_frame = tiles ++ tilemap (u16 LE) ++ CRAM.
+    if (amiga::is_sms(mode)) {
+        if (has_transparency) {
+            for (std::size_t i = 0; i < tmask.size(); ++i)
+                if (tmask[i]) image->pixels()[i] = Color3f{0, 0, 0};
+        }
+        dither::Settings dith;
+        dith.method = parse_dither(options.dither);
+        dith.strength = options.dither_strength;
+        dith.error_clamp = options.error_clamp;
+        dith.serpentine = true;
+        auto enc = sms::encode(*image, mode, dith, options.on_progress);
+        if (!enc) return std::unexpected{enc.error()};
+
+        PipelineResult result;
+        result.rendered = enc->rendered;
+        result.palette = enc->palette_rgb;
+        result.indices.clear();  // per-tile palettes: no single index grid
+        result.planes.depth = 4;
+        result.mode = mode;
+        result.hires = false;
+        result.interlace = false;
+        result.has_transparency = has_transparency;
+        result.transparency_mask = tmask;
+        result.finalize_psnr(*image, enc->total_error);
+        result.raw_frame = sms::raw_bytes(*enc);
+        result.genesis_unique_tiles = enc->unique_tiles;
+        result.genesis_total_cells = enc->cols * enc->rows;
+        result.tile_data_bytes = enc->tiles.size();
+        result.genesis_tile_bytes = enc->tiles;
+        result.genesis_tilemap_cells = enc->tilemap;
+        return result;
+    }
+
+    // --- Amstrad CPC / CPC Plus ---
+    // Quantize to 16 / 4 / 2 inks (27-color firmware gamut or RGB444 on
+    // Plus) → dither::apply → pack to the 16 KB &C000 screen. raw_frame =
+    // the screen; inks travel in result.palette.
+    if (amiga::is_cpc(mode)) {
+        if (has_transparency) {
+            for (std::size_t i = 0; i < tmask.size(); ++i)
+                if (tmask[i]) image->pixels()[i] = Color3f{0, 0, 0};
+        }
+        dither::Settings dith;
+        dith.method = parse_dither(options.dither);
+        dith.strength = options.dither_strength;
+        dith.error_clamp = options.error_clamp;
+        dith.serpentine = true;
+        auto enc = cpc::encode(*image, mode, dith);
+        if (!enc) return std::unexpected{enc.error()};
+
+        PipelineResult result;
+        result.rendered = std::move(enc->rendered);
+        result.palette = enc->inks;
+        result.indices = cpc::unpack_screen(amiga::cpc_screen_mode(mode), enc->screen);
+        result.planes.depth = amiga::get_mode_params(mode).bitplane_depth;
+        result.mode = mode;
+        result.hires = false;
+        result.interlace = false;
+        result.has_transparency = has_transparency;
+        result.transparency_mask = tmask;
+        result.finalize_psnr(*image, enc->total_error);
+        result.raw_frame = std::move(enc->screen);
         return result;
     }
 
@@ -2012,83 +2763,35 @@ Result<PipelineResult> run_pipeline(const std::uint8_t* input_data,
             }
         }
 
-        // 4. Per-pixel re-quantise via per-tile mirrored 3×3 ED.
-        //
-        // Build a 3W×3H buffer per 8×8 tile where the center block is
-        // the source tile and the 8 surrounding blocks are mirror
-        // reflections (h-flip on left/right, v-flip on top/bottom,
-        // both on corners). Run ED on the full 24×24, take the center
-        // 8×8. Identical source tiles produce identical mirrored
-        // buffers → identical post-ED patterns → cleaner dedup. Same
-        // approach as c64 charset (commit 7236237).
+        // 4. Per-pixel re-quantise via per-tile mirrored 3×3 ED
+        //    (dither::diffuse_cells_mirrored). Identical source tiles
+        //    produce identical post-ED patterns → cleaner dedup. Same
+        //    approach as c64 charset (commit 7236237).
         Image rendered(w, h);
         std::vector<std::uint8_t>& pixel_index = gres.pixel_index;
         const std::vector<std::uint8_t>& tile_pal = gres.tile_palette;
         const std::vector<std::uint8_t>& tile_shadow = gres.tile_shadow;
         constexpr std::size_t kTS = genesis::kTileSide;  // 8
-        constexpr std::size_t k3T = 3 * kTS;             // 24
-        Image block(k3T, k3T);
-        std::vector<std::uint8_t> block_idx(k3T * k3T, 0);
-        std::vector<color_space::OKLab> block_chosen(k3T * k3T);
         auto tiles_y = (h + kTS - 1) / kTS;
-        float te = 0.0f;
-        for (std::size_t ty = 0; ty < tiles_y; ++ty) {
-            for (std::size_t tx = 0; tx < tiles_x; ++tx) {
-                // Mirror-fill the 3W×3H block.
-                for (std::size_t by = 0; by < 3; ++by) {
-                    for (std::size_t bx = 0; bx < 3; ++bx) {
-                        for (std::size_t ly = 0; ly < kTS; ++ly) {
-                            std::size_t sy_local = (by == 1) ? ly : (kTS - 1 - ly);
-                            for (std::size_t lx = 0; lx < kTS; ++lx) {
-                                std::size_t sx_local = (bx == 1) ? lx : (kTS - 1 - lx);
-                                std::size_t sx = std::min(tx * kTS + sx_local, w - 1);
-                                std::size_t sy = std::min(ty * kTS + sy_local, h - 1);
-                                block[bx * kTS + lx, by * kTS + ly] = (*image)[sx, sy];
-                            }
-                        }
-                    }
-                }
-                std::size_t cell = ty * tiles_x + tx;
+        float te = dither::diffuse_cells_mirrored(
+            *image,
+            dith,
+            kTS,
+            kTS,
+            /*k_min=*/1,
+            [&](std::size_t cell) -> std::span<const color_space::OKLab> {
                 std::uint8_t pal = tile_pal[cell];
                 bool shadowed = sh_mode && tile_shadow[cell] != 0;
-                auto& pal_lab_ref = shadowed ? shadow_lab[pal] : palette_lab[pal];
-                std::span<const color_space::OKLab> pl_span(pal_lab_ref.data(), pal_lab_ref.size());
-                std::fill(block_idx.begin(), block_idx.end(), std::uint8_t{0});
-                te += dither::diffuse_raw_buffer(
-                    block,
-                    dith,
-                    [&](const color_space::OKLab& target,
-                        std::size_t bx,
-                        std::size_t by) -> dither::PickResult {
-                        std::size_t k = 1;
-                        color_space::OKLab chosen{};
-                        float thr = dither::pick_palette_index_with_ostro(dith.method,
-                                                                          target,
-                                                                          pl_span,
-                                                                          bx,
-                                                                          by,
-                                                                          dith.strength,
-                                                                          /*k_min=*/1,
-                                                                          k,
-                                                                          chosen);
-                        std::size_t bi = by * k3T + bx;
-                        block_idx[bi] = static_cast<std::uint8_t>(k);
-                        block_chosen[bi] = chosen;
-                        return {chosen, thr};
-                    });
-                // Copy center 8×8 back to the global buffers.
-                for (std::size_t ly = 0; ly < kTS; ++ly) {
-                    for (std::size_t lx = 0; lx < kTS; ++lx) {
-                        auto bi = (kTS + ly) * k3T + (kTS + lx);
-                        auto x = tx * kTS + lx;
-                        auto y = ty * kTS + ly;
-                        if (x >= w || y >= h) continue;
-                        std::uint8_t k = block_idx[bi];
-                        pixel_index[y * w + x] = k;
-                        rendered[x, y] = shadowed ? shadow_lines[pal][k]
-                                                  : gres.palette_lines[pal][k];
-                    }
-                }
+                return shadowed ? shadow_lab[pal] : palette_lab[pal];
+            },
+            pixel_index);
+        for (std::size_t y = 0; y < h; ++y) {
+            for (std::size_t x = 0; x < w; ++x) {
+                std::size_t cell = (y / kTS) * tiles_x + (x / kTS);
+                std::uint8_t pal = tile_pal[cell];
+                bool shadowed = sh_mode && tile_shadow[cell] != 0;
+                std::uint8_t k = pixel_index[y * w + x];
+                rendered[x, y] = shadowed ? shadow_lines[pal][k] : gres.palette_lines[pal][k];
             }
         }
 
@@ -2172,6 +2875,212 @@ Result<PipelineResult> run_pipeline(const std::uint8_t* input_data,
         result.genesis_tile_bytes = std::move(tile_bytes);
         result.genesis_tilemap_cells = std::move(tilemap_cells);
         result.genesis_palette_words = std::move(palette_words);
+        return result;
+    }
+
+    // --- Game Boy Advance bitmap modes (mode3 / mode4 / mode5) ---
+    // Plain linear framebuffers — no tilemap, no bitplanes. The image
+    // already arrives at the fixed buffer size from compute_target_dims
+    // (240×160 for mode3/4, 160×128 for mode5), letterboxed/padded above
+    // when --native-par is set.
+    //   mode4: 8bpp paletted. Identical shape to the chunky VGA path but
+    //          with a BGR555-snapped 256-color palette (the GBA stores
+    //          palette entries as BGR555 words, so the dither target must
+    //          score against the snapped colors).
+    //   mode3/mode5: 16bpp direct color. Run the central error-diffusion
+    //          driver over the whole image; the picker snaps each pixel to
+    //          the BGR555 grid (same approach as snes_mode7_direct's
+    //          per-tile path, minus the tiling, and 5-5-5 instead of
+    //          3-3-2). The raw u16 BGR555 word stream goes into raw_frame.
+    if (amiga::is_gba(mode)) {
+        if (has_transparency) {
+            for (std::size_t i = 0; i < tmask.size(); ++i)
+                if (tmask[i]) image->pixels()[i] = Color3f{0, 0, 0};
+        }
+
+        auto w = image->width();
+        auto h = image->height();
+        dither::Settings dith;
+        dith.method = parse_dither(options.dither);
+        dith.strength = options.dither_strength;
+        dith.error_clamp = options.error_clamp;
+
+        if (amiga::is_gba_paletted(mode)) {
+            // --- GBA Mode 4: 8bpp + 256-entry BGR555 palette ---
+            // Full palette-feature plumbing, mirroring the VGA chunky path
+            // (the only difference is the BGR555 snap): external --palette,
+            // --lock-index, --reserve-range, --lock-color0, --pin-index-at,
+            // transparency slot 0, and --palette-diversity. Lock / reserve
+            // colors snap onto the BGR555 grid via to_color()'s is_gba case;
+            // the quantizer runs in continuous space (resolve_algorithm
+            // routes GBA there) and every entry is snapped afterward.
+            constexpr std::size_t kColors = 256;
+            bool user_pal = has_user_palette(options);
+            bool lock_zero = options.lock_color0 && (has_transparency || !user_pal);
+
+            if (auto v = palette_locks::validate_locks(options.locks, kColors); !v)
+                return std::unexpected{v.error()};
+            if (auto v = palette_locks::validate_pins(
+                    options.pins, options.locks, options.reserves, kColors, w, h, lock_zero);
+                !v)
+                return std::unexpected{v.error()};
+            auto reserves_in_pal =
+                palette_locks::validate_reserves(options.reserves, options.locks, kColors, lock_zero);
+            if (!reserves_in_pal) return std::unexpected{reserves_in_pal.error()};
+
+            Palette pal;
+            std::vector<bool> locked_mask(kColors, false);
+            if (user_pal) {
+                // External palette: snap to BGR555, pad to 256, then stamp
+                // user locks on top of the loaded entries.
+                auto loaded = load_user_palette(options);
+                if (!loaded) return std::unexpected{loaded.error()};
+                pal = *std::move(loaded);
+                if (pal.colors.size() > kColors) pal.colors.resize(kColors);
+                for (auto& c : pal.colors)
+                    c = console_color::bgr555_quantize(c);
+                while (pal.colors.size() < kColors)
+                    pal.colors.push_back(Color3f{0, 0, 0});
+                for (auto& lock : options.locks) {
+                    auto idx = static_cast<std::size_t>(lock.index);
+                    pal.colors[idx] = palette_locks::to_color(lock, chipset, mode);
+                    locked_mask[idx] = true;
+                }
+            } else {
+                auto qc = palette_locks::quant_counts_for_assemble(
+                    kColors, options.locks, *reserves_in_pal, lock_zero);
+                auto qfn = [&](std::size_t k) -> Result<Palette> {
+                    return quantize::quantize(
+                        *image, k,
+                        quantize::resolve_algorithm(mode, chipset, options.quantizer),
+                        options.palette_diversity);
+                };
+                auto qr = palette_locks::two_pass_quantize(qfn, qc.qcount, qc.kfallback, lock_zero);
+                if (!qr) return std::unexpected{qr.error()};
+                // Snap first so a centroid that lands on a locked colour is
+                // dropped by the assembly instead of duplicated.
+                for (auto& c : qr->colors)
+                    c = console_color::bgr555_quantize(c);
+                auto assembled = palette_locks::assemble_with_reserves(
+                    *qr, options.locks, options.reserves, kColors, lock_zero, chipset, mode);
+                pal = std::move(assembled.palette);
+                locked_mask = std::move(assembled.locked);
+                for (auto& c : pal.colors)
+                    c = console_color::bgr555_quantize(c);
+            }
+
+            // Reserved slots are excluded from the dither candidate set so
+            // image pixels never land on them; locks stay routable.
+            std::vector<bool> reserved_mask(kColors, false);
+            for (auto& r : options.reserves) {
+                auto i = static_cast<std::size_t>(r.index);
+                if (r.index >= 0 && i < kColors) reserved_mask[i] = true;
+            }
+            bool any_reserved =
+                std::any_of(reserved_mask.begin(), reserved_mask.end(), [](bool b) { return b; });
+            dither::DitherResult dith_result;
+            if (any_reserved) {
+                std::vector<Color3f> cand;
+                std::vector<std::uint8_t> cand_to_full;
+                for (std::size_t i = 0; i < pal.colors.size(); ++i) {
+                    if (reserved_mask[i]) continue;
+                    cand.push_back(pal.colors[i]);
+                    cand_to_full.push_back(static_cast<std::uint8_t>(i));
+                }
+                dith_result = dither::apply(*image, cand, dith);
+                for (auto& idx : dith_result.indices)
+                    idx = cand_to_full[idx];
+            } else {
+                dith_result = dither::apply(*image, pal.colors, dith);
+                if (!user_pal && !has_transparency) {
+                    palette_pairs::joint_refit(
+                        *image,
+                        pal.colors,
+                        dith_result,
+                        locked_mask,
+                        palette_pairs::kBgr555,
+                        false,
+                        [&](const std::vector<Color3f>& p) {
+                            return dither::apply(*image, std::span<const Color3f>(p), dith);
+                        },
+                        /*concurrent=*/true);
+                    palette_pairs::refine(
+                        *image, pal.colors, dith_result, dith, locked_mask, palette_pairs::kBgr555);
+                }
+            }
+
+            // --pin-index-at: pin a slot to the source pixel at (x,y) and
+            // force those pixels to that slot. Applied post-dither (same as
+            // the standard path); re-snap since pins write source colors.
+            if (!options.pins.empty()) {
+                auto pin_result = palette_locks::apply_pins(
+                    pal, dith_result.indices, locked_mask, options.pins, w, h);
+                if (!pin_result) return std::unexpected{pin_result.error()};
+                for (auto& c : pal.colors)
+                    c = console_color::bgr555_quantize(c);
+            }
+
+            Image rendered(w, h);
+            for (std::size_t i = 0; i < dith_result.indices.size(); ++i)
+                rendered.pixels()[i] = pal.colors[dith_result.indices[i]];
+
+            PipelineResult result;
+            result.rendered = std::move(rendered);
+            result.palette = std::move(pal.colors);
+            result.indices = dith_result.indices;
+            result.planes.depth = 8;  // 8bpp chunky
+            result.mode = mode;
+            result.hires = false;
+            result.interlace = false;
+            result.has_transparency = has_transparency;
+            result.transparency_mask = tmask;
+            result.finalize_psnr(*image, dith_result.total_error);
+            // raw_frame = 8bpp index stream; convert_raw appends the
+            // BGR555 palette as a companion .pal file.
+            result.raw_frame = std::move(dith_result.indices);
+            return result;
+        }
+
+        // --- GBA Mode 3 / Mode 5: 16bpp BGR555 direct color ---
+        Image rendered(w, h);
+        std::vector<std::uint8_t> raw;
+        raw.reserve(w * h * 2);
+        // diffuse_raw_buffer drives serpentine scan + error feedback +
+        // ordered/structure bias centrally (dither.cpp). The picker is
+        // the only mode-specific piece: snap the adjusted target to the
+        // BGR555 grid and record both the linear render color and the
+        // packed LE u16 word. We collect words in a w×h grid first
+        // (serpentine scan visits pixels out of raster order), then flush
+        // to raw + rendered in raster order.
+        std::vector<std::uint16_t> words(w * h, 0);
+        float total_error = dither::diffuse_raw_buffer(
+            *image,
+            dith,
+            [&](const color_space::OKLab& target, std::size_t x, std::size_t y)
+                -> dither::PickResult {
+                auto linear = color_space::oklab_to_linear(target);
+                auto snapped = console_color::bgr555_quantize(linear);
+                words[y * w + x] = console_color::to_bgr555_word(linear);
+                rendered[x, y] = snapped;
+                return {color_space::linear_to_oklab(snapped), 0.5f};
+            });
+        for (auto word : words) {
+            raw.push_back(static_cast<std::uint8_t>(word & 0xFF));
+            raw.push_back(static_cast<std::uint8_t>((word >> 8) & 0xFF));
+        }
+
+        PipelineResult result;
+        result.rendered = std::move(rendered);
+        result.palette.clear();  // direct color — no palette
+        result.indices.clear();
+        result.planes.depth = 16;  // conceptual: bits per pixel, not planes
+        result.mode = mode;
+        result.hires = false;
+        result.interlace = false;
+        result.has_transparency = has_transparency;
+        result.transparency_mask = tmask;
+        result.finalize_psnr(*image, total_error);
+        result.raw_frame = std::move(raw);
         return result;
     }
 
@@ -2410,8 +3319,12 @@ Result<PipelineResult> run_pipeline(const std::uint8_t* input_data,
                 // EHB-aware best palette we can build offline.
                 Palette seed_pal;
                 {
+                    // AGA: 48 PNN bins (mean S2 72.96 -> 74.12 on
+                    // examples/*.jpg at 320 wide).
+                    const int seed_bins = chipset == amiga::Chipset::aga ? 48 : quantize::kPnnBins;
                     auto qfn = [&](std::size_t k) -> Result<Palette> {
-                        auto q = quantize::quantize(img, k, quantize::Algorithm::pnn, diversity);
+                        auto q = quantize::quantize(
+                            img, k, quantize::Algorithm::pnn, diversity, seed_bins);
                         if (!q) return std::unexpected{q.error()};
                         Palette p = std::move(*q);
                         snap_to_chipset(p, chipset, mode);
@@ -2607,14 +3520,15 @@ Result<PipelineResult> run_pipeline(const std::uint8_t* input_data,
                         return {chosen, thr};
                     });
 
-                if (d.method == dither::Method::dbs) {
+                if (dither::has_post_pass(d.method)) {
                     if (ehb_cap_excluded.empty()) {
-                        dither::apply_dbs_post_pass(img,
-                                                    all_indices,
-                                                    [&](std::size_t /*x*/, std::size_t y)
-                                                        -> std::span<const color_space::OKLab> {
-                                                        return pal_lab_per_row[y];
-                                                    });
+                        dither::apply_post_pass(d.method,
+                                                img,
+                                                all_indices,
+                                                [&](std::size_t /*x*/, std::size_t y)
+                                                    -> std::span<const color_space::OKLab> {
+                                                    return pal_lab_per_row[y];
+                                                });
                     } else {
                         std::vector<std::vector<std::uint8_t>> full_to_cand_per_row(h);
                         for (std::size_t y = 0; y < h; ++y) {
@@ -2626,12 +3540,13 @@ Result<PipelineResult> run_pipeline(const std::uint8_t* input_data,
                         std::vector<std::uint8_t> cand_indices(all_indices.size());
                         for (std::size_t i = 0; i < all_indices.size(); ++i)
                             cand_indices[i] = full_to_cand_per_row[i / w][all_indices[i]];
-                        dither::apply_dbs_post_pass(img,
-                                                    cand_indices,
-                                                    [&](std::size_t /*x*/, std::size_t y)
-                                                        -> std::span<const color_space::OKLab> {
-                                                        return pal_lab_per_row[y];
-                                                    });
+                        dither::apply_post_pass(d.method,
+                                                img,
+                                                cand_indices,
+                                                [&](std::size_t /*x*/, std::size_t y)
+                                                    -> std::span<const color_space::OKLab> {
+                                                    return pal_lab_per_row[y];
+                                                });
                         for (std::size_t i = 0; i < cand_indices.size(); ++i)
                             all_indices[i] = cand_to_full_per_row[i / w][cand_indices[i]];
                     }
@@ -2765,6 +3680,11 @@ Result<PipelineResult> run_pipeline(const std::uint8_t* input_data,
         // applies the pin swap per trial — visual no-op so ranking
         // isn't affected. User palettes still exclude the sweep.
         bool ehb_can_sweep = options.best && !has_user_palette(options);
+        // AGA EHB --best: the sweep trials dither differently from plain
+        // (dither::apply vs diffuse_raw_buffer, no half-brite dedupe), so
+        // the sweep result is held here and the plain encode below is
+        // kept instead when it scores higher.
+        std::optional<PipelineResult> ehb_sweep_result;
 
         // EHB pop-search path. Same eligibility as the legacy sweep; we
         // gate on chipset==OCS because pop_search.cpp's snap-OCS step
@@ -3025,7 +3945,8 @@ Result<PipelineResult> run_pipeline(const std::uint8_t* input_data,
             result.has_transparency = has_transparency;
             result.transparency_mask = tmask;
             result.finalize_psnr(*image, winner->total_error);
-            return result;
+            if (chipset != amiga::Chipset::aga || tile_active) return result;
+            ehb_sweep_result = std::move(result);
         }
 
         // Generate base colors via median-cut, or load from file.
@@ -3056,10 +3977,13 @@ Result<PipelineResult> run_pipeline(const std::uint8_t* input_data,
             std::size_t reserves_ehb = *reserves_in_pal_ehb;
             auto qc = palette_locks::quant_counts_for_assemble(
                 32, options.locks, reserves_ehb, lock_zero_ehb);
+            // AGA: 64 PNN bins (mean S2 54.72 -> 55.99 on examples/*.jpg
+            // at 320 wide; 32 and 48 bins swing per image by up to -7).
+            const int ehb_bins = chipset == amiga::Chipset::aga ? 64 : quantize::kPnnBins;
             auto quantized = palette_locks::two_pass_quantize(
                 [&](std::size_t k) -> Result<Palette> {
                     return quantize::quantize(
-                        *image, k, quantize::Algorithm::pnn, options.palette_diversity);
+                        *image, k, quantize::Algorithm::pnn, options.palette_diversity, ehb_bins);
                 },
                 qc.qcount,
                 qc.kfallback,
@@ -3138,58 +4062,88 @@ Result<PipelineResult> run_pipeline(const std::uint8_t* input_data,
             for (std::size_t i = 0; i < tmask.size() && i < dither_result.indices.size(); ++i)
                 if (tmask[i]) dither_result.indices[i] = 0;
         } else {
-            // diffuse_raw_buffer + pick_palette_index_with_ostro path —
-            // same dither used by EHB+sliced / strips+EHB. Bisect against
-            // dither::apply on a fixed 64-color EHB palette showed it
-            // produces +28 SSIMULACRA2 for free (encode_copper with 0
-            // changes/line measured 63.76 vs plain EHB's apply path
-            // 35.79 on the same palette). The diffuse_raw_buffer path
-            // pairs with pick_palette_index_with_ostro's
-            // second-nearest tracking which the legacy `apply` route
-            // doesn't expose.
-            std::vector<color_space::OKLab> pal_lab;
-            std::vector<std::uint8_t> cand_to_full;
-            pal_lab.reserve(64);
-            cand_to_full.reserve(64);
-            for (std::size_t i = 0; i < ehb_pal.colors.size(); ++i) {
-                if (ehb_blocked[i]) continue;
-                pal_lab.push_back(color_space::linear_to_oklab(ehb_pal.colors[i]));
-                cand_to_full.push_back(static_cast<std::uint8_t>(i));
-            }
-            auto w = image->width();
-            std::vector<std::uint8_t> indices(w * image->height(), 0);
-            float total_err = dither::diffuse_raw_buffer(
-                *image,
-                dith,
-                [&](const color_space::OKLab& target,
-                    std::size_t x,
-                    std::size_t y) -> dither::PickResult {
-                    std::size_t k = 0;
-                    color_space::OKLab chosen{};
-                    float thr = dither::pick_palette_index_with_ostro(
-                        dith.method, target, pal_lab, x, y, dith.strength, /*k_min=*/0, k, chosen);
-                    indices[y * w + x] = cand_to_full[k];
-                    return {chosen, thr};
-                });
-            if (dith.method == dither::Method::dbs) {
-                // DBS post-pass also needs the filtered candidate set so
-                // it doesn't swap pixels back onto reserved slots.
-                std::vector<std::uint8_t> cand_indices(indices.size());
-                std::vector<std::uint8_t> full_to_cand(64, 255);
-                for (std::size_t k = 0; k < cand_to_full.size(); ++k)
-                    full_to_cand[cand_to_full[k]] = static_cast<std::uint8_t>(k);
-                for (std::size_t i = 0; i < indices.size(); ++i)
-                    cand_indices[i] = full_to_cand[indices[i]];
-                dither::apply_dbs_post_pass(
+            auto encode_palette = [&](std::span<const Color3f> colors) {
+                dither::DitherResult encoded;
+                // diffuse_raw_buffer + pick_palette_index_with_ostro path —
+                // same dither used by EHB+sliced / strips+EHB. Bisect against
+                // dither::apply on a fixed 64-color EHB palette showed it
+                // produces +28 SSIMULACRA2 for free (encode_copper with 0
+                // changes/line measured 63.76 vs plain EHB's apply path
+                // 35.79 on the same palette). The diffuse_raw_buffer path
+                // pairs with pick_palette_index_with_ostro's
+                // second-nearest tracking which the legacy `apply` route
+                // doesn't expose.
+                std::vector<color_space::OKLab> pal_lab;
+                std::vector<std::uint8_t> cand_to_full;
+                pal_lab.reserve(64);
+                cand_to_full.reserve(64);
+                for (std::size_t i = 0; i < colors.size(); ++i) {
+                    if (ehb_blocked[i]) continue;
+                    pal_lab.push_back(color_space::linear_to_oklab(colors[i]));
+                    cand_to_full.push_back(static_cast<std::uint8_t>(i));
+                }
+                auto w = image->width();
+                std::vector<std::uint8_t> indices(w * image->height(), 0);
+                float total_err = dither::diffuse_raw_buffer(
                     *image,
-                    cand_indices,
-                    [&](std::size_t /*x*/, std::size_t /*y*/)
-                        -> std::span<const color_space::OKLab> { return pal_lab; });
-                for (std::size_t i = 0; i < indices.size(); ++i)
-                    indices[i] = cand_to_full[cand_indices[i]];
+                    dith,
+                    [&](const color_space::OKLab& target,
+                        std::size_t x,
+                        std::size_t y) -> dither::PickResult {
+                        std::size_t k = 0;
+                        color_space::OKLab chosen{};
+                        float thr = dither::pick_palette_index_with_ostro(
+                            dith.method, target, pal_lab, x, y, dith.strength, /*k_min=*/0, k, chosen);
+                        indices[y * w + x] = cand_to_full[k];
+                        return {chosen, thr};
+                    });
+                if (dither::has_post_pass(dith.method)) {
+                    // DBS post-pass also needs the filtered candidate set so
+                    // it doesn't swap pixels back onto reserved slots.
+                    std::vector<std::uint8_t> cand_indices(indices.size());
+                    std::vector<std::uint8_t> full_to_cand(64, 255);
+                    for (std::size_t k = 0; k < cand_to_full.size(); ++k)
+                        full_to_cand[cand_to_full[k]] = static_cast<std::uint8_t>(k);
+                    for (std::size_t i = 0; i < indices.size(); ++i)
+                        cand_indices[i] = full_to_cand[indices[i]];
+                    dither::apply_post_pass(
+                        dith.method,
+                        *image,
+                        cand_indices,
+                        [&](std::size_t /*x*/, std::size_t /*y*/)
+                            -> std::span<const color_space::OKLab> { return pal_lab; });
+                    for (std::size_t i = 0; i < indices.size(); ++i)
+                        indices[i] = cand_to_full[cand_indices[i]];
+                }
+                encoded.indices = std::move(indices);
+                encoded.total_error = total_err;
+                return encoded;
+            };
+            dither_result = encode_palette(ehb_pal.colors);
+            if (!user_pal_ehb && options.reserves.empty() && chipset == amiga::Chipset::ocs) {
+                // Start both searches from the same canonical palette order
+                // exposed by the baseline encoder and comparison harness.
+                palette_locks::sort_by_brightness(ehb_pal.colors, base_locked,
+                                                  dither_result.indices, 32, true);
+                palette_pairs::joint_refit(
+                    *image,
+                    ehb_pal.colors,
+                    dither_result,
+                    base_locked,
+                    palette_pairs::kOcs,
+                    true,
+                    [&](const std::vector<Color3f>& p) {
+                        return encode_palette(std::span<const Color3f>(p));
+                    },
+                    /*concurrent=*/true);
+                palette_pairs::refine_ehb(*image,
+                                          ehb_pal.colors,
+                                          dither_result,
+                                          base_locked,
+                                          encode_palette,
+                                          /*concurrent=*/true);
+                base_pal.colors.assign(ehb_pal.colors.begin(), ehb_pal.colors.begin() + 32);
             }
-            dither_result.indices = std::move(indices);
-            dither_result.total_error = total_err;
         }
 
         // Apply EHB pin-index swaps. Pins act on the BASE 32 only; half-brite
@@ -3301,6 +4255,14 @@ Result<PipelineResult> run_pipeline(const std::uint8_t* input_data,
                 if (tmask[i]) result.rendered.pixels()[i] = Color3f{0, 0, 0};
         }
         result.finalize_psnr(*image, dither_result.total_error);
+        if (ehb_sweep_result) {
+            auto s2 = [&](const Image& r) {
+                return ssimulacra2::compute(
+                    image->pixels(), r.pixels(), image->width(), image->height());
+            };
+            if (s2(ehb_sweep_result->rendered) >= s2(result.rendered))
+                return *std::move(ehb_sweep_result);
+        }
         if (tile_active) {
             auto cropped = tile_crop_result(
                 result, tile_w, tile_h, depth, bitplane::Layout::interleaved);
@@ -3443,7 +4405,9 @@ Result<PipelineResult> run_pipeline(const std::uint8_t* input_data,
                                          options.sliced_vertical_dither,
                                          sliced_excluded,
                                          /*quantizer_override=*/std::nullopt,
-                                         beam_on);
+                                         beam_on,
+                                         /*dither_checked=*/true,
+                                         depth_zones);
         };
 
         Result<copper::CopperResult> copper_result;
@@ -3525,6 +4489,13 @@ Result<PipelineResult> run_pipeline(const std::uint8_t* input_data,
         }
         if (!copper_result) return std::unexpected{copper_result.error()};
 
+        // Per-pixel slot indices for the web palette-hover highlight —
+        // with per-scanline palettes the slot, not the RGB value, is the
+        // stable identity. Decode before any DPF expansion; shifted below
+        // alongside the palettes when DPF interleaves PF1 zeros.
+        std::vector<std::uint8_t> slot_indices;
+        if (auto dec = bitplane::decode(copper_result->planes)) slot_indices = *std::move(dec);
+
         // Render preview BEFORE any DPF expansion: render_copper builds a
         // combined palette index from all planes which would land on
         // non-contiguous slots once PF1 zeros are interleaved. Capped
@@ -3552,14 +4523,18 @@ Result<PipelineResult> run_pipeline(const std::uint8_t* input_data,
             auto shift_palette = [&](std::vector<Color3f>& p) {
                 std::vector<Color3f> shifted(pf2_base, Color3f{0, 0, 0});
                 shifted.insert(shifted.end(), p.begin(), p.end());
+                shifted.at(0) = p.at(0);
+                shifted[pf2_base] = Color3f{0, 0, 0};
                 p = std::move(shifted);
             };
             for (auto& pal : copper_result->scanline_palettes)
                 shift_palette(pal);
             for (auto& line : copper_result->scanline_changes)
                 for (auto& ch : line)
-                    ch.reg = static_cast<std::uint8_t>(ch.reg + pf2_base);
+                    ch.reg = ch.reg == 0 ? 0 : static_cast<std::uint8_t>(ch.reg + pf2_base);
             copper_result->num_colors += pf2_base;
+            for (auto& idx : slot_indices)
+                idx = idx == 0 ? 0 : static_cast<std::uint8_t>(idx + pf2_base);
         }
 
         // Use the first scanline's palette as the nominal palette
@@ -3576,8 +4551,10 @@ Result<PipelineResult> run_pipeline(const std::uint8_t* input_data,
         result.dpf = use_dpf;
         result.copper = true;
         result.aga = is_aga;
+        result.indices = std::move(slot_indices);
         result.scanline_palettes = std::move(copper_result->scanline_palettes);
         result.scanline_changes = std::move(copper_result->scanline_changes);
+        result.zones = std::move(copper_result->zones);
         result.copper_num_colors = copper_result->num_colors;
         result.changes_per_line = copper_result->changes_per_line;
         result.max_moves_per_line = copper_result->max_moves_per_line;
@@ -3594,20 +4571,22 @@ Result<PipelineResult> run_pipeline(const std::uint8_t* input_data,
     }
 
     // --- strips (mid-line palette swaps) ---
-    // Two variants:
-    //   * DPF: OCS lores DPF (depth=3), 8 PF2 colors. cpp export ready.
-    //   * EHB: OCS EHB (6bpp, 32 base + 32 hardware half-brites). No
-    //     cpp export wired yet — the encoder produces planes + preview.
+    // Variants (strips::kStripsVariants):
+    //   * lores: OCS lores 1-4 planes, 2-16 colors, 8-px slot grid.
+    //   * DPF: OCS lores DPF (depth=3), 8 PF2 colors.
+    //   * EHB: OCS EHB (6bpp, 32 base + 32 hardware half-brites).
+    //   * HAM6: OCS HAM6, 16 base colors.
     if (options.scap) {
         bool strips_ehb = mode == amiga::Mode::ehb;
         bool strips_dpf = options.dual_playfield && mode == amiga::Mode::lores;
         bool strips_ham6 = mode == amiga::Mode::ham6;
+        bool strips_lores = !options.dual_playfield && mode == amiga::Mode::lores && depth <= 4;
         if (chipset != amiga::Chipset::ocs || options.interlace ||
-            (!strips_ehb && !strips_dpf && !strips_ham6)) {
+            (!strips_ehb && !strips_dpf && !strips_ham6 && !strips_lores)) {
             return std::unexpected{Error{
                 ErrorCode::unsupported_mode,
-                "Strips requires OCS (no interlace) with --dpf lores depth=3, "
-                "--mode ehb, or --mode ham6",
+                "Strips requires OCS (no interlace) with --mode lores depth 1-4, "
+                "--dpf lores depth=3, --mode ehb, or --mode ham6",
             }};
         }
         if (has_transparency) {
@@ -3627,122 +4606,160 @@ Result<PipelineResult> run_pipeline(const std::uint8_t* input_data,
         }
         std::span<const Color3f> strips_user_pal_span(strips_user_pal);
 
-        Result<strips::ScapResult> strips_res =
-            strips_ham6
-                ? strips::encode_strips_ham6_ocs(*image,
+        auto encode_strips = [&]() -> Result<strips::ScapResult> {
+            if (strips_ham6) {
+                return strips::encode_strips_ham6_ocs(
+                    *image,
+                    static_cast<int>(image->width()),
+                    static_cast<int>(image->height()),
+                    options.lock_color0,
+                    strips_dith,
+                    static_cast<std::size_t>(options.copper_changes),
+                    options.palette_diversity,
+                    options.on_progress,
+                    options.sliced_spread_radius,
+                    options.sliced_spread_decay,
+                    options.sliced_vertical_dither,
+                    options.best,
+                    strips_user_pal_span,
+                    (options.ham_metric == "srgb-mse") ? ham::HamMetric::srgb_mse
+                                                       : ham::HamMetric::oklab2);
+            }
+            if (strips_ehb) {
+                // strips-EHB reserves: build (idx, color) pairs for the
+                // 32-base palette. encode_strips_ehb_ocs forwards them to
+                // encode_copper as locked + dither-excluded, AND blocks
+                // the mid-line strips swap planner from targeting them.
+                std::vector<std::pair<std::size_t, Color3f>> strips_ehb_reserves;
+                for (auto& r : options.reserves) {
+                    auto i = static_cast<std::size_t>(r.index);
+                    if (r.index >= 0 && i < 32) {
+                        strips_ehb_reserves.emplace_back(
+                            i,
+                            palette_locks::to_color(
+                                LockSpec{r.index, r.r, r.g, r.b}, chipset, mode));
+                    }
+                }
+                return strips::encode_strips_ehb_ocs(
+                    *image,
+                    static_cast<int>(image->width()),
+                    static_cast<int>(image->height()),
+                    options.lock_color0,
+                    strips_dith,
+                    static_cast<std::size_t>(options.copper_changes),
+                    options.palette_diversity,
+                    options.strips_debug,
+                    options.on_progress,
+                    options.best,
+                    options.sliced_spread_radius,
+                    options.sliced_spread_decay,
+                    options.sliced_vertical_dither,
+                    strips_user_pal_span,
+                    strips_ehb_reserves,
+                    options.sliced_beam);
+            }
+            if (strips_lores) {
+                // strips-lores reserves/locks: palette index = COLOR
+                // register, no translation. Indices past 2^depth drop.
+                const std::size_t colors = std::size_t{1} << depth;
+                std::vector<std::pair<std::size_t, Color3f>> lores_reserves;
+                for (auto& r : options.reserves) {
+                    auto i = static_cast<std::size_t>(r.index);
+                    if (r.index >= 0 && i < colors) {
+                        lores_reserves.emplace_back(
+                            i,
+                            palette_locks::to_color(
+                                LockSpec{r.index, r.r, r.g, r.b}, chipset, mode));
+                    }
+                }
+                std::vector<std::pair<std::size_t, Color3f>> lores_locks;
+                for (auto& l : options.locks) {
+                    auto i = static_cast<std::size_t>(l.index);
+                    if (l.index >= 0 && i < colors)
+                        lores_locks.emplace_back(i, palette_locks::to_color(l, chipset, mode));
+                }
+                return strips::encode_strips_lores_ocs(
+                    *image,
+                    static_cast<int>(image->width()),
+                    static_cast<int>(image->height()),
+                    static_cast<int>(depth),
+                    options.lock_color0,
+                    strips_dith,
+                    options.strips_debug,
+                    static_cast<std::size_t>(options.copper_changes),
+                    options.palette_diversity,
+                    options.on_progress,
+                    options.best,
+                    options.sliced_spread_radius,
+                    options.sliced_spread_decay,
+                    options.sliced_vertical_dither,
+                    strips_user_pal_span,
+                    lores_reserves,
+                    lores_locks,
+                    options.sliced_beam);
+            }
+            // strips-DPF reserves/locks: indices reference the OCS
+            // DPF 16-entry CLUT layout (CLUT[0..7] = PF1, CLUT[8..15]
+            // = PF2). PF1 is zeroed in our encoder, so any CLUT-1..7
+            // entry is a silent no-op. PF2 base indices 0..7 map to
+            // CLUT registers via the OCS DPF combiner:
+            //   PF2 idx 0 → COLOR00 (dual-written to COLOR08 for
+            //               AGA-DPF source compatibility)
+            //   PF2 idx 1..7 → COLOR09..15
+            // Translate CLUT slot → PF2 base index for the planner.
+            auto translate_to_pf2 = [&](int user_idx) -> std::optional<int> {
+                if (user_idx < 0) return std::nullopt;
+                auto i = static_cast<std::size_t>(user_idx);
+                if (i == 0 || i == 8) return 0;
+                if (i >= 9 && i <= 15) return static_cast<int>(i - 8);
+                return std::nullopt;
+            };
+            std::vector<std::pair<std::size_t, Color3f>> strips_dpf_reserves;
+            strips_dpf_reserves.reserve(options.reserves.size());
+            for (auto& r : options.reserves) {
+                auto pf2 = translate_to_pf2(r.index);
+                if (!pf2) continue;
+                bool dup = std::any_of(
+                    strips_dpf_reserves.begin(), strips_dpf_reserves.end(), [&](const auto& p) {
+                        return static_cast<int>(p.first) == *pf2;
+                    });
+                if (dup) continue;
+                strips_dpf_reserves.emplace_back(
+                    static_cast<std::size_t>(*pf2),
+                    palette_locks::to_color(LockSpec{r.index, r.r, r.g, r.b}, chipset, mode));
+            }
+            std::vector<std::pair<std::size_t, Color3f>> strips_dpf_locks;
+            strips_dpf_locks.reserve(options.locks.size());
+            for (auto& l : options.locks) {
+                auto pf2 = translate_to_pf2(l.index);
+                if (!pf2) continue;
+                bool dup = std::any_of(
+                    strips_dpf_locks.begin(), strips_dpf_locks.end(), [&](const auto& p) {
+                        return static_cast<int>(p.first) == *pf2;
+                    });
+                if (dup) continue;
+                strips_dpf_locks.emplace_back(static_cast<std::size_t>(*pf2),
+                                              palette_locks::to_color(l, chipset, mode));
+            }
+            return strips::encode_strips_dpf_ocs(*image,
                                                  static_cast<int>(image->width()),
                                                  static_cast<int>(image->height()),
                                                  options.lock_color0,
                                                  strips_dith,
+                                                 options.strips_debug,
                                                  static_cast<std::size_t>(options.copper_changes),
                                                  options.palette_diversity,
                                                  options.on_progress,
+                                                 options.best,
                                                  options.sliced_spread_radius,
                                                  options.sliced_spread_decay,
                                                  options.sliced_vertical_dither,
-                                                 options.best,
                                                  strips_user_pal_span,
-                                                 (options.ham_metric == "srgb-mse")
-                                                     ? ham::HamMetric::srgb_mse
-                                                     : ham::HamMetric::oklab2)
-            : strips_ehb
-                ? [&] {
-                      // strips-EHB reserves: build (idx, color) pairs for the
-                      // 32-base palette. encode_strips_ehb_ocs forwards them to
-                      // encode_copper as locked + dither-excluded, AND blocks
-                      // the mid-line strips swap planner from targeting them.
-                      std::vector<std::pair<std::size_t, Color3f>> strips_ehb_reserves;
-                      for (auto& r : options.reserves) {
-                          auto i = static_cast<std::size_t>(r.index);
-                          if (r.index >= 0 && i < 32) {
-                              strips_ehb_reserves.emplace_back(
-                                  i,
-                                  palette_locks::to_color(
-                                      LockSpec{r.index, r.r, r.g, r.b}, chipset, mode));
-                          }
-                      }
-                      return strips::encode_strips_ehb_ocs(
-                          *image,
-                          static_cast<int>(image->width()),
-                          static_cast<int>(image->height()),
-                          options.lock_color0,
-                          strips_dith,
-                          static_cast<std::size_t>(options.copper_changes),
-                          options.palette_diversity,
-                          options.strips_debug,
-                          options.on_progress,
-                          options.best,
-                          options.sliced_spread_radius,
-                          options.sliced_spread_decay,
-                          options.sliced_vertical_dither,
-                          strips_user_pal_span,
-                          strips_ehb_reserves,
-                          options.sliced_beam);
-                  }()
-                : [&] {
-                      // strips-DPF reserves/locks: indices reference the OCS
-                      // DPF 16-entry CLUT layout (CLUT[0..7] = PF1, CLUT[8..15]
-                      // = PF2). PF1 is zeroed in our encoder, so any CLUT-1..7
-                      // entry is a silent no-op. PF2 base indices 0..7 map to
-                      // CLUT registers via the OCS DPF combiner:
-                      //   PF2 idx 0 → COLOR00 (dual-written to COLOR08 for
-                      //               AGA-DPF source compatibility)
-                      //   PF2 idx 1..7 → COLOR09..15
-                      // Translate CLUT slot → PF2 base index for the planner.
-                      auto translate_to_pf2 = [&](int user_idx) -> std::optional<int> {
-                          if (user_idx < 0) return std::nullopt;
-                          auto i = static_cast<std::size_t>(user_idx);
-                          if (i == 0 || i == 8) return 0;
-                          if (i >= 9 && i <= 15) return static_cast<int>(i - 8);
-                          return std::nullopt;
-                      };
-                      std::vector<std::pair<std::size_t, Color3f>> strips_dpf_reserves;
-                      strips_dpf_reserves.reserve(options.reserves.size());
-                      for (auto& r : options.reserves) {
-                          auto pf2 = translate_to_pf2(r.index);
-                          if (!pf2) continue;
-                          bool dup = std::any_of(
-                              strips_dpf_reserves.begin(),
-                              strips_dpf_reserves.end(),
-                              [&](const auto& p) { return static_cast<int>(p.first) == *pf2; });
-                          if (dup) continue;
-                          strips_dpf_reserves.emplace_back(
-                              static_cast<std::size_t>(*pf2),
-                              palette_locks::to_color(
-                                  LockSpec{r.index, r.r, r.g, r.b}, chipset, mode));
-                      }
-                      std::vector<std::pair<std::size_t, Color3f>> strips_dpf_locks;
-                      strips_dpf_locks.reserve(options.locks.size());
-                      for (auto& l : options.locks) {
-                          auto pf2 = translate_to_pf2(l.index);
-                          if (!pf2) continue;
-                          bool dup = std::any_of(
-                              strips_dpf_locks.begin(), strips_dpf_locks.end(), [&](const auto& p) {
-                                  return static_cast<int>(p.first) == *pf2;
-                              });
-                          if (dup) continue;
-                          strips_dpf_locks.emplace_back(static_cast<std::size_t>(*pf2),
-                                                        palette_locks::to_color(l, chipset, mode));
-                      }
-                      return strips::encode_strips_dpf_ocs(
-                          *image,
-                          static_cast<int>(image->width()),
-                          static_cast<int>(image->height()),
-                          options.lock_color0,
-                          strips_dith,
-                          options.strips_debug,
-                          static_cast<std::size_t>(options.copper_changes),
-                          options.palette_diversity,
-                          options.on_progress,
-                          options.best,
-                          options.sliced_spread_radius,
-                          options.sliced_spread_decay,
-                          options.sliced_vertical_dither,
-                          strips_user_pal_span,
-                          strips_dpf_reserves,
-                          strips_dpf_locks,
-                          options.sliced_beam);
-                  }();
+                                                 strips_dpf_reserves,
+                                                 strips_dpf_locks,
+                                                 options.sliced_beam);
+        };
+        Result<strips::ScapResult> strips_res = encode_strips();
         if (!strips_res) return std::unexpected{strips_res.error()};
 
         PipelineResult result;
@@ -3769,6 +4786,25 @@ Result<PipelineResult> run_pipeline(const std::uint8_t* input_data,
         result.strips_max_visible_moves_per_line = strips_res->max_visible_moves_per_line;
         result.strips_slot_count = strips_res->slot_table.slots.size();
 
+        // Per-pixel slot indices for the web palette-hover highlight
+        // (indexed variants only — HAM6 strips pixels are ops, not
+        // slots). DPF strips planes come pre-expanded from the encoder
+        // (content in planes 1/3/5 = PF2), so compress the odd bits
+        // back to the PF2 index and shift into the CLUT upper half the
+        // way the palette already is.
+        if (!strips_ham6) {
+            if (auto dec = bitplane::decode(result.planes)) {
+                result.indices = *std::move(dec);
+                if (strips_dpf) {
+                    for (auto& v : result.indices) {
+                        auto pf2 = static_cast<std::uint8_t>(
+                            ((v >> 1) & 1u) | (((v >> 3) & 1u) << 1) | (((v >> 5) & 1u) << 2));
+                        v = static_cast<std::uint8_t>(pf2 + 8);
+                    }
+                }
+            }
+        }
+
         // Synthesize per-line palette snapshots for the web tool's
         // per-scanline strip view. Strips planner only retains the
         // line-MOVE deltas, so we replay them against the frame-start
@@ -3783,15 +4819,20 @@ Result<PipelineResult> run_pipeline(const std::uint8_t* input_data,
             const std::size_t H = result.rendered.height();
             result.scanline_palettes.resize(H);
             auto running = result.palette;
+            // Lores slot 0 lands exactly at x=0 (and loads COLOR00 when it
+            // is unlocked), so the line-start palette includes it.
+            auto starts_visible_line = [&](const strips::ScapMove& mv) {
+                if (strips_lores) return mv.kind == strips::ScapOpKind::kMove && mv.slot_index > 0;
+                return mv.kind == strips::ScapOpKind::kWait;
+            };
             for (std::size_t y = 0; y < H && y < result.strips_line_moves.size(); ++y) {
                 bool snapped = false;
                 for (auto& mv : result.strips_line_moves[y]) {
-                    if (mv.kind == strips::ScapOpKind::kWait) {
-                        if (!snapped) {
-                            result.scanline_palettes[y] = running;
-                            snapped = true;
-                        }
-                    } else if (mv.reg < running.size()) {
+                    if (starts_visible_line(mv) && !snapped) {
+                        result.scanline_palettes[y] = running;
+                        snapped = true;
+                    }
+                    if (mv.kind == strips::ScapOpKind::kMove && mv.reg < running.size()) {
                         running[mv.reg] = palette::ocs_to_linear(mv.rgb_ocs);
                     }
                 }
@@ -3897,6 +4938,59 @@ Result<PipelineResult> run_pipeline(const std::uint8_t* input_data,
         // sweep adds 7-10 s of wall on top of pop. Skip the sweep
         // entirely; pop search self-seeds via internal k-means
         // diversity restarts.
+        // Score helper — masks transparent pixels to black on
+        // both sides so SSIMULACRA2 doesn't penalise the ignored
+        // regions (matches cpu_fitness's masking).
+        auto score_rendered = [&](const Image& rnd) -> float {
+            if (!has_transparency) {
+                return ssimulacra2::compute(
+                    image->pixels(), rnd.pixels(), image->width(), image->height());
+            }
+            Image src_m(image->width(), image->height());
+            Image rnd_m(image->width(), image->height());
+            auto sp = src_m.pixels();
+            auto rp = rnd_m.pixels();
+            auto op = image->pixels();
+            auto orp = rnd.pixels();
+            for (std::size_t i = 0; i < sp.size(); ++i) {
+                if (i < tmask.size() && tmask[i]) {
+                    sp[i] = Color3f{0, 0, 0};
+                    rp[i] = Color3f{0, 0, 0};
+                } else {
+                    sp[i] = op[i];
+                    rp[i] = orp[i];
+                }
+            }
+            return ssimulacra2::compute(
+                src_m.pixels(), rnd_m.pixels(), image->width(), image->height());
+        };
+
+        // Plain's own encode (with pair fitting): a candidate in both
+        // pickers below, so --best never scores below the non-best output.
+        const int plain_bins = quantize::plain_pnn_bins(mode, chipset, max_colors);
+        auto encode_plain_candidate =
+            [&](const dither::Settings& d, const PlainAutoTrial* start, int pnn_bins) {
+                return encode_plain_auto(*image,
+                                         depth,
+                                         max_colors,
+                                         mode,
+                                         chipset,
+                                         d,
+                                         options.palette_diversity,
+                                         options.refine_iterations,
+                                         options.lock_color0,
+                                         has_transparency,
+                                         /*use_dpf=*/false,
+                                         /*match_range=*/options.match_range,
+                                         options.locks,
+                                         options.reserves,
+                                         options.pins,
+                                         tmask,
+                                         /*fit_pairs=*/true,
+                                         start,
+                                         pnn_bins);
+            };
+
         const auto& mp_curr = amiga::get_mode_params(mode);
         bool pop_only = chipset == amiga::Chipset::ocs && !mp_curr.is_hires && depth >= 1 &&
                         depth <= 5;
@@ -4060,38 +5154,13 @@ Result<PipelineResult> run_pipeline(const std::uint8_t* input_data,
                 sweep_phase_progress,
                 /*jitter_amplitude=*/1.0f);
 
-            // Score helper — masks transparent pixels to black on
-            // both sides so SSIMULACRA2 doesn't penalise the ignored
-            // regions (matches cpu_fitness's masking).
-            auto score_rendered = [&](const Image& rnd) -> float {
-                if (!has_transparency) {
-                    return ssimulacra2::compute(
-                        image->pixels(), rnd.pixels(), image->width(), image->height());
-                }
-                Image src_m(image->width(), image->height());
-                Image rnd_m(image->width(), image->height());
-                auto sp = src_m.pixels();
-                auto rp = rnd_m.pixels();
-                auto op = image->pixels();
-                auto orp = rnd.pixels();
-                for (std::size_t i = 0; i < sp.size(); ++i) {
-                    if (i < tmask.size() && tmask[i]) {
-                        sp[i] = Color3f{0, 0, 0};
-                        rp[i] = Color3f{0, 0, 0};
-                    } else {
-                        sp[i] = op[i];
-                        rp[i] = orp[i];
-                    }
-                }
-                return ssimulacra2::compute(
-                    src_m.pixels(), rnd_m.pixels(), image->width(), image->height());
-            };
-
-            // 3-way candidate ranking: pop / seed / sweep. seed_keep is
-            // only present when locks/reserves/transparency are in
-            // play (otherwise pop_search's internal k-means seeding
-            // suffices). Pick the highest-scoring candidate.
-            enum Kind { K_POP, K_SEED, K_SWEEP };
+            // 4-way candidate ranking: pop / seed / sweep / plain.
+            // seed_keep is only present when locks/reserves/transparency
+            // are in play (otherwise pop_search's internal k-means seeding
+            // suffices). Pick the highest-scoring candidate; ties keep
+            // the earlier one.
+            auto plain = encode_plain_candidate(base_dith, nullptr, plain_bins);
+            enum Kind { K_POP, K_SEED, K_SWEEP, K_PLAIN };
             struct Cand {
                 float s2;
                 Kind kind;
@@ -4100,6 +5169,7 @@ Result<PipelineResult> run_pipeline(const std::uint8_t* input_data,
             if (pop) cands.push_back({score_rendered(pop->rendered), K_POP});
             if (seed_keep) cands.push_back({score_rendered(seed_keep->rendered), K_SEED});
             if (sweep) cands.push_back({score_rendered(sweep->rendered), K_SWEEP});
+            if (plain) cands.push_back({score_rendered(plain->rendered), K_PLAIN});
 
             if (!cands.empty()) {
                 auto win = std::max_element(
@@ -4126,15 +5196,16 @@ Result<PipelineResult> run_pipeline(const std::uint8_t* input_data,
                     result.palette = std::move(pal_keep);
                     result.indices = std::move(seed_keep->indices);
                     result.finalize_psnr(*image, seed_keep->total_error);
-                } else {  // K_SWEEP
-                    std::vector<Color3f> pal_keep(sweep->pal.colors.begin(),
-                                                  sweep->pal.colors.begin() +
-                                                      static_cast<std::ptrdiff_t>(sweep->pal_size));
-                    result.rendered = std::move(sweep->rendered);
-                    result.planes = std::move(sweep->planes);
+                } else {  // K_SWEEP / K_PLAIN
+                    auto& t = win->kind == K_SWEEP ? *sweep : *plain;
+                    std::vector<Color3f> pal_keep(t.pal.colors.begin(),
+                                                  t.pal.colors.begin() +
+                                                      static_cast<std::ptrdiff_t>(t.pal_size));
+                    result.rendered = std::move(t.rendered);
+                    result.planes = std::move(t.planes);
                     result.palette = std::move(pal_keep);
-                    result.indices = std::move(sweep->indices);
-                    result.finalize_psnr(*image, sweep->total_error);
+                    result.indices = std::move(t.indices);
+                    result.finalize_psnr(*image, t.total_error);
                 }
                 result.mode = mode;
                 result.hires = compound_hires || mp_curr.is_hires;
@@ -4146,6 +5217,59 @@ Result<PipelineResult> run_pipeline(const std::uint8_t* input_data,
                 return result;
             }
             // All three failed — fall through to single-pass.
+        }
+
+        // From 64 colours up the PNN histogram resolution moves S2 by
+        // about +-1 per image, more than the jitter/diversity sweep finds
+        // (at 128+ colours apply_palette_diversity is a no-op, so that
+        // sweep ran every trial twice). Sweep the bin count instead, every
+        // trial pair-fitted; plain is trial 0 so ties keep it. Measured on
+        // examples/*.jpg at 320 wide: below 64 colours the jitter sweep
+        // scores as well or better; other dither strengths add <0.05 S2
+        // for twice the trials; 32-40 bins never change the pick.
+        if (max_colors >= 64 && quantize_algo(chipset, mode) == quantize::Algorithm::pnn) {
+            std::vector<int> bins{plain_bins};
+            for (int b : {quantize::kPnnBins, 48, 64, 80, 96})
+                if (b != plain_bins) bins.push_back(b);
+            std::vector<std::optional<PlainAutoTrial>> trials(bins.size());
+            std::vector<float> scores(bins.size(), -std::numeric_limits<float>::infinity());
+            std::atomic<std::size_t> done{0};
+            pipeline::parallel_for(bins.size(), [&](std::size_t i) {
+                auto t = encode_plain_candidate(base_dith, nullptr, bins[i]);
+                if (t) {
+                    scores[i] = score_rendered(t->rendered);
+                    trials[i] = std::move(*t);
+                }
+                if (options.on_progress) {
+                    options.on_progress(static_cast<float>(done.fetch_add(1) + 1) /
+                                            static_cast<float>(bins.size()),
+                                        "best");
+                }
+            });
+            std::size_t win = 0;
+            for (std::size_t i = 1; i < bins.size(); ++i)
+                if (scores[i] > scores[win]) win = i;
+            if (trials[win]) {
+                if (options.on_progress) options.on_progress(1.0f, "done");
+                auto& t = *trials[win];
+                PipelineResult result;
+                result.rendered = std::move(t.rendered);
+                result.planes = std::move(t.planes);
+                result.palette = std::vector<Color3f>(t.pal.colors.begin(),
+                                                      t.pal.colors.begin() +
+                                                          static_cast<std::ptrdiff_t>(t.pal_size));
+                result.indices = std::move(t.indices);
+                result.mode = mode;
+                result.hires = compound_hires || mp_curr.is_hires;
+                result.interlace = options.interlace;
+                result.dpf = false;
+                result.aga = is_aga;
+                result.has_transparency = has_transparency;
+                result.transparency_mask = tmask;
+                result.finalize_psnr(*image, t.total_error);
+                return result;
+            }
+            // Every trial failed — fall through to the jitter sweep.
         }
 
         auto encode_once = [&](const Image& img,
@@ -4178,6 +5302,19 @@ Result<PipelineResult> run_pipeline(const std::uint8_t* input_data,
             options.on_progress,
             /*jitter_amplitude=*/1.0f);
         if (winner) {
+            // The sweep trials skip pair fitting (too slow per trial).
+            // Pair-fit the winner's palette against the unjittered source
+            // with its own dither settings, and compare with plain.
+            float winner_s2 = score_rendered(winner->rendered);
+            for (auto& cand : {encode_plain_candidate(winner->dith, &*winner, plain_bins),
+                               encode_plain_candidate(base_dith, nullptr, plain_bins)}) {
+                if (!cand) continue;
+                float s2 = score_rendered(cand->rendered);
+                if (s2 > winner_s2) {
+                    winner_s2 = s2;
+                    winner = *cand;
+                }
+            }
             std::vector<Color3f> used_pal(winner->pal.colors.begin(),
                                           winner->pal.colors.begin() +
                                               static_cast<std::ptrdiff_t>(winner->pal_size));
@@ -4420,7 +5557,10 @@ Result<PipelineResult> run_pipeline(const std::uint8_t* input_data,
                                        effective_locks,
                                        effective_reserves,
                                        effective_pins,
-                                       tmask);
+                                       tmask,
+                                       /*fit_pairs=*/true,
+                                       /*start=*/nullptr,
+                                       quantize::plain_pnn_bins(mode, chipset, max_colors));
         if (!trial) return std::unexpected{trial.error()};
         std::vector<Color3f> used_palette(trial->pal.colors.begin(),
                                           trial->pal.colors.begin() +
@@ -4437,9 +5577,11 @@ Result<PipelineResult> run_pipeline(const std::uint8_t* input_data,
             auto pf2_base = std::size_t{1} << (trial_planes.depth / 2);
             std::vector<Color3f> shifted(pf2_base, Color3f{0, 0, 0});
             shifted.insert(shifted.end(), used_palette.begin(), used_palette.end());
+            // PF2 index zero is transparent and displays COLOR00.
+            shifted[0] = used_palette[0];
             used_palette = std::move(shifted);
             for (auto& idx : trial_indices)
-                idx = static_cast<std::uint8_t>(idx + pf2_base);
+                idx = idx == 0 ? 0 : static_cast<std::uint8_t>(idx + pf2_base);
         }
         PipelineResult result;
         result.rendered = std::move(trial->rendered);
@@ -4485,7 +5627,7 @@ Result<PipelineResult> run_pipeline(const std::uint8_t* input_data,
     //     the same gamut entry (reduces 16 slots → ~11 effective colors)
     //     and drops PSNR by 3+ dB.
     if (options.refine_iterations > 0 && !has_user_palette(options) &&
-        dith.method != dither::Method::none && reserve_count == 0 && !amiga::is_cga(mode) &&
+        dith.method != dither::Method::none && reserve_count == 0 && !(amiga::is_cga(mode) || amiga::is_tandy(mode)) &&
         !amiga::is_chunky(mode) && !amiga::is_ega(mode) && !amiga::is_atari_hi(mode)) {
         auto refined = quantize::refine_with_dither(
             *image,
@@ -4590,9 +5732,11 @@ Result<PipelineResult> run_pipeline(const std::uint8_t* input_data,
         auto pf2_base = std::size_t{1} << (planes->depth / 2);
         std::vector<Color3f> shifted(pf2_base, Color3f{0, 0, 0});
         shifted.insert(shifted.end(), used_palette.begin(), used_palette.end());
+        // PF2 index zero is transparent and displays COLOR00.
+        shifted[0] = used_palette[0];
         used_palette = std::move(shifted);
         for (auto& idx : dither_result.indices)
-            idx = static_cast<std::uint8_t>(idx + pf2_base);
+            idx = idx == 0 ? 0 : static_cast<std::uint8_t>(idx + pf2_base);
     }
     if (!preview) return std::unexpected{preview.error()};
 
@@ -4618,6 +5762,24 @@ Result<PipelineResult> run_pipeline(const std::uint8_t* input_data,
         auto cropped = tile_crop_result(result, tile_w, tile_h, depth, bp_layout);
         if (!cropped) return std::unexpected{cropped.error()};
     }
+    return result;
+}
+
+Result<PipelineResult> run_pipeline(const std::uint8_t* input_data,
+                                    std::size_t input_size,
+                                    const Options& orig_options,
+                                    const Image* prepared_image = nullptr) {
+    auto result = run_pipeline_core(input_data, input_size, orig_options, prepared_image);
+    if (!result) return result;
+    if (amiga::is_amiga(result->mode)) {
+        auto chipset =
+            resolve_chipset(decompose_mode_options(orig_options).chipset, result->mode);
+        result->row_mismatch = pipeline::count_row_mismatch(result->pixel_deviation,
+                                                            result->rendered.width(),
+                                                            result->rendered.height(),
+                                                            chipset == amiga::Chipset::aga);
+    }
+    result->pixel_deviation = {};
     return result;
 }
 
@@ -4652,6 +5814,11 @@ ConvertResult make_result(std::vector<std::uint8_t> data, const PipelineResult& 
     // EHB sliced/strips: report 64 (matching plain EHB) since the
     // hardware always doubles to 64 effective colors per line.
     if (p.mode == amiga::Mode::ehb && r.colors == 32) r.colors = 64;
+    // GBA direct-color modes have no palette (16bpp BGR555 per pixel);
+    // report the effective 32768-color gamut so status / web show it
+    // consistently with the SNES/Genesis convention.
+    if (amiga::is_gba_direct(p.mode)) r.colors = 32768;
+    if (amiga::is_nibnib(p.mode)) r.colors = 65536;  // RGB565
     // Pack the final palette as sRGB bytes (3 per entry) for the web
     // tool's palette swatch view. Empty when palette is empty.
     //
@@ -4711,11 +5878,18 @@ ConvertResult make_result(std::vector<std::uint8_t> data, const PipelineResult& 
             }
         }
     }
+    r.rowMismatch.assign(p.row_mismatch.begin(), p.row_mismatch.end());
     r.copperChanges = p.copper_changes;
     r.avgPaletteUsedPerLine = pipeline::compute_avg_palette_used_per_line(p.rendered,
                                                                           p.scanline_palettes);
     r.totalColors = count_unique_colors(p.rendered);
-    r.planeBytes = static_cast<int>(p.planes.total_bytes());
+    r.planeBytes = static_cast<int>(
+        p.zones.empty() ? p.planes.total_bytes()
+                        : copper::zoned_plane_bytes(p.zones, p.planes.height, p.planes.bytes_per_row));
+    for (auto& zone : p.zones) {
+        r.zoneRows.push_back(static_cast<int>(zone.start_row));
+        r.zoneDepths.push_back(static_cast<int>(zone.depth));
+    }
     r.aga = p.aga;
     int sliced_grid_entries = 0;
     int strips_op_count = 0;
@@ -4747,6 +5921,14 @@ ConvertResult make_result(std::vector<std::uint8_t> data, const PipelineResult& 
     r.copperBytes = sb.copper_bytes;
     r.diskBytes = sb.disk_bytes;
     r.chipBytes = sb.chip_bytes;
+    if (amiga::is_cga_pixels(p.mode)) {
+        // The RGBI palette lives in hardware; the payload is text VRAM.
+        r.planeBytes = r.diskBytes = r.chipBytes = r.width * r.height;
+    }
+    if (amiga::is_tandy(p.mode)) {
+        r.planeBytes = r.chipBytes = static_cast<int>(tandy::frame_size(p.mode));
+        r.diskBytes = r.planeBytes + 16;
+    }
     r.maxMovesPerLine = max_moves;
     r.quantError = p.quant_error;
     r.psnr = p.psnr;
@@ -4766,7 +5948,11 @@ ConvertResult make_result(std::vector<std::uint8_t> data, const PipelineResult& 
     }
     // Genesis tile diagnostic: u16 vectors get serialised as little-endian
     // 2-byte sequences so JS can DataView them with .getUint16(off, true).
-    if (amiga::is_genesis(p.mode) && !p.genesis_tile_bytes.empty()) {
+    // SMS / Game Gear reuse the same fields: 32-byte planar tiles and u16
+    // tilemap entries in the VDP mode 4 layout (the web decodes per mode).
+    // Their palette is the 32-entry CRAM already in paletteBytes.
+    if ((amiga::is_genesis(p.mode) || amiga::is_sms(p.mode)) &&
+        !p.genesis_tile_bytes.empty()) {
         r.genesisTileBytes = p.genesis_tile_bytes;
         auto u16_to_bytes = [](const std::vector<std::uint16_t>& src) {
             std::vector<std::uint8_t> out(src.size() * 2);
@@ -4866,7 +6052,9 @@ ConvertResult convert_iff(const std::uint8_t* input_data,
     if (!result) return make_error(result.error().message);
 
     iff::IffOptions iff_opts;
+    iff_opts.hires = result->hires;
     iff_opts.interlace = result->interlace;
+    iff_opts.has_transparency = result->has_transparency;
     iff_opts.dpf = result->dpf;
     if (result->copper && !result->scanline_palettes.empty()) {
         iff_opts.scanline_palettes = &result->scanline_palettes;
@@ -4941,11 +6129,230 @@ static std::string snes_header(const PipelineResult& p, std::string_view sym) {
     return out;
 }
 
+// Emit `<type> name[count] = { ... };` for the GBA header (grit idiom:
+// element-count sizes, no `static`). 12 u16 values per row.
+static std::string emit_gba_u16_array(std::string_view name,
+                                      std::span<const std::uint16_t> words) {
+    std::string out;
+    out.reserve(words.size() * 8 + 64);
+    out += std::format("const unsigned short {}[{}] = {{\n   ", name, words.size());
+    for (std::size_t i = 0; i < words.size(); ++i) {
+        out += std::format(" 0x{:04X}", words[i]);
+        if (i + 1 < words.size()) out += ',';
+        if ((i + 1) % 12 == 0 && i + 1 < words.size()) out += "\n   ";
+    }
+    out += "\n};\n\n";
+    return out;
+}
+
+// Emit `const unsigned char name[count] = { ... };` for the GBA mode4
+// index array. 16 values per row.
+static std::string emit_gba_u8_array(std::string_view name,
+                                     std::span<const std::uint8_t> bytes) {
+    std::string out;
+    out.reserve(bytes.size() * 6 + 64);
+    out += std::format("const unsigned char {}[{}] = {{\n   ", name, bytes.size());
+    for (std::size_t i = 0; i < bytes.size(); ++i) {
+        out += std::format(" 0x{:02X}", bytes[i]);
+        if (i + 1 < bytes.size()) out += ',';
+        if ((i + 1) % 16 == 0 && i + 1 < bytes.size()) out += "\n   ";
+    }
+    out += "\n};\n\n";
+    return out;
+}
+
+// GBA bitmap-mode .h (devkitARM/grit idiom):
+//   mode3/mode5: BitmapLen + a const unsigned short Bitmap[W*H] of BGR555
+//                words (one per pixel; no palette).
+//   mode4:       BitmapLen + a const unsigned char Bitmap[W*H] of 8bpp
+//                indices, plus a const unsigned short Pal[256] BGR555
+//                palette.
+static std::string gba_header(const PipelineResult& p, std::string_view sym) {
+    const std::size_t w = p.rendered.width();
+    const std::size_t h = p.rendered.height();
+    std::string out;
+    out += "// Generated by png2amiga. Do not edit.\n\n#pragma once\n\n";
+    out += std::format("#define {}Width  {}\n", sym, w);
+    out += std::format("#define {}Height {}\n", sym, h);
+
+    if (amiga::is_gba_paletted(p.mode)) {
+        // raw_frame holds the 8bpp index stream (W*H bytes).
+        out += std::format("#define {}BitmapLen ({}*{})\n", sym, w, h);
+        out += std::format("#define {}PalLen   {}\n\n", sym, p.palette.size());
+        out += emit_gba_u8_array(std::string(sym) + "Bitmap", p.raw_frame);
+        std::vector<std::uint16_t> pal;
+        pal.reserve(p.palette.size());
+        for (auto& c : p.palette)
+            pal.push_back(console_color::to_bgr555_word(c));
+        out += emit_gba_u16_array(std::string(sym) + "Pal", pal);
+        return out;
+    }
+
+    // Direct color: raw_frame holds LE u16 BGR555 words (W*H*2 bytes).
+    out += std::format("#define {}BitmapLen ({}*{}*2)\n\n", sym, w, h);
+    std::vector<std::uint16_t> words;
+    words.reserve(w * h);
+    for (std::size_t i = 0; i + 1 < p.raw_frame.size(); i += 2)
+        words.push_back(static_cast<std::uint16_t>(p.raw_frame[i] |
+                                                   (p.raw_frame[i + 1] << 8)));
+    out += emit_gba_u16_array(std::string(sym) + "Bitmap", words);
+    return out;
+}
+
+// Snap a linear-RGB color to the Thomson 4-bit (r,g,b) intens[] channels.
+static std::array<std::uint8_t, 3> thomson_snap_rgb(const Color3f& c) {
+    auto to8 = [](float lin) {
+        return static_cast<int>(
+            std::lround(std::clamp(color_space::linear_to_srgb(lin), 0.0f, 1.0f) * 255.0f));
+    };
+    return {palette::thomson_channel_index(to8(c.r)),
+            palette::thomson_channel_index(to8(c.g)),
+            palette::thomson_channel_index(to8(c.b))};
+}
+
+// Thomson forme-couleur / bitmap .h. pageA + pageB arrays (+ a 4-bit r/g/b
+// palette for the programmable TO8 modes; TO7/70 has a fixed palette).
+static std::string thomson_header(const PipelineResult& p, std::string_view sym) {
+    const std::size_t w = p.rendered.width();
+    const std::size_t h = p.rendered.height();
+    std::string out;
+    out += "// Generated by png2amiga. Do not edit.\n\n#pragma once\n\n";
+    out += std::format("#define {}Width  {}\n", sym, w);
+    out += std::format("#define {}Height {}\n\n", sym, h);
+    // raw_frame = pageA ++ pageB (each 8000 bytes for the 320/640 modes,
+    // or 8000 for 160×16 — both pages are always 8000 here).
+    std::size_t half = p.raw_frame.size() / 2;
+    std::span<const std::uint8_t> page_a(p.raw_frame.data(), half);
+    std::span<const std::uint8_t> page_b(p.raw_frame.data() + half, half);
+    if (amiga::is_thomson_formecouleur(p.mode)) {
+        out += emit_gba_u8_array(std::string(sym) + "Couleur", page_a);
+        out += emit_gba_u8_array(std::string(sym) + "Forme", page_b);
+    } else {
+        out += emit_gba_u8_array(std::string(sym) + "PageA", page_a);
+        out += emit_gba_u8_array(std::string(sym) + "PageB", page_b);
+    }
+    if (amiga::is_thomson_programmable(p.mode) && !p.palette.empty()) {
+        out += std::format("#define {}PaletteLen {}\n", sym, p.palette.size());
+        out += std::format("// 3 bytes/color: 4-bit r, g, b intens[] channel indices.\n");
+        out += std::format("const unsigned char {}Palette[{}] = {{\n   ", sym,
+                           p.palette.size() * 3);
+        for (std::size_t i = 0; i < p.palette.size(); ++i) {
+            auto rgb = thomson_snap_rgb(p.palette[i]);
+            out += std::format(" {}, {}, {}", rgb[0], rgb[1], rgb[2]);
+            if (i + 1 < p.palette.size()) out += ',';
+            if ((i + 1) % 4 == 0 && i + 1 < p.palette.size()) out += "\n   ";
+        }
+        out += "\n};\n\n";
+    }
+    return out;
+}
+
+// Commodore TED .h. bitmap + luma + chroma arrays (+ Bg0/Bg1 #defines for
+// the multicolor mode's two global color bytes).
+static std::string ted_header(const PipelineResult& p, std::string_view sym) {
+    const std::size_t w = p.rendered.width();
+    const std::size_t h = p.rendered.height();
+    std::string out;
+    out += "// Generated by png2amiga. Do not edit.\n\n#pragma once\n\n";
+    out += std::format("#define {}Width  {}\n", sym, w);
+    out += std::format("#define {}Height {}\n\n", sym, h);
+    // raw_frame = bitmap[8000] ++ luma[1000] ++ chroma[1000] (++ bg0,bg1).
+    constexpr std::size_t kBitmap = 8000, kAttr = 1000;
+    std::span<const std::uint8_t> bitmap(p.raw_frame.data(), kBitmap);
+    std::span<const std::uint8_t> luma(p.raw_frame.data() + kBitmap, kAttr);
+    std::span<const std::uint8_t> chroma(p.raw_frame.data() + kBitmap + kAttr, kAttr);
+    out += emit_gba_u8_array(std::string(sym) + "Bitmap", bitmap);
+    out += emit_gba_u8_array(std::string(sym) + "Luma", luma);
+    out += emit_gba_u8_array(std::string(sym) + "Chroma", chroma);
+    if (amiga::is_ted_multicolor(p.mode)) {
+        out += std::format("#define {}Bg0 0x{:02X}\n", sym, p.c64_mc1);
+        out += std::format("#define {}Bg1 0x{:02X}\n\n", sym, p.c64_mc2);
+    }
+    return out;
+}
+
+// Master System / Game Gear .h in the devkitSMS convention: tiles and
+// palette as unsigned char, tilemap as unsigned short, *_size in bytes.
+static std::string sms_header(const PipelineResult& p, std::string_view sym) {
+    const bool gg = amiga::is_game_gear(p.mode);
+    const std::size_t cols = p.rendered.width() / 8;
+    const std::size_t rows = p.rendered.height() / 8;
+    const std::size_t cram_bytes = gg ? 64 : 32;
+    std::span<const std::uint8_t> cram(p.raw_frame.data() + p.raw_frame.size() - cram_bytes,
+                                       cram_bytes);
+    const std::string s(sym);
+    std::string out;
+    out += "// Generated by png2amiga. Do not edit.\n";
+    out += std::format("//   {} mode 4: {} tile(s), {}x{} tilemap, 2 x 16 colors.\n",
+                       gg ? "Game Gear" : "Master System",
+                       p.genesis_unique_tiles,
+                       cols,
+                       rows);
+    out += std::format("//   SMS_loadTiles({0}_tiles, 0, {0}_tiles_size);\n", s);
+    if (gg) {
+        out += std::format("//   SMS_loadTileMapArea(6, 3, {}_tilemap, {}, {});\n", s, cols, rows);
+        out += std::format("//   GG_loadBGPalette({0}_palette); GG_loadSpritePalette({0}_palette + 32);\n",
+                           s);
+    } else {
+        out += std::format("//   SMS_loadTileMap(0, 0, {0}_tilemap, {0}_tilemap_size);\n", s);
+        out += std::format(
+            "//   SMS_loadBGPalette({0}_palette); SMS_loadSpritePalette({0}_palette + 16);\n", s);
+    }
+    out += "// Tilemap bit 11 selects the second palette (sprite CRAM 16-31).\n\n#pragma once\n\n";
+    out += std::format("#define {}_tiles_size {}\n", s, p.genesis_tile_bytes.size());
+    out += std::format("#define {}_tilemap_size {}\n", s, p.genesis_tilemap_cells.size() * 2);
+    out += std::format("#define {}_palette_size {}\n", s, cram_bytes);
+    out += std::format("#define {}_tile_count {}\n", s, p.genesis_unique_tiles);
+    out += std::format("#define {}_width {}\n", s, cols);
+    out += std::format("#define {}_height {}\n\n", s, rows);
+    out += emit_gba_u8_array(s + "_tiles", p.genesis_tile_bytes);
+    out += emit_gba_u16_array(s + "_tilemap", p.genesis_tilemap_cells);
+    out += emit_gba_u8_array(s + "_palette", cram);
+    return out;
+}
+
+// Amstrad CPC .h: the 16 KB &C000 screen plus the inks — firmware color
+// numbers (INK n,c / SCR SET INK) and Gate Array bytes (0x40|hw) for the
+// classic CPC; 0x0GRB words and ASIC palette-RAM bytes for the Plus.
+static std::string cpc_header(const PipelineResult& p, std::string_view sym) {
+    const std::string s(sym);
+    std::string out;
+    out += "// Generated by png2amiga. Do not edit.\n";
+    out += std::format("//   Amstrad CPC{} mode {}: {}x{}, {} inks. Screen at &C000,\n",
+                       amiga::is_cpc_plus(p.mode) ? " Plus" : "",
+                       amiga::cpc_screen_mode(p.mode),
+                       p.rendered.width(),
+                       p.rendered.height(),
+                       p.palette.size());
+    out += "//   line y at (y/8)*80 + (y%8)*2048.\n\n#pragma once\n\n";
+    out += std::format("#define {}_width {}\n", s, p.rendered.width());
+    out += std::format("#define {}_height {}\n", s, p.rendered.height());
+    out += std::format("#define {}_mode {}\n", s, amiga::cpc_screen_mode(p.mode));
+    out += std::format("#define {}_inks {}\n", s, p.palette.size());
+    out += std::format("#define {}_screen_address 0xC000\n\n", s);
+    out += emit_gba_u8_array(s + "_screen", p.raw_frame);
+    if (amiga::is_cpc_plus(p.mode)) {
+        out += "// 12-bit ink words 0x0GRB.\n";
+        out += emit_gba_u16_array(s + "_inks_grb", cpc::plus_words(p.palette));
+        out += "// ASIC palette RAM bytes (&6400 + 2*pen): R<<4|B, then G.\n";
+        out += emit_gba_u8_array(s + "_inks_asic", cpc::pal_bytes(p.mode, p.palette));
+    } else {
+        out += "// Firmware color numbers 0-26.\n";
+        out += emit_gba_u8_array(s + "_inks_firmware", cpc::firmware_numbers(p.palette));
+        out += "// Gate Array color bytes (0x40 | hardware number), for OUT &7F00.\n";
+        out += emit_gba_u8_array(s + "_inks_hardware", cpc::pal_bytes(p.mode, p.palette));
+    }
+    return out;
+}
+
 ConvertResult convert_cheader(const std::uint8_t* input_data,
                               std::size_t input_size,
                               const Options& options) {
     auto result = run_pipeline(input_data, input_size, options);
     if (!result) return make_error(result.error().message);
+
+    if (amiga::is_tandy(result->mode))
+        return make_error("Tandy exports indexed PNG, banked raw data, or DOS viewer C source");
 
     auto sym = options.symbol_name.empty() ? std::string{"img"} : options.symbol_name;
 
@@ -5001,6 +6408,46 @@ ConvertResult convert_cheader(const std::uint8_t* input_data,
         return make_result(std::move(bytes), *result);
     }
 
+    // Game Boy Advance: devkitARM/grit-style bitmap header.
+    if (amiga::is_gba(result->mode)) {
+        auto txt = gba_header(*result, sym);
+        std::vector<std::uint8_t> bytes(txt.begin(), txt.end());
+        return make_result(std::move(bytes), *result);
+    }
+
+    // Thomson + Commodore TED: generic byte-array headers.
+    if (amiga::is_retro_raster(result->mode)) {
+        auto txt = std::string("// Native ZX SCR / Atari SPU bytes.\n#pragma once\n") +
+                   emit_gba_u8_array(std::string(sym) + "Screen", result->raw_frame);
+        return make_result(std::vector<std::uint8_t>(txt.begin(), txt.end()), *result);
+    }
+    if (amiga::is_msx(result->mode)) {
+        std::string txt = "// MSX CPU-visible VRAM at address 0. Palette mirror included.\n#pragma once\n";
+        txt += std::format("#define {}Screen {}\n", sym, msx::screen_number(result->mode));
+        txt += emit_gba_u8_array(std::string(sym) + "VRAM", result->raw_frame);
+        return make_result(std::vector<std::uint8_t>(txt.begin(), txt.end()), *result);
+    }
+    if (amiga::is_thomson(result->mode)) {
+        auto txt = thomson_header(*result, sym);
+        std::vector<std::uint8_t> bytes(txt.begin(), txt.end());
+        return make_result(std::move(bytes), *result);
+    }
+    if (amiga::is_ted(result->mode)) {
+        auto txt = ted_header(*result, sym);
+        std::vector<std::uint8_t> bytes(txt.begin(), txt.end());
+        return make_result(std::move(bytes), *result);
+    }
+    if (amiga::is_sms(result->mode)) {
+        auto txt = sms_header(*result, sym);
+        std::vector<std::uint8_t> bytes(txt.begin(), txt.end());
+        return make_result(std::move(bytes), *result);
+    }
+    if (amiga::is_cpc(result->mode)) {
+        auto txt = cpc_header(*result, sym);
+        std::vector<std::uint8_t> bytes(txt.begin(), txt.end());
+        return make_result(std::move(bytes), *result);
+    }
+
     auto ch_opts = pipeline::make_ch_opts({
         .symbol_override = options.symbol_name,
         .aga = result->aga,
@@ -5012,22 +6459,19 @@ ConvertResult convert_cheader(const std::uint8_t* input_data,
     if (result->copper && !result->scanline_changes.empty()) {
         ch_opts.copper_changes = &result->scanline_changes;
         ch_opts.copper_changes_per_line = result->changes_per_line;
+        ch_opts.depth_zones = result->zones;
     }
     // strips mid-line MOVE list, when present. Mirrors convert_viewer's
     // wiring so the .h carries the same _strips_copper_list[] UWORD array
     // (data only — no init code; that lives in the .cpp viewer).
     if (result->scap && !result->strips_line_moves.empty()) {
         ch_opts.strips_line_moves = &result->strips_line_moves;
-        bool strips_ehb = result->mode == amiga::Mode::ehb;
-        bool strips_ham6 = result->mode == amiga::Mode::ham6;
-        auto& table = strips_ehb    ? strips::kStrips6bplEhb
-                      : strips_ham6 ? strips::kStrips6bplHam6
-                                    : strips::kStrips6bplOcs;
-        ch_opts.strips_label = strips_ehb    ? "strips_ehb_ocs"
-                               : strips_ham6 ? "strips_ham6_ocs"
-                                             : "strips_dpf_ocs";
-        ch_opts.strips_anchor_hpos = table.line_gate_hpos;
-        ch_opts.strips_total_planes = table.total_planes;
+        const auto* variant = strips::strips_variant_for(result->mode, result->dpf);
+        if (!variant) return make_error("Strips: no variant for this mode");
+        ch_opts.strips_label = std::string(variant->label);
+        ch_opts.strips_anchor_hpos = variant->table->line_gate_hpos;
+        ch_opts.strips_total_planes = variant->table->total_planes;
+        ch_opts.strips_display_shift = variant->table->display_shift_px;
     }
     auto header = cheader::generate(result->planes, result->palette, result->mode, ch_opts);
     if (!header) return make_error(header.error().message);
@@ -5042,11 +6486,18 @@ ConvertResult convert_viewer(const std::uint8_t* input_data,
     auto result = run_pipeline(input_data, input_size, options);
     if (!result) return make_error(result.error().message);
 
+    if (amiga::is_atari_spectrum(result->mode)) {
+        auto txt = retro::viewer_source(result->mode, result->raw_frame);
+        if (!txt) return make_error(txt.error().message);
+        return make_result(std::vector<std::uint8_t>(txt->begin(), txt->end()), *result);
+    }
+    if (result->mode == amiga::Mode::zx_spectrum) return make_error("ZX Spectrum exports .scr, .h and .png");
+
     // DOS modes: 16-bit C viewer via cheader_dos_c, targeting
     // ia16-elf-gcc (real-mode 8088+; no DPMI, no 32-bit code).
     // Build the mode-specific raw bytes + palette bytes, then call
     // cheader_dos_c::generate which dispatches per mode.
-    if (amiga::is_vga(result->mode) || amiga::is_ega(result->mode) || amiga::is_cga(result->mode)) {
+    if (amiga::is_vga(result->mode) || amiga::is_ega(result->mode) || (amiga::is_cga(result->mode) || amiga::is_tandy(result->mode))) {
         using amiga::Mode;
         cheader_dos_c::Options opts;
         if (!options.symbol_name.empty()) opts.symbol_name = options.symbol_name;
@@ -5067,7 +6518,11 @@ ConvertResult convert_viewer(const std::uint8_t* input_data,
             if ((mode == Mode::cga_320 || mode == Mode::cga_composite_hires) &&
                 result->cga_mode_ctrl2 != 0xFF)
                 opts.cga_mode_ctrl2 = result->cga_mode_ctrl2;
-        } else if (amiga::is_cga_text(mode)) {
+        } else if (amiga::is_tandy(mode)) {
+            raw = result->raw_frame;
+            auto regs = tandy::palette_registers(result->palette);
+            palette_bytes.assign(regs.begin(), regs.end());
+        } else if (amiga::is_cga_pixels(mode) || amiga::is_cga_text(mode)) {
             raw = result->raw_frame;  // char+attr pairs
         } else if (mode == Mode::ega_320 || mode == Mode::ega_640 || mode == Mode::ega_hi) {
             raw = result->planes.data;
@@ -5159,19 +6614,16 @@ ConvertResult convert_viewer(const std::uint8_t* input_data,
     if (result->copper && !result->scanline_changes.empty()) {
         ch_opts.copper_changes = &result->scanline_changes;
         ch_opts.copper_changes_per_line = result->changes_per_line;
+        ch_opts.depth_zones = result->zones;
     }
     if (result->scap && !result->strips_line_moves.empty()) {
         ch_opts.strips_line_moves = &result->strips_line_moves;
-        bool strips_ehb = result->mode == amiga::Mode::ehb;
-        bool strips_ham6 = result->mode == amiga::Mode::ham6;
-        auto& table = strips_ehb    ? strips::kStrips6bplEhb
-                      : strips_ham6 ? strips::kStrips6bplHam6
-                                    : strips::kStrips6bplOcs;
-        ch_opts.strips_label = strips_ehb    ? "strips_ehb_ocs"
-                               : strips_ham6 ? "strips_ham6_ocs"
-                                             : "strips_dpf_ocs";
-        ch_opts.strips_anchor_hpos = table.line_gate_hpos;
-        ch_opts.strips_total_planes = table.total_planes;
+        const auto* variant = strips::strips_variant_for(result->mode, result->dpf);
+        if (!variant) return make_error("Strips: no variant for this mode");
+        ch_opts.strips_label = std::string(variant->label);
+        ch_opts.strips_anchor_hpos = variant->table->line_gate_hpos;
+        ch_opts.strips_total_planes = variant->table->total_planes;
+        ch_opts.strips_display_shift = variant->table->display_shift_px;
         ch_opts.fade_in = false;  // strips carries its own per-line palette
     }
     auto viewer = cheader::generate_viewer(planes, result->palette, result->mode, ch_opts);
@@ -5190,11 +6642,17 @@ ConvertResult convert_raw(const std::uint8_t* input_data,
     auto chipset = resolve_chipset(options.chipset, result->mode);
     bool aga = (chipset == amiga::Chipset::aga);
 
+    if (amiga::is_tandy(result->mode))
+        return make_result(tandy::raw_export(result->raw_frame, result->palette), *result);
+
     // C64 + Genesis already pack their raw bytes into raw_frame
     // verbatim during run_pipeline (c64: bitmap+screen+color RAM,
     // genesis: tile_bytes + u16-BE tilemap + u16-BE palette). Hand
     // them straight back.
-    if (amiga::is_c64(result->mode) || amiga::is_genesis(result->mode)) {
+    if (amiga::is_c64(result->mode) || amiga::is_genesis(result->mode) ||
+        (amiga::is_msx(result->mode) || amiga::is_retro_raster(result->mode)) || amiga::is_thomson(result->mode) || amiga::is_ted(result->mode) ||
+        amiga::is_sms(result->mode) || amiga::is_cpc(result->mode) ||
+        amiga::is_nibnib(result->mode)) {  // nibnib: the complete .nibnib file
         std::vector<std::uint8_t> raw = std::move(result->raw_frame);
         return make_result(std::move(raw), *result);
     }
@@ -5210,7 +6668,7 @@ ConvertResult convert_raw(const std::uint8_t* input_data,
     //     (6-bit per channel).
     //   EGA: 4 bitplanes + 16-byte IrgbIRGB palette.
     //   VGA planar (Mode 10h / 12h): 4 planes + 16×3-byte DAC palette.
-    if (amiga::is_cga_text(result->mode) || amiga::is_chunky(result->mode)) {
+    if (amiga::is_cga_pixels(result->mode) || amiga::is_cga_text(result->mode) || amiga::is_chunky(result->mode)) {
         std::vector<std::uint8_t> raw = std::move(result->raw_frame);
         if (amiga::is_chunky(result->mode)) {
             for (auto& c : result->palette) {
@@ -5222,9 +6680,9 @@ ConvertResult convert_raw(const std::uint8_t* input_data,
         }
         return make_result(std::move(raw), *result);
     }
-    if (amiga::is_ega(result->mode) || amiga::is_vga(result->mode) || amiga::is_cga(result->mode)) {
+    if (amiga::is_ega(result->mode) || amiga::is_vga(result->mode) || (amiga::is_cga(result->mode) || amiga::is_tandy(result->mode))) {
         std::vector<std::uint8_t> raw;
-        if (amiga::is_cga(result->mode)) {
+        if ((amiga::is_cga(result->mode) || amiga::is_tandy(result->mode))) {
             // CGA 320/640: pack indices into the banked 16 KB CGAPIC
             // frame. Palette is hardware-fixed so we emit no palette bytes.
             raw = cheader_dos_c::pack_cga_banked(
@@ -5318,6 +6776,31 @@ ConvertResult convert_raw(const std::uint8_t* input_data,
     return make_result(std::move(raw), *result);
 }
 
+std::vector<std::uint8_t> cpc_scr_bytes(std::span<const std::uint8_t> screen,
+                                        std::string_view name) {
+    auto hdr = cpc::amsdos_header(name, cpc::kScreenAddress,
+                                  static_cast<std::uint16_t>(screen.size()));
+    std::vector<std::uint8_t> out(hdr.begin(), hdr.end());
+    out.insert(out.end(), screen.begin(), screen.end());
+    return out;
+}
+
+std::vector<std::uint8_t> cpc_pal_bytes(amiga::Mode mode, std::span<const Color3f> inks) {
+    return cpc::pal_bytes(mode, inks);
+}
+
+ConvertResult convert_scr(const std::uint8_t* input_data,
+                          std::size_t input_size,
+                          const Options& options) {
+    auto result = run_pipeline(input_data, input_size, options);
+    if (!result) return make_error(result.error().message);
+    if (result->mode == amiga::Mode::zx_spectrum) return make_result(result->raw_frame, *result);
+    if (!amiga::is_cpc(result->mode)) return make_error(".scr export requires ZX Spectrum or CPC mode");
+    std::string name = options.symbol_name.empty() ? std::string{"image"} : options.symbol_name;
+    auto bytes = cpc_scr_bytes(result->raw_frame, name + ".scr");
+    return make_result(std::move(bytes), *result);
+}
+
 // ---------------------------------------------------------------------------
 // c64 PRG / Koala / Art-Studio raw exports.
 // ---------------------------------------------------------------------------
@@ -5343,9 +6826,56 @@ ConvertResult c64_export(
 
 }  // namespace
 
+ConvertResult convert_msx(const std::uint8_t* input_data, std::size_t input_size,
+                          const Options& options) {
+    auto mode = parse_mode(options.mode);
+    if (!amiga::is_msx(mode)) return make_error("MSX screen export requires an MSX mode");
+    auto result = run_pipeline(input_data, input_size, options);
+    if (!result) return make_error(result.error().message);
+    auto bytes = msx::screen_file(result->mode, result->raw_frame);
+    if (!bytes) return make_error(bytes.error().message);
+    return make_result(std::move(*bytes), *result);
+}
+
+ConvertResult convert_k7(const std::uint8_t* input_data,
+                         std::size_t input_size, const Options& options) {
+    if (options.mode != "thomson-to7-320x16")
+        return make_error("K7 export requires thomson-to7-320x16 (TO7/70) mode");
+    auto result = run_pipeline(input_data, input_size, options);
+    if (!result) return make_error(result.error().message);
+    auto tape = thomson::k7::encode(result->mode, result->raw_frame);
+    if (!tape) return make_error(tape.error().message);
+    return make_result(std::move(*tape), *result);
+}
+
+std::vector<std::uint8_t> thomson_pal_bytes(std::span<const Color3f> palette) {
+    std::vector<std::uint8_t> out;
+    out.reserve(palette.size() * 2);
+    auto to8 = [](float lin) {
+        return static_cast<int>(
+            std::lround(std::clamp(color_space::linear_to_srgb(lin), 0.0f, 1.0f) * 255.0f));
+    };
+    for (auto& c : palette) {
+        std::uint8_t r = palette::thomson_channel_index(to8(c.r));
+        std::uint8_t g = palette::thomson_channel_index(to8(c.g));
+        std::uint8_t b = palette::thomson_channel_index(to8(c.b));
+        // Gate-array order: low byte = (g<<4)|b, high byte = r.
+        out.push_back(static_cast<std::uint8_t>((g << 4) | b));
+        out.push_back(r);
+    }
+    return out;
+}
+
 ConvertResult convert_prg(const std::uint8_t* input_data,
                           std::size_t input_size,
                           const Options& options) {
+    if (amiga::is_atari_spectrum(parse_mode(options.mode))) {
+        auto result = run_pipeline(input_data, input_size, options);
+        if (!result) return make_error(result.error().message);
+        auto bytes = retro::executable(result->mode, result->raw_frame);
+        if (!bytes) return make_error(bytes.error().message);
+        return make_result(std::move(*bytes), *result);
+    }
     return c64_export(
         input_data,
         input_size,
@@ -5682,6 +7212,7 @@ ConvertResult convert_mask_iff(const std::uint8_t* input_data,
     };
 
     iff::IffOptions iff_opts;
+    iff_opts.hires = result->hires;
     iff_opts.interlace = result->interlace;
 
     auto iff_data = iff::write_ilbm(*planes, mask_palette, amiga::Mode::lores, iff_opts);
@@ -5730,6 +7261,7 @@ void state_from_pipeline_result(EncodeStateOrError& out, pipeline::PipelineResul
     s.quant_error = p.quant_error;
     s.psnr = p.psnr;
     s.ssimulacra2_score = p.ssimulacra2_score;
+    s.row_mismatch = std::move(p.row_mismatch);
     s.raw_frame = std::move(p.raw_frame);
     s.c64_bg_color = p.c64_bg_color;
     s.c64_cols = p.c64_cols;

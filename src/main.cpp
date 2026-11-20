@@ -1,5 +1,9 @@
 #include "amiga.hpp"
 #include "api.hpp"
+#include "thomson_k7.hpp"
+#include "msx.hpp"
+#include "nibnib.hpp"
+#include "retro.hpp"
 #include "smol-atlas.h"
 #include "c64.hpp"
 #include "c64_prg.hpp"
@@ -12,6 +16,7 @@
 #include "console_color.hpp"
 #include "cga_composite.hpp"
 #include "cga_text.hpp"
+#include "tandy.hpp"
 #include "copper.hpp"
 #include "dither.hpp"
 #include "astc.hpp"
@@ -27,6 +32,7 @@
 #include "ssimulacra2.hpp"
 #include "iff.hpp"
 #include "palette.hpp"
+#include "palette_pairs.hpp"
 #include "palette_io.hpp"
 #include "palette_locks.hpp"
 #include "pipeline.hpp"
@@ -35,6 +41,7 @@
 #include "quantize.hpp"
 #include "quantize_metal.hpp"
 #include "scale.hpp"
+#include "sms.hpp"
 #include "types.hpp"
 #include "version.hpp"
 
@@ -61,6 +68,7 @@
 #include <string>
 #include <string_view>
 #include <random>
+#include <ranges>
 #include <thread>
 #ifndef _WIN32
 #include <termios.h>
@@ -397,6 +405,36 @@ inline bool ends_with(std::string_view s, std::string_view suffix) {
     return s.substr(s.size() - suffix.size()) == suffix;
 }
 
+// The one .idx writer: raw chunky bytes, 1 per pixel, scan order, no
+// header, after the --transparent-output-slot swap. `source` prefixes the
+// open error (the flag that asked for the file); `status` is the label of
+// the status line.
+inline int write_idx_file(std::string_view source,
+                          std::string_view status,
+                          const std::string& path,
+                          std::vector<std::uint8_t> indices,
+                          const std::vector<bool>& tmask,
+                          int swap_slot,
+                          std::size_t w,
+                          std::size_t h) {
+    std::ofstream f(path, std::ios::binary | std::ios::trunc);
+    if (!f) {
+        std::println(stderr, "{}: cannot open '{}'", source, path);
+        return exit_code::cant_create;
+    }
+    apply_transparent_slot_swap(indices, tmask, swap_slot);
+    f.write(reinterpret_cast<const char*>(indices.data()),
+            static_cast<std::streamsize>(indices.size()));
+    cli_status("{} {} ({} bytes, {}x{}{})",
+               status,
+               path,
+               indices.size(),
+               w,
+               h,
+               swap_slot > 0 ? std::format(", transparent→slot {}", swap_slot) : std::string{});
+    return 0;
+}
+
 // Resolve --output-each pattern to a concrete path for one input.
 // Tokens: {dir} = parent dir, {stem} = filename without extension,
 // {name} = filename with extension. Bare `.ext` shortcut puts the
@@ -444,22 +482,15 @@ inline int write_oe_outputs(const std::vector<std::string>& patterns,
     for (auto& pat : patterns) {
         auto out_path = resolve_oe_pattern(pat, src);
         if (ends_with(out_path, ".idx")) {
-            std::ofstream f(out_path, std::ios::binary | std::ios::trunc);
-            if (!f) {
-                std::println(stderr, "--output-each: cannot open '{}'", out_path);
-                return exit_code::cant_create;
-            }
-            std::vector<std::uint8_t> out_idx(idx_in.begin(), idx_in.end());
-            apply_transparent_slot_swap(out_idx, tmask, swap_slot);
-            f.write(reinterpret_cast<const char*>(out_idx.data()),
-                    static_cast<std::streamsize>(out_idx.size()));
-            cli_status("Joint-out: {} ({} bytes, {}x{}{})",
-                       out_path,
-                       out_idx.size(),
-                       w,
-                       h,
-                       swap_slot > 0 ? std::format(", transparent→slot {}", swap_slot)
-                                     : std::string{});
+            if (auto rc = write_idx_file("--output-each",
+                                         "Joint-out:",
+                                         out_path,
+                                         {idx_in.begin(), idx_in.end()},
+                                         tmask,
+                                         swap_slot,
+                                         w,
+                                         h))
+                return rc;
         } else if (ends_with(out_path, ".png")) {
             std::vector<std::uint8_t> idx_v(idx_in.begin(), idx_in.end());
             std::vector<Color3f> pal_v(palette.begin(), palette.end());
@@ -614,6 +645,39 @@ void cli_print_encoded(int depth,
                    psnr,
                    s2);
     }
+}
+
+// --report-rows: scanlines whose pixels differ from the source at the
+// chipset's colour precision, printed as ranges ("12, 40-52").
+void cli_print_row_mismatch(const std::vector<std::uint32_t>& rows) {
+    if (rows.empty()) return;
+    std::string list;
+    std::size_t bad = 0;
+    for (std::size_t y = 0; y < rows.size(); ++y) {
+        if (!rows[y]) continue;
+        auto end = y;
+        while (end + 1 < rows.size() && rows[end + 1]) ++end;
+        bad += end - y + 1;
+        if (!list.empty()) list += ", ";
+        list += end == y ? std::format("{}", y) : std::format("{}-{}", y, end);
+        y = end;
+    }
+    if (!bad) {
+        cli_status("Rows:     all {} rows 1:1", rows.size());
+        return;
+    }
+    cli_status("Rows:     {} of {} rows not 1:1: {}", bad, rows.size(), list);
+}
+
+void cli_print_row_mismatch(const Image& src,
+                            const Image& rendered,
+                            const std::vector<bool>& tmask,
+                            bool aga) {
+    cli_print_row_mismatch(
+        pipeline::count_row_mismatch(pipeline::compute_pixel_deviation(src, rendered, tmask),
+                                     rendered.width(),
+                                     rendered.height(),
+                                     aga));
 }
 
 // Emit a Make-format depfile so CMake's add_custom_command(... DEPFILE)
@@ -868,6 +932,7 @@ struct Config {
     std::string input_path;
     std::string output_path;    // .png for preview, .iff for ILBM, .h for C header
     bool quiet = false;         // suppress all stdout status (errors → stderr)
+    bool report_rows = false;   // list scanlines that are not 1:1 with the source
     bool json = false;          // emit JSON status object instead of human text
     int profile_repeats = 1;    // run main encoding loop N times for profilers (--profile N)
     std::string depfile;        // Make-format depfile path (empty = disabled)
@@ -901,6 +966,10 @@ struct Config {
     bool interlace = false;  // LACE bit in CAMG
     std::size_t depth = 5;
     bool depth_explicit = false;  // true if user passed --depth on the CLI
+    // --depth auto: fewest planes that keep the image 1:1; with --sliced the
+    // depth may change down the frame (depth zones). --zones sets the zones.
+    bool depth_auto = false;
+    std::vector<copper::DepthZone> zones;
 
     // Benchmark/comparison mode: emit indexed PNG-8 (no Amiga encoding) so
     // we can compare our quantizer head-to-head against pngquant et al.
@@ -1000,6 +1069,7 @@ struct Config {
     float error_clamp = 0.35f;
     std::string cga_text_metric = "blur";
     std::string cga_text_kernel = "auto";
+    bool cell_refine = false;
     // cga-composite: pick chroma-burst phase. False = 1981 IBM 5150, true = 1983+.
     bool cga_composite_new_cga = false;
 
@@ -1166,6 +1236,7 @@ struct Config {
     bool print_palette = false;       // dump CMAP as idx=#rrggbb to stderr
     bool print_palette_json = false;  // dump CMAP as one-line JSON to stdout
     std::string output_indexed_path;  // --output-indexed <file>: raw chunky bytes
+    std::string output_zones;         // --output-zones <prefix>: per-zone .png + .iff
     // --transparent-color RRGGBB (repeatable): treat matching pixels as alpha=0
     std::vector<std::array<std::uint8_t, 3>> transparent_colors;
     bool preview = false;             // show terminal image preview (iTerm2)
@@ -1189,7 +1260,7 @@ void print_usage() {
                  "png2amiga {}\n"
                  "\n"
                  "Usage: png2amiga [options] input.[png|jpg|webp] [-o "
-                 "output.[png|iff|h|raw|pal|pi1|pi2|pi3]]\n"
+                 "output.[png|iff|h|raw|pal|pi1|pi2|pi3|nibnib]]\n"
                  "\n",
                  png2amiga::version);
     // Description column starts at byte 34 (32-char flag field + 2-space lead).
@@ -1203,13 +1274,28 @@ void print_usage() {
         "            ham6[-hires][-lace] | ham8[-hires][-lace] | ehb[-lace]\n"
         "    Atari:  stf-low | stf-med | stf-hi | ste-low | ste-med | ste-hi\n"
         "    DOS:    vga-13h | vga-10h | vga-12h | ega-320 | ega-640 | ega-hi |\n"
-        "            cga-320 | cga-640 | cga-composite-hires |\n"
+        "            tandy-160 | tandy-320 | tandy-640 |\n"
+        "            cga-160 | cga-160x200 | cga-320 | cga-640 | cga-composite-hires |\n"
         "            cga-text80x{{200,100,50,25}}\n"
         "    SNES:   snes-mode7-256 | snes-mode7-direct\n"
         "    Genesis: genesis-h32 | genesis-h40 | genesis-h32-sh | genesis-h40-sh\n"
         "    C64:    c64-multicolor | c64-hires | c64-fli | c64-afli |\n"
         "            c64-petscii | c64-charset-hires | c64-charset-multicolor\n"
-        "  --depth <1-8>                   Bitplane depth (default: 5)\n"
+        "    GBA:    gba-mode3 | gba-mode4 | gba-mode5\n"
+        "    ZX/Atari: zx-spectrum | stf-spectrum512 | ste-spectrum4096\n"
+        "    MSX: msx1-screen2 | msx2-screen5 | msx2-screen6 | msx2-screen7 | msx2-screen8\n"
+        "    Thomson: thomson-to7-320x16 | thomson-to8-320x16 |\n"
+        "            thomson-to8-160x16 | thomson-to8-320x4 | thomson-to8-640x2\n"
+        "    TED:    ted-hires | ted-multicolor\n"
+        "    Sega:   sms-mode4 | gg-mode4\n"
+        "    CPC:    cpc-mode0 | cpc-mode1 | cpc-mode2 |\n"
+        "            cpc-plus-mode0 | cpc-plus-mode1 | cpc-plus-mode2\n"
+        "    Other:  nibnib (RGB565 pair-delta format, .nibnib)\n"
+        "  --depth <1-8|auto>              Bitplane depth (default: 5); auto = fewest\n"
+        "                                  planes that keep the image 1:1, with\n"
+        "                                  --sliced per horizontal zone\n"
+        "  --zones <row:depth,...>         Depth zones for --sliced (lores/hires),\n"
+        "                                  e.g. 0:3,64:5,180:2\n"
         "  --chipset ocs|aga               Amiga chipset (default: auto)\n"
         "  --dual-playfield, --dpf         Encode into PF2 (depth 3 OCS / 4 AGA)\n"
         "  --width <int>                   Override output width\n"
@@ -1233,7 +1319,7 @@ void print_usage() {
         "  --print-palette                 Dump final CMAP to stderr (text)\n"
         "  --print-palette-json            Dump final CMAP to stdout (JSON)\n"
         "\n"
-        "Palette index pinning (lores/hires/EHB/Atari):\n"
+        "Palette index pinning (indexed-palette modes):\n"
         "  --no-lock-color0                Allow palette index 0 to be image color\n"
         "  --lock-index, --li <id> <hex>   Pin slot's color; image pixels CAN\n"
         "                                  still route to it (quantizer uses it)\n"
@@ -1245,8 +1331,9 @@ void print_usage() {
         "\n"
         "Search quality:\n"
         "  --best                          Multi-restart search (~20–30× slower).\n"
-        "                                  Works with plain HAM/EHB/lores/hires\n"
-        "                                  and with --sliced / --strips.\n"
+        "                                  Works with plain HAM/EHB/lores/hires,\n"
+        "                                  --sliced / --strips, Thomson 320x16\n"
+        "                                  and nibnib (palette/objective sweep).\n"
         "\n"
         "Image processing:\n"
         "  --brightness <float>            -1.0..1.0 (default: 0.0)\n"
@@ -1293,7 +1380,7 @@ void print_usage() {
         "                                  0xFFDF line-255 wrap marker.\n"
         "\n"
         "Strip palette (mid-line swaps, OCS lores):\n"
-        "  --strips                        Mid-line swaps; pair with --dpf or ehb\n"
+        "  --strips                        Mid-line swaps (lores 1-4 planes, --dpf, ehb, ham6)\n"
         "\n"
         "Seamless tile:\n"
         "  --tile                          Replicate input 3x3 before dither, export center\n"
@@ -1325,6 +1412,7 @@ void print_usage() {
         "  --tile-reserve <N>              Reserve N tile slots from the budget\n"
         "  --cga-palette <p>               p0-low | p0-high | p1-low | p1-high\n"
         "  --cga-bg <0..15>                CGA background color\n"
+        "  --cell-refine                  Refine supported cell modes across boundaries (slower)\n"
         "  --cga-text-metric <m>           blur (default) | mse\n"
         "  --cga-text-kernel <k>           Blur kernel: auto | binomial | aniso53 |\n"
         "                                  aniso73 | aniso35 | aniso37 | wide55 | wide77\n"
@@ -1343,6 +1431,8 @@ void print_usage() {
         "  --interleaved                   Alias for --layout interleaved\n"
         "  --output-indexed <file>         Raw chunky indices: 1 byte/pixel,\n"
         "                                  scan order, no header (post-pin)\n"
+        "  --output-zones <prefix>         Depth zones: <prefix>_zoneN.png and .iff\n"
+        "                                  per zone (its rows, planes and palettes)\n"
         "  --preview                       Inline preview (iTerm2, kitty, sixel)\n"
         "  --preview-scale <1-8>           Preview display scale\n"
         "  --preview-video                 Batch only: loop frames inline\n"
@@ -1359,6 +1449,7 @@ void print_usage() {
         "      .idx                          Raw chunky indices (1 byte/pixel, scan order);\n"
         "                                    also via --output-indexed / --output-each .idx\n"
         "      .pi1 / .pi2 / .pi3            Atari Degas (STF/STE low / med / hi)\n"
+        "      .k7                           TO7/70 tape picture viewer (LOADM\"\",,R)\n"
         "      .prg                          C64 PRG (autostart)\n"
         "      .koa                          C64 Koala paint\n"
         "      .hir                          C64 hires bitmap\n"
@@ -1374,6 +1465,8 @@ void print_usage() {
         "  --depfile <path>                Write a Make-format depfile\n"
         "  --list-modes                    Print supported modes and exit\n"
         "  --list-dithers                  Print supported dither methods and exit\n"
+        "  --report-rows                   List scanlines that are not 1:1 with the\n"
+        "                                  source (Amiga modes)\n"
         "  --profile <N>                   Run encode N times for sampling profilers\n"
         "  --score-vs <ref>                Score input against reference (no encoding).\n"
         "                                  Input may be a .png OR a .idx (raw chunky\n"
@@ -1476,6 +1569,10 @@ Result<Config> parse_args(int argc, char* argv[]) {
         }
         if (arg == "--output-indexed" && i + 1 < argc) {
             config.output_indexed_path = argv[++i];
+            continue;
+        }
+        if (arg == "--output-zones" && i + 1 < argc) {
+            config.output_zones = argv[++i];
             continue;
         }
         if ((arg == "--transparent-color" || arg == "--tc") && i + 1 < argc) {
@@ -1622,6 +1719,11 @@ Result<Config> parse_args(int argc, char* argv[]) {
             continue;
         }
 
+        if (arg == "--report-rows") {
+            config.report_rows = true;
+            continue;
+        }
+
         if (arg == "--json") {
             config.json = true;
             // JSON implies quiet — no human text mixed with the JSON object.
@@ -1732,11 +1834,6 @@ Result<Config> parse_args(int argc, char* argv[]) {
         }
         if (arg == "--strips") {
             config.scap = true;
-            // strips defaults to DPF (the production mode). The lores 5bpp
-            // investigation path needs --depth 5 + no --dpf — let that
-            // through by NOT auto-enabling DPF here. The post-parse fixup
-            // below auto-enables DPF only when the user didn't pick a
-            // 5bpp lores configuration.
             continue;
         }
         if (arg == "--strips-debug") {
@@ -1891,6 +1988,10 @@ Result<Config> parse_args(int argc, char* argv[]) {
                 return std::unexpected{
                     Error{ErrorCode::unsupported_mode, std::format("Unknown CGA palette: {}", v)}};
             config.cga_auto_palette = false;
+            continue;
+        }
+        if (arg == "--cell-refine") {
+            config.cell_refine = true;
             continue;
         }
         if (arg == "--cga-bg" && i + 1 < argc) {
@@ -2128,6 +2229,13 @@ Result<Config> parse_args(int argc, char* argv[]) {
                     config.mode = amiga::Mode::ega_640;
                 else if (v == "ega-hi" || v == "ega-640x350")
                     config.mode = amiga::Mode::ega_hi;
+                else if (v == "tandy-160") config.mode = amiga::Mode::tandy_160;
+                else if (v == "tandy-320") config.mode = amiga::Mode::tandy_320;
+                else if (v == "tandy-640") config.mode = amiga::Mode::tandy_640;
+                else if (v == "cga-160x200")
+                    config.mode = amiga::Mode::cga_160x200;
+                else if (v == "cga-160" || v == "cga-160x100")
+                    config.mode = amiga::Mode::cga_160;
                 else if (v == "cga" || v == "cga-320")
                     config.mode = amiga::Mode::cga_320;
                 else if (v == "cga-640" || v == "cga-mono")
@@ -2215,6 +2323,60 @@ Result<Config> parse_args(int argc, char* argv[]) {
                     config.mode = amiga::Mode::astc_12x10;
                 else if (v == "astc-12x12")
                     config.mode = amiga::Mode::astc_12x12;
+                else if (v == "gba-mode3" || v == "gba-3")
+                    config.mode = amiga::Mode::gba_mode3;
+                else if (v == "gba-mode4" || v == "gba-4")
+                    config.mode = amiga::Mode::gba_mode4;
+                else if (v == "gba-mode5" || v == "gba-5")
+                    config.mode = amiga::Mode::gba_mode5;
+                else if (v == "nibnib")
+                    config.mode = amiga::Mode::nibnib;
+                else if (v == "zx-spectrum")
+                    config.mode = amiga::Mode::zx_spectrum;
+                else if (v == "stf-spectrum512")
+                    config.mode = amiga::Mode::stf_spectrum512;
+                else if (v == "ste-spectrum4096")
+                    config.mode = amiga::Mode::ste_spectrum4096;
+                else if (v == "msx1-screen2")
+                    config.mode = amiga::Mode::msx1_screen2;
+                else if (v == "msx2-screen5")
+                    config.mode = amiga::Mode::msx2_screen5;
+                else if (v == "msx2-screen6")
+                    config.mode = amiga::Mode::msx2_screen6;
+                else if (v == "msx2-screen7")
+                    config.mode = amiga::Mode::msx2_screen7;
+                else if (v == "msx2-screen8")
+                    config.mode = amiga::Mode::msx2_screen8;
+                else if (v == "thomson-to7-320x16")
+                    config.mode = amiga::Mode::thomson_to7_320x16;
+                else if (v == "thomson-to8-320x16")
+                    config.mode = amiga::Mode::thomson_to8_320x16;
+                else if (v == "thomson-to8-160x16")
+                    config.mode = amiga::Mode::thomson_to8_160x16;
+                else if (v == "thomson-to8-320x4")
+                    config.mode = amiga::Mode::thomson_to8_320x4;
+                else if (v == "thomson-to8-640x2")
+                    config.mode = amiga::Mode::thomson_to8_640x2;
+                else if (v == "ted-hires")
+                    config.mode = amiga::Mode::ted_hires;
+                else if (v == "ted-multicolor")
+                    config.mode = amiga::Mode::ted_multicolor;
+                else if (v == "sms-mode4")
+                    config.mode = amiga::Mode::sms_mode4;
+                else if (v == "gg-mode4")
+                    config.mode = amiga::Mode::gg_mode4;
+                else if (v == "cpc-mode0")
+                    config.mode = amiga::Mode::cpc_mode0;
+                else if (v == "cpc-mode1")
+                    config.mode = amiga::Mode::cpc_mode1;
+                else if (v == "cpc-mode2")
+                    config.mode = amiga::Mode::cpc_mode2;
+                else if (v == "cpc-plus-mode0")
+                    config.mode = amiga::Mode::cpc_plus_mode0;
+                else if (v == "cpc-plus-mode1")
+                    config.mode = amiga::Mode::cpc_plus_mode1;
+                else if (v == "cpc-plus-mode2")
+                    config.mode = amiga::Mode::cpc_plus_mode2;
                 else if (v == "png") {
                     // Benchmark-only path: emit indexed PNG-8 directly
                     // (no Amiga encoding). Used to compare our quantizer
@@ -2236,10 +2398,31 @@ Result<Config> parse_args(int argc, char* argv[]) {
                 // they use their own `par` for preview aspect and shouldn't
                 // go through Amiga's integer-scale preview path.
                 bool dos_mode = amiga::is_vga(config.mode) || amiga::is_ega(config.mode) ||
-                                amiga::is_cga(config.mode);
+                                (amiga::is_cga(config.mode) || amiga::is_tandy(config.mode));
                 if (!dos_mode) config.hires = config.hires || mp.is_hires;
             } else if (arg == "--score-vs") {
                 config.score_vs = std::string(val);
+            } else if (arg == "--depth" && val == "auto") {
+                config.depth_auto = true;
+                config.depth_explicit = true;
+            } else if (arg == "--zones") {
+                config.zones.clear();
+                for (auto part : std::views::split(val, ',')) {
+                    std::string item(part.begin(), part.end());
+                    auto colon = item.find(':');
+                    int row = colon == std::string::npos ? -1 : std::atoi(item.c_str());
+                    int d = colon == std::string::npos ? 0 : std::atoi(item.c_str() + colon + 1);
+                    bool ascending = config.zones.empty() ? row == 0
+                                                          : row > static_cast<int>(
+                                                                      config.zones.back().start_row);
+                    if (row < 0 || d < 1 || d > 8 || !ascending) {
+                        return std::unexpected{Error{
+                            ErrorCode::invalid_depth,
+                            "--zones takes row:depth pairs from row 0 down, e.g. 0:3,64:5"}};
+                    }
+                    config.zones.push_back(
+                        {static_cast<std::size_t>(row), static_cast<std::size_t>(d)});
+                }
             } else if (arg == "--depth") {
                 int d = std::atoi(std::string(val).c_str());
                 if (d < 1 || d > 8) {
@@ -2491,17 +2674,53 @@ Result<Config> parse_args(int argc, char* argv[]) {
 
     bool assembling = !config.channel_r_path.empty() || !config.channel_g_path.empty() ||
                       !config.channel_b_path.empty() || !config.channel_a_path.empty();
+    // Sliced palette (--sliced/--copper), strip palette (--strips), and dual
+    // playfield (--dpf) are Amiga copper / bitplane features (lores / hires /
+    // HAM / EHB). On every other target they would be silently ignored or —
+    // for the DOS / Atari modes — wrongly hijack the encode into the Amiga
+    // sliced path. Reject up front, before any dispatch. (api.cpp's
+    // run_pipeline carries the same guard for the WASM / library callers.)
+    if (config.copper || config.scap || config.dual_playfield) {
+        auto m = config.mode;
+        bool non_amiga = amiga::is_atari(m) || amiga::is_vga(m) || amiga::is_ega(m) ||
+                         (amiga::is_cga(m) || amiga::is_tandy(m)) || amiga::is_c64(m) || amiga::is_snes(m) ||
+                         amiga::is_genesis(m) || amiga::is_gba(m) || (amiga::is_thomson(m) || amiga::is_msx(m) || amiga::is_retro_raster(m)) ||
+                         amiga::is_ted(m) || amiga::is_sms(m) || amiga::is_cpc(m) ||
+                         amiga::is_nibnib(m) || amiga::is_block_compressed(m);
+        if (non_amiga) {
+            std::string which;
+            if (config.copper) which += "--sliced/--copper ";
+            if (config.scap) which += "--strips ";
+            if (config.dual_playfield) which += "--dpf ";
+            return std::unexpected{Error{
+                ErrorCode::unsupported_mode,
+                which + "require an Amiga bitplane mode (lores / hires / HAM / EHB); "
+                        "not supported on this target."}};
+        }
+    }
+
     if (config.input_path.empty() && config.strips_probe.empty() && !config.list_modes &&
         !config.list_dithers && !assembling) {
         print_usage();
         std::exit(exit_code::usage);  // NOLINT(concurrency-mt-unsafe)
     }
 
-    // strips post-parse fixup. Three supported configurations:
+    // strips post-parse fixup. Supported configurations:
+    //   * lores: --strips, OCS lores depth 1-4, 2-16 colors.
     //   * DPF: --strips --dpf, OCS lores depth=3, 8 PF2 colors.
     //   * EHB: --strips --mode ehb, 32 base + 32 hardware half-brite.
+    //   * HAM6: --strips --mode ham6.
     // No auto-promotion — the user must opt into one of the supported
     // strips regimes explicitly. The CLI block below errors out otherwise.
+
+    if (config.cell_refine &&
+        (!amiga::is_thomson_formecouleur(config.mode) && config.mode != amiga::Mode::msx1_screen2 && !amiga::is_c64(config.mode) &&
+         !amiga::is_ted(config.mode) &&
+         !(amiga::is_cga_text(config.mode) && config.cga_text_metric == "blur"))) {
+        return std::unexpected{Error{ErrorCode::unsupported_mode,
+                                     "--cell-refine requires MSX1/Thomson attribute, C64, TED, or CGA "
+                                     "text with the blur metric"}};
+    }
 
     return config;
 }
@@ -2619,17 +2838,44 @@ InlineImageProtocol detect_inline_image_protocol() {
     // build 3.4.0+ (~2020).
     auto lc_terminal = std::getenv("LC_TERMINAL");    // NOLINT(concurrency-mt-unsafe)
 
-    // Kitty / Ghostty — both speak the Kitty graphics protocol.
+    // Kitty / Ghostty / WezTerm — all speak the Kitty graphics protocol.
     if (contains(term, "kitty")) return InlineImageProtocol::kitty;
     if (contains(term, "ghostty")) return InlineImageProtocol::kitty;
+    if (contains(term, "wezterm")) return InlineImageProtocol::kitty;
     if (set("KITTY_WINDOW_ID")) return InlineImageProtocol::kitty;
     if (eq(term_program, "ghostty")) return InlineImageProtocol::kitty;
     if (set("GHOSTTY_RESOURCES_DIR")) return InlineImageProtocol::kitty;
+    // WezTerm leaves TERM at xterm-256color by default, so key off its
+    // own markers: TERM_PROGRAM=WezTerm and the always-exported
+    // WEZTERM_PANE / WEZTERM_EXECUTABLE pane vars.
+    if (eq(term_program, "WezTerm")) return InlineImageProtocol::kitty;
+    if (set("WEZTERM_PANE")) return InlineImageProtocol::kitty;
+    if (set("WEZTERM_EXECUTABLE")) return InlineImageProtocol::kitty;
 
     // iTerm.app — OSC 1337. TERM_PROGRAM is set locally; LC_TERMINAL
     // is what survives an SSH hop. Both should match "iTerm2"-ish.
     if (eq(term_program, "iTerm.app")) return InlineImageProtocol::iterm;
     if (eq(lc_terminal,  "iTerm2"))    return InlineImageProtocol::iterm;
+
+    // Warp — speaks both the Kitty graphics protocol and iTerm2 OSC 1337
+    // (gated behind a "Kitty/iTerm Images" feature flag the user must
+    // enable; off by default). We emit OSC 1337: it's a single
+    // self-contained escape, sidestepping Warp's file/shm-oriented kitty
+    // transmission path. TERM stays xterm-256color, so key off
+    // TERM_PROGRAM=WarpTerminal (set on macOS, Linux, and Windows builds).
+    if (eq(term_program, "WarpTerminal")) return InlineImageProtocol::iterm;
+
+    // Hyper (Electron, xterm.js) — implements the iTerm2 inline-image
+    // protocol. TERM_PROGRAM=Hyper on current builds; older builds used
+    // HyperTerm.
+    if (eq(term_program, "Hyper"))     return InlineImageProtocol::iterm;
+    if (eq(term_program, "HyperTerm")) return InlineImageProtocol::iterm;
+
+    // Rio (GPU, Win/Mac/Linux) — supports sixel, kitty, and iTerm2. We
+    // emit OSC 1337 for the same reason as Warp: one self-contained
+    // escape. Rio sets TERM_PROGRAM=rio and TERM=rio.
+    if (eq(term_program, "rio")) return InlineImageProtocol::iterm;
+    if (contains(term, "rio"))   return InlineImageProtocol::iterm;
 
     // Windows Terminal — sixel since 1.22. WT_SESSION is set on every
     // pane; we don't probe DA1 because the env var is sufficient and
@@ -2641,6 +2887,22 @@ InlineImageProtocol detect_inline_image_protocol() {
     // every integrated-terminal session (including SSH-remote panes via
     // the Remote-SSH extension's env injection).
     if (eq(term_program, "vscode")) return InlineImageProtocol::sixel;
+
+    // Sixel-family terminals. Each of these supports sixel reliably; we
+    // prefer sixel here even where a terminal also has partial kitty
+    // support (e.g. Konsole), since its sixel path is the mature one.
+    //   Konsole (KDE)  — KONSOLE_VERSION is exported in every session.
+    //   foot (Wayland) — TERM is "foot" / "foot-extra".
+    //   Contour        — TERM is "contour"; also sets TERM_PROGRAM.
+    //   mlterm         — exports MLTERM=<version>; TERM is "mlterm".
+    //   mintty         — Cygwin/MSYS2/Git-Bash on Windows; TERM_PROGRAM=mintty.
+    if (set("KONSOLE_VERSION"))         return InlineImageProtocol::sixel;
+    if (contains(term, "foot"))         return InlineImageProtocol::sixel;
+    if (contains(term, "contour"))      return InlineImageProtocol::sixel;
+    if (eq(term_program, "contour"))    return InlineImageProtocol::sixel;
+    if (set("MLTERM"))                  return InlineImageProtocol::sixel;
+    if (contains(term, "mlterm"))       return InlineImageProtocol::sixel;
+    if (eq(term_program, "mintty"))     return InlineImageProtocol::sixel;
 
     return InlineImageProtocol::none;
 }
@@ -2871,6 +3133,13 @@ std::string_view mode_to_options_string(amiga::Mode m) {
         return "ega-640";
     case amiga::Mode::ega_hi:
         return "ega-hi";
+    case amiga::Mode::tandy_160: return "tandy-160";
+    case amiga::Mode::tandy_320: return "tandy-320";
+    case amiga::Mode::tandy_640: return "tandy-640";
+    case amiga::Mode::cga_160x200:
+        return "cga-160x200";
+    case amiga::Mode::cga_160:
+        return "cga-160";
     case amiga::Mode::cga_320:
         return "cga-320";
     case amiga::Mode::cga_640:
@@ -2901,6 +3170,56 @@ std::string_view mode_to_options_string(amiga::Mode m) {
         return "genesis-h32-sh";
     case amiga::Mode::genesis_h40_sh:
         return "genesis-h40-sh";
+    case amiga::Mode::gba_mode3:
+        return "gba-mode3";
+    case amiga::Mode::gba_mode4:
+        return "gba-mode4";
+    case amiga::Mode::gba_mode5:
+        return "gba-mode5";
+    case amiga::Mode::zx_spectrum: return "zx-spectrum";
+    case amiga::Mode::stf_spectrum512: return "stf-spectrum512";
+    case amiga::Mode::ste_spectrum4096: return "ste-spectrum4096";
+    case amiga::Mode::msx1_screen2:
+        return "msx1-screen2";
+    case amiga::Mode::msx2_screen5:
+        return "msx2-screen5";
+    case amiga::Mode::msx2_screen6:
+        return "msx2-screen6";
+    case amiga::Mode::msx2_screen7:
+        return "msx2-screen7";
+    case amiga::Mode::msx2_screen8:
+        return "msx2-screen8";
+    case amiga::Mode::thomson_to7_320x16:
+        return "thomson-to7-320x16";
+    case amiga::Mode::thomson_to8_320x16:
+        return "thomson-to8-320x16";
+    case amiga::Mode::thomson_to8_160x16:
+        return "thomson-to8-160x16";
+    case amiga::Mode::thomson_to8_320x4:
+        return "thomson-to8-320x4";
+    case amiga::Mode::thomson_to8_640x2:
+        return "thomson-to8-640x2";
+    case amiga::Mode::ted_hires:
+        return "ted-hires";
+    case amiga::Mode::ted_multicolor:
+        return "ted-multicolor";
+    case amiga::Mode::sms_mode4:
+        return "sms-mode4";
+    case amiga::Mode::gg_mode4:
+        return "gg-mode4";
+    case amiga::Mode::cpc_mode0:
+        return "cpc-mode0";
+    case amiga::Mode::cpc_mode1:
+        return "cpc-mode1";
+    case amiga::Mode::cpc_mode2:
+        return "cpc-mode2";
+    case amiga::Mode::cpc_plus_mode0:
+        return "cpc-plus-mode0";
+    case amiga::Mode::cpc_plus_mode1:
+        return "cpc-plus-mode1";
+    case amiga::Mode::cpc_plus_mode2:
+        return "cpc-plus-mode2";
+    case amiga::Mode::nibnib: return "nibnib";
     default:
         return "lores";
     }
@@ -3011,6 +3330,7 @@ api::Options make_api_options(const Config& cfg) {
     opts.native_par = cfg.native_par;
     opts.cga_text_metric = cfg.cga_text_metric;
     opts.cga_text_kernel = cfg.cga_text_kernel;
+    opts.cell_refine = cfg.cell_refine;
     opts.cga_composite_new_cga = cfg.cga_composite_new_cga;
     opts.c64_palette = cfg.c64_palette;
     opts.c64_metric = cfg.c64_metric;
@@ -3045,7 +3365,8 @@ Result<Palette> auto_quantize(const Image& image,
                               amiga::Chipset chipset,
                               int palette_diversity = 0,
                               std::string_view quantizer = {},
-                              amiga::Mode mode = amiga::Mode::lores) {
+                              amiga::Mode mode = amiga::Mode::lores,
+                              int pnn_bins = quantize::kPnnBins) {
     // EGA palette selection:
     //
     //   Mode 10h (ega-hi, 640×350 @ 21.85 kHz): the IBM EGA card enables
@@ -3080,11 +3401,12 @@ Result<Palette> auto_quantize(const Image& image,
         auto pal = quantize::pnn_quantize(image.pixels(),
                                           max_colors,
                                           palette_diversity,
-                                          /*snap_to_ocs=*/chipset != amiga::Chipset::aga);
+                                          /*snap_to_ocs=*/chipset != amiga::Chipset::aga,
+                                          pnn_bins);
         return pal;
     }
     auto algo = quantize::resolve_algorithm(mode, chipset, quantizer);
-    return quantize::quantize(image, max_colors, algo, palette_diversity);
+    return quantize::quantize(image, max_colors, algo, palette_diversity, pnn_bins);
 }
 
 // Map the CLI --quantizer string to an explicit Algorithm. Returns
@@ -3645,11 +3967,20 @@ void save_raw_vga(std::string_view path,
 std::pair<std::size_t, std::size_t> preview_display_dims(
     std::size_t w, std::size_t h, amiga::Mode mode, bool hires, bool interlace) {
     // 1. Backing-canvas (sx, sy) — mirrors web's previewScale().
+    if (amiga::is_nibnib(mode)) return {w, h};  // free size, square pixels
     std::size_t sx = 2, sy = 2;
 
-    if (amiga::is_cga(mode) || amiga::is_ega(mode) || amiga::is_vga(mode) || amiga::is_c64(mode)) {
+    if ((amiga::is_cga(mode) || amiga::is_tandy(mode)) || amiga::is_ega(mode) || amiga::is_vga(mode) || amiga::is_c64(mode)) {
         // DOS / C64 lookup, mirrors DOS_PREVIEW_SCALE in options.ts.
         switch (mode) {
+        case amiga::Mode::tandy_160:
+        case amiga::Mode::cga_160x200:
+            sx = 4; sy = 2;
+            break;
+        case amiga::Mode::cga_160:
+            sx = 4; sy = 4;
+            break;
+        case amiga::Mode::tandy_320:
         case amiga::Mode::cga_320:
         case amiga::Mode::ega_320:
         case amiga::Mode::vga_13h:
@@ -3666,6 +3997,7 @@ std::pair<std::size_t, std::size_t> preview_display_dims(
             sx = 4;
             sy = 2;
             break;
+        case amiga::Mode::tandy_640:
         case amiga::Mode::cga_640:
         case amiga::Mode::cga_composite_hires:
         case amiga::Mode::ega_640:
@@ -3694,6 +4026,40 @@ std::pair<std::size_t, std::size_t> preview_display_dims(
             sx = 2;
             sy = 2;
             break;
+        }
+    } else if (amiga::is_cpc(mode)) {
+        // Same physical-width scheme as Thomson: 160 → 4×, 320 → 2×, 640 → 1×.
+        switch (amiga::cpc_screen_mode(mode)) {
+        case 0:
+            sx = 4;
+            break;
+        case 1:
+            sx = 2;
+            break;
+        default:
+            sx = 1;
+            break;
+        }
+        sy = 2;
+    } else if (amiga::is_msx(mode)) {
+        sx = amiga::get_mode_params(mode).screen_width == 512 ? 1 : 2;
+        sy = 2;
+    } else if (amiga::is_sms(mode)) {
+        sx = 2;
+        sy = 2;
+    } else if (amiga::is_thomson(mode) || amiga::is_ted(mode)) {
+        // 160-wide modes double again (sx=4) so they fill the same physical
+        // width as the 320-wide modes (the hardware doubles 160→320); the
+        // 640-wide mode halves (sx=1). All PAR-corrected below.
+        if (mode == amiga::Mode::thomson_to8_160x16 || mode == amiga::Mode::ted_multicolor) {
+            sx = 4;
+            sy = 2;
+        } else if (mode == amiga::Mode::thomson_to8_640x2) {
+            sx = 1;
+            sy = 2;
+        } else {
+            sx = 2;
+            sy = 2;
         }
     } else if (amiga::is_atari(mode) || amiga::is_snes(mode) || amiga::is_genesis(mode)) {
         // Web's previewScale() falls through to the Amiga table for
@@ -3753,8 +4119,10 @@ std::pair<std::size_t, std::size_t> preview_display_dims(
     //    fixed-buffer when at default size — this CLI helper has no
     //    "size-override" signal so apply PAR uniformly, which matches
     //    the web's freshly-opened-mode state.
-    if (amiga::is_cga(mode) || amiga::is_ega(mode) || amiga::is_vga(mode) || amiga::is_c64(mode) ||
-        amiga::is_atari(mode) || amiga::is_snes(mode) || amiga::is_genesis(mode)) {
+    if ((amiga::is_cga(mode) || amiga::is_tandy(mode)) || amiga::is_ega(mode) || amiga::is_vga(mode) || amiga::is_c64(mode) ||
+        amiga::is_atari(mode) || amiga::is_snes(mode) || amiga::is_genesis(mode) ||
+        (amiga::is_thomson(mode) || amiga::is_msx(mode) || amiga::is_retro_raster(mode)) || amiga::is_ted(mode) || amiga::is_sms(mode) ||
+        amiga::is_cpc(mode)) {
         auto params = amiga::get_mode_params(mode);
         double par = static_cast<double>(params.par);
         if (par > 0 && w > 0) {
@@ -3956,6 +4324,7 @@ struct AmigaOutputBundle {
     bool dpf = false;
     bool has_transparency = false;
     std::vector<bool> transparency_mask;
+    int transparent_output_slot = 0;  // --transparent-output-slot, .idx only
     std::string output_path;
     std::string symbol_override;
 
@@ -3964,9 +4333,11 @@ struct AmigaOutputBundle {
     const std::vector<std::vector<Color3f>>* scanline_palettes = nullptr;
     const std::vector<std::vector<strips::ScapMove>>* strips_line_moves = nullptr;
     std::size_t changes_per_line = 0;
+    const std::vector<copper::DepthZone>* zones = nullptr;  // sliced depth zones
     std::string strips_label;
     int strips_anchor_hpos = 0;
     int strips_total_planes = 0;
+    int strips_display_shift = 0;
 
     // Fade-to (CLI cross-fade): pre-computed per-frame palette MOVEs
     // for the .cpp/.c viewer to animate at runtime.
@@ -3991,6 +4362,63 @@ struct AmigaOutputBundle {
     std::string mask_layout;
     bool mask_invert = false;
 };
+
+// --output-zones: each depth zone as <prefix>_zoneN.png (its rows of the
+// preview) and <prefix>_zoneN.iff (its rows with only its planes, the
+// palette at its first row, and a PCHG of its per-line palettes).
+int write_zone_outputs(const std::string& prefix,
+                       const copper::CopperResult& cr,
+                       const Image& preview,
+                       amiga::Mode mode,
+                       bool hires) {
+    const auto& planes = cr.planes;
+    for (std::size_t z = 0; z < cr.zones.size(); ++z) {
+        const auto start = cr.zones[z].start_row;
+        const auto end = z + 1 < cr.zones.size() ? cr.zones[z + 1].start_row : planes.height;
+        const auto depth = cr.zones[z].depth;
+        const auto colors = std::size_t{1} << depth;
+        const auto rows = end - start;
+
+        bitplane::BitplaneData zp;
+        zp.width = planes.width;
+        zp.height = rows;
+        zp.depth = depth;
+        zp.bytes_per_row = planes.bytes_per_row;
+        zp.layout = bitplane::Layout::interleaved;
+        zp.data.resize(zp.total_bytes());
+        for (std::size_t y = 0; y < rows; ++y)
+            for (std::size_t p = 0; p < depth; ++p)
+                std::copy_n(planes.data.begin() +
+                                static_cast<std::ptrdiff_t>(planes.plane_row_offset(p, start + y)),
+                            planes.bytes_per_row,
+                            zp.data.begin() + static_cast<std::ptrdiff_t>(zp.plane_row_offset(p, y)));
+        std::vector<std::vector<Color3f>> pals;
+        for (auto y = start; y < end; ++y) {
+            const auto& row = cr.scanline_palettes[y];
+            pals.emplace_back(row.begin(),
+                              row.begin() + static_cast<std::ptrdiff_t>(std::min(colors, row.size())));
+        }
+        Image crop(preview.width(), rows);
+        for (std::size_t y = 0; y < rows; ++y)
+            for (std::size_t x = 0; x < preview.width(); ++x)
+                crop[x, y] = preview[x, start + y];
+
+        auto stem = std::format("{}_zone{}", prefix, z);
+        if (auto r = png_io::save(stem + ".png", crop); !r) {
+            std::println(stderr, "Zone PNG write error: {}", r.error().message);
+            return exit_code::cant_create;
+        }
+        iff::IffOptions iff_opts;
+        iff_opts.hires = hires;
+        iff_opts.scanline_palettes = &pals;
+        if (auto r = iff::save_ilbm(stem + ".iff", zp, pals.front(), mode, iff_opts); !r) {
+            std::println(stderr, "Zone IFF write error: {}", r.error().message);
+            return exit_code::cant_create;
+        }
+        cli_status("Zone {}:   {}.png / .iff (rows {}-{}, {} planes)", z, stem, start, end - 1, depth);
+    }
+    return 0;
+}
 
 // Returns 0 on success, exit_code::* on failure (cant_create / usage).
 int write_amiga_output(AmigaOutputBundle& out) {
@@ -4034,12 +4462,14 @@ int write_amiga_output(AmigaOutputBundle& out) {
             ch.copper_changes_per_line = out.changes_per_line;
             if (out.scanline_palettes && !out.scanline_palettes->empty())
                 ch.copper_scanline_palettes = out.scanline_palettes;
+            if (out.zones) ch.depth_zones = *out.zones;
         }
         if (out.strips_line_moves && !out.strips_line_moves->empty()) {
             ch.strips_line_moves = out.strips_line_moves;
             ch.strips_label = out.strips_label;
             ch.strips_anchor_hpos = out.strips_anchor_hpos;
             ch.strips_total_planes = out.strips_total_planes;
+            ch.strips_display_shift = out.strips_display_shift;
             ch.fade_in = false;  // strips owns the per-line stream itself
         }
         if (!out.fade_per_frame_values.empty()) {
@@ -4160,7 +4590,41 @@ int write_amiga_output(AmigaOutputBundle& out) {
         return 0;
     }
 
-    // Default: PNG preview. When indices + global palette are
+    // .idx: each pixel's bitplane value (bit k = plane k), so the palette
+    // index in indexed, sliced and strips modes, HAM control + data bits,
+    // and the combined PF1/PF2 value in DPF. Decoded from the planes the
+    // other formats write, at the image's own size.
+    if (ends_with(path, ".idx")) {
+        auto idx = bitplane::decode(out.planes);
+        if (!idx) {
+            std::println(stderr, "Output: .idx decode error: {}", idx.error().message);
+            return exit_code::internal;
+        }
+        return write_idx_file("Output",
+                              "Indexed:",
+                              path,
+                              *std::move(idx),
+                              out.transparency_mask,
+                              out.transparent_output_slot,
+                              out.planes.width,
+                              out.planes.height);
+    }
+
+    // Anything else is not an Amiga output format. Amiga executables come
+    // from building the .cpp viewer (build-amiga.sh), not from the CLI.
+    if (!ends_with(path, ".png")) {
+        if (!out.disallow_message.empty()) {
+            std::println(stderr, "{}", out.disallow_message);
+        } else {
+            std::println(stderr,
+                         "Output: unsupported extension for '{}' (use .png, .iff/.ilbm, .h, "
+                         ".cpp/.c, .raw/.bin/.bpl, .pal or .idx)",
+                         path);
+        }
+        return exit_code::usage;
+    }
+
+    // PNG preview. When indices + global palette are
     // available (lores/hires/EHB plain, no DPF, no per-line palette),
     // emit a paletted PNG-8 so downstream tooling that needs the
     // palette can read it directly from the PNG instead of a sidecar
@@ -6831,6 +7295,22 @@ int run_main(int argc, char* argv[]) {
         std::println(stderr, "Error: {}", config.error().message);
         return exit_code::usage;
     }
+    for (int screen : {2, 5, 6, 7, 8}) {
+        if (ends_with(config->output_path, std::format(".sc{}", screen)) &&
+            msx::screen_number(config->mode) != screen) {
+            std::println(stderr, "MSX .sc{} output requires the matching MSX SCREEN mode", screen);
+            return exit_code::cant_create;
+        }
+    }
+    if (ends_with(config->output_path, ".nibnib") && !amiga::is_nibnib(config->mode)) {
+        std::println(stderr, "Error: .nibnib output requires --mode nibnib");
+        return exit_code::usage;
+    }
+    if (ends_with(config->output_path, ".k7") &&
+        config->mode != amiga::Mode::thomson_to7_320x16) {
+        std::println(stderr, "Error: K7 export requires thomson-to7-320x16 (TO7/70) mode");
+        return exit_code::usage;
+    }
     g_quiet = config->quiet;
     g_print_palette = config->print_palette;
     g_print_palette_json = config->print_palette_json;
@@ -7031,6 +7511,9 @@ int run_main(int argc, char* argv[]) {
                 "ega-320",
                 "ega-640",
                 "ega-hi",
+                "tandy-160", "tandy-320", "tandy-640",
+                "cga-160",
+                "cga-160x200",
                 "cga-320",
                 "cga-640",
                 "cga-composite-hires",
@@ -7053,6 +7536,26 @@ int run_main(int argc, char* argv[]) {
                 "c64-petscii",
                 "c64-charset-hires",
                 "c64-charset-multicolor",
+                "gba-mode3",
+                "gba-mode4",
+                "gba-mode5",
+                "nibnib",
+                "zx-spectrum",
+                "stf-spectrum512",
+                "ste-spectrum4096",
+                "msx1-screen2",
+                "msx2-screen5",
+                "msx2-screen6",
+                "msx2-screen7",
+                "msx2-screen8",
+                "sms-mode4",
+                "gg-mode4",
+                "cpc-mode0",
+                "cpc-mode1",
+                "cpc-mode2",
+                "cpc-plus-mode0",
+                "cpc-plus-mode1",
+                "cpc-plus-mode2",
             };
             for (std::size_t i = 0; i < std::size(modes); ++i) {
                 std::print("    \"{}\"{}\n", modes[i], i + 1 < std::size(modes) ? "," : "");
@@ -7062,13 +7565,25 @@ int run_main(int argc, char* argv[]) {
             cli_status("png2amiga {} — supported modes:", png2amiga::version);
             cli_status("  Amiga:    lores, lores-lace, hires, hires-lace, ham6, ham8, ehb (+ "
                        "-lace, -hires variants)");
-            cli_status("  Atari:    stf-low, stf-med, stf-hi, ste-low, ste-med, ste-hi");
-            cli_status("  IBM PC:   vga-13h/10h/12h, ega-320/640/hi, cga-320/640/composite, "
+            cli_status("  Atari:    stf-low, stf-med, stf-hi, ste-low, ste-med, ste-hi,");
+            cli_status("            stf-spectrum512, ste-spectrum4096");
+            cli_status("  Sinclair: zx-spectrum");
+            cli_status("  IBM PC:   vga-13h/10h/12h, ega-320/640/hi, cga-160/160x200/320/640/composite, "
                        "cga-text80x{{200,100,50,25}}");
+            cli_status("  Tandy:    tandy-160 (16c), tandy-320 (16c), tandy-640 (4c)");
             cli_status("  SNES:     snes-mode7-256, snes-mode7-direct");
             cli_status("  Genesis:  genesis-h32, genesis-h40 (+ -sh variants)");
             cli_status("  C64:      c64-multicolor, c64-hires, c64-fli, c64-afli, c64-petscii,");
             cli_status("            c64-charset-hires, c64-charset-multicolor");
+            cli_status("  GBA:      gba-mode3, gba-mode4, gba-mode5");
+            cli_status("  Other:    nibnib");
+            cli_status("  MSX:      msx1-screen2, msx2-screen5, msx2-screen6, msx2-screen7, msx2-screen8");
+            cli_status("  Thomson:  thomson-to7-320x16, thomson-to8-320x16, "
+                       "thomson-to8-160x16,");
+            cli_status("            thomson-to8-320x4, thomson-to8-640x2");
+            cli_status("  TED:      ted-hires, ted-multicolor");
+            cli_status("  Sega:     sms-mode4, gg-mode4");
+            cli_status("  CPC:      cpc-mode0, cpc-mode1, cpc-mode2 (+ cpc-plus- variants)");
         }
         return exit_code::ok;
     }
@@ -7079,9 +7594,11 @@ int run_main(int argc, char* argv[]) {
         cli_status("             stucki, jarvis, gilbert, riemersma,");
         cli_status("             floyd-steinberg-oklab");
         cli_status("  Palette-aware: opt-checker, opt-line, opt-line-checker,");
-        cli_status("             opt-vline, opt-vline-checker, tri-tone,");
+        cli_status("             opt-vline, opt-vline-checker, opt-rowdot,");
+        cli_status("             opt-rowdot-aligned, opt-rowdot-checker, tri-tone,");
         cli_status("             knoll, yliluoma1, yliluoma, yliluoma2");
         cli_status("  DBS:       dbs (perceptual optimum, slow)");
+        cli_status("  Smooth:    smooth (pair + coverage plan, blur refinement; gradients)");
         cli_status("  Structure: structure-fs, contrast-fs, zhoufang");
         cli_status("  Bayer:     bayer2x2, bayer4x4, bayer8x8, bayer4x2, bayer2x4,");
         cli_status("             bayer3x3, bayer5x5, bayer6x6, bayer7x7,");
@@ -7089,6 +7606,7 @@ int run_main(int argc, char* argv[]) {
         cli_status("  Halftone:  checker, clustered-dot, halftone8x8, diagonal8x8,");
         cli_status("             spiral5x5, pegasus, h2x4, v4x2");
         cli_status("  Lines:     line2, line4, line8, line-checker,");
+        cli_status("             rowdot, rowdot-aligned, rowdot-checker,");
         cli_status("             vline2, vline4, vline8, vline-checker, crosshatch");
         cli_status("  Pattern:   hex8x8, hex5x5, radial, quasicrystal, truchet");
         cli_status("  Noise:     blue-noise, void-cluster, cluster-noise,");
@@ -7514,8 +8032,15 @@ int run_main(int argc, char* argv[]) {
         //  but for standard modes the user's depth must be valid)
         if (!amiga::is_ham(config->mode) && config->mode != amiga::Mode::ehb &&
             !amiga::is_atari(config->mode) && !amiga::is_vga(config->mode) &&
-            !amiga::is_ega(config->mode) && !amiga::is_cga(config->mode)) {
+            !amiga::is_ega(config->mode) && !(amiga::is_cga(config->mode) || amiga::is_tandy(config->mode)) &&
+            !amiga::is_snes(config->mode) && !amiga::is_genesis(config->mode) &&
+            !amiga::is_c64(config->mode) && !amiga::is_gba(config->mode) &&
+            !(amiga::is_thomson(config->mode) || amiga::is_msx(config->mode) || amiga::is_retro_raster(config->mode)) && !amiga::is_ted(config->mode) &&
+            !amiga::is_sms(config->mode) && !amiga::is_cpc(config->mode) &&
+            !amiga::is_nibnib(config->mode)) {
             auto max_d = amiga::max_user_depth(config->mode, cs);
+            // --depth auto / --zones resolve the depth from the image later.
+            if (config->depth_auto || !config->zones.empty()) config->depth = max_d;
             if (config->depth > max_d) {
                 auto mp = amiga::get_mode_params(config->mode);
                 const char* mode_name = mp.is_hires ? "hires" : "lores";
@@ -7543,7 +8068,7 @@ int run_main(int argc, char* argv[]) {
         // DPF: see api.cpp — PF1 is zeroed in the current implementation
         // (`expand_to_dpf_pf2`), so reserves on the depth-3/4 base
         // palette ARE PF2 reserves. Allow them through.
-        if (amiga::is_cga(config->mode) || amiga::is_cga_text(config->mode))
+        if ((amiga::is_cga(config->mode) || amiga::is_tandy(config->mode)) || amiga::is_cga_text(config->mode))
             return reject("not supported in CGA modes (palette is "
                           "hardware-fixed)");
     }
@@ -8092,7 +8617,7 @@ int run_main(int argc, char* argv[]) {
         // the encoder-frame-aspect formula (target_h ≈ screen_width *
         // par / src_aspect) which keeps target_h pinned at the mode's
         // default-canonical height regardless of --width.
-        if (amiga::is_cga_text(config->mode)) {
+        if (amiga::is_cga_text(config->mode) || amiga::is_nibnib(config->mode)) {
             target_h = round_h(static_cast<double>(target_w) / src_aspect);
         } else {
             auto w_par = (target_w != params.screen_width && params.screen_width > 0)
@@ -8103,7 +8628,7 @@ int run_main(int argc, char* argv[]) {
         }
     } else if (config->height) {
         target_h = *config->height;
-        if (amiga::is_cga_text(config->mode)) {
+        if (amiga::is_cga_text(config->mode) || amiga::is_nibnib(config->mode)) {
             target_w = static_cast<std::size_t>(
                 std::lround(static_cast<double>(target_h) * src_aspect));
         } else {
@@ -8111,20 +8636,27 @@ int run_main(int argc, char* argv[]) {
                 std::lround(static_cast<double>(target_h) * src_aspect / par));
         }
     } else {
-        // Use mode default width. For lores modes, don't upscale if source
-        // is smaller. For hires, always use 640 (that's the point of hires).
-        target_w = params.is_hires ? params.screen_width : std::min(params.screen_width, src_w);
-        target_h = round_h(static_cast<double>(target_w) * par / src_aspect);
-        // Fixed-buffer modes (Atari, VGA, CGA): by default stretch-fit the
-        // source to the full buffer. With --native-par, preserve source
+        // Fixed-buffer modes (Atari, VGA, CGA, ...): by default stretch-fit
+        // the source to the full buffer. With --native-par, preserve source
         // aspect on hardware — letterbox (reduce target_h) or pillarbox
         // (reduce target_w) to fit inside screen_height. Later padding
         // expands the encoded image to full buffer dimensions with black.
+        bool is_fixed_buffer =
+            params.screen_height > 0 &&
+            (amiga::is_atari(config->mode) || amiga::is_vga(config->mode) ||
+             (amiga::is_cga(config->mode) || amiga::is_tandy(config->mode)) || amiga::is_ega(config->mode) ||
+             amiga::is_snes(config->mode) || amiga::is_genesis(config->mode) ||
+             amiga::is_c64(config->mode) || amiga::is_gba(config->mode) ||
+             (amiga::is_thomson(config->mode) || amiga::is_msx(config->mode) || amiga::is_retro_raster(config->mode)) || amiga::is_ted(config->mode) ||
+             amiga::is_sms(config->mode) || amiga::is_cpc(config->mode));
+        // Use mode default width. For lores modes, don't upscale if source
+        // is smaller. Hires always uses 640 (that's the point of hires), and a
+        // fixed-buffer mode always fills its buffer width: the buffer is the
+        // display, so a small source is fitted into it, not left small.
+        target_w = (params.is_hires || is_fixed_buffer) ? params.screen_width
+                                                        : std::min(params.screen_width, src_w);
+        target_h = round_h(static_cast<double>(target_w) * par / src_aspect);
         if (params.screen_height > 0) {
-            bool is_fixed_buffer = amiga::is_atari(config->mode) || amiga::is_vga(config->mode) ||
-                                   amiga::is_cga(config->mode) || amiga::is_ega(config->mode) ||
-                                   amiga::is_snes(config->mode) ||
-                                   amiga::is_genesis(config->mode) || amiga::is_c64(config->mode);
             if (is_fixed_buffer && !config->native_par) {
                 target_h = params.screen_height;  // stretch to fill
             } else if (target_h > params.screen_height) {
@@ -8140,6 +8672,25 @@ int run_main(int argc, char* argv[]) {
         }
     }
 
+    if (amiga::is_cga_pixels(config->mode)) { target_w = 160; target_h = params.screen_height; }
+
+    // nibnib has no screen: by default the output is the input's size.
+    if (amiga::is_nibnib(config->mode) && !config->width && !config->height) {
+        target_w = src_w;
+        target_h = src_h;
+    }
+    // nibnib decodes pixel pairs: the width must be even.
+    if (amiga::is_nibnib(config->mode) && target_w % 2 != 0) {
+        if (config->width || config->no_scale) {
+            std::println(stderr, "Error: nibnib needs an even width (got {})", target_w);
+            return exit_code::usage;
+        }
+        target_w = std::max<std::size_t>(2, target_w - 1);
+    }
+
+    if (amiga::is_tandy(config->mode) && src_w == params.screen_width && src_h == params.screen_height) {
+        target_w = src_w; target_h = src_h;
+    }
     cli_print_input(image->width(), image->height());
 
     // Determine the effective source crop region BEFORE building the mask,
@@ -8295,6 +8846,45 @@ int run_main(int argc, char* argv[]) {
         image = *std::move(cropped);
     }
 
+    // --depth auto / --zones: depth from the image's colours at chipset
+    // precision. Without --sliced one depth holds every colour; with it the
+    // sliced encoder picks (or takes) depth zones up to the mode's maximum.
+    if (config->depth_auto || !config->zones.empty()) {
+        bool plain = (config->mode == amiga::Mode::lores || config->mode == amiga::Mode::hires ||
+                      config->mode == amiga::Mode::lores_interlace ||
+                      config->mode == amiga::Mode::hires_interlace) &&
+                     !config->dual_playfield && !config->scap;
+        if (!plain) {
+            std::println(stderr,
+                         "Error: --depth auto and --zones need lores or hires "
+                         "(no HAM, EHB, --dpf or --strips)");
+            return 1;
+        }
+        if (!config->zones.empty() && !config->copper) {
+            std::println(stderr, "Error: --zones needs --sliced");
+            return 1;
+        }
+        if (config->copper && (config->interlace || config->best)) {
+            std::println(stderr,
+                         "Error: depth zones (--sliced with --depth auto or --zones) are "
+                         "progressive only and plan exactly, so --best has nothing to search");
+            return 1;
+        }
+        auto zone_chipset = effective_chipset(*config);
+        auto max_d = amiga::max_user_depth(config->mode, zone_chipset);
+        for (auto& zone : config->zones) {
+            if (zone.depth > max_d) {
+                std::println(stderr, "Error: --zones depth {} exceeds this mode's {}", zone.depth,
+                             max_d);
+                return 1;
+            }
+        }
+        config->depth = config->copper
+                            ? max_d
+                            : copper::min_exact_depth(*image, max_d, zone_chipset,
+                                                      config->lock_color0);
+    }
+
     // Display actual bitplane depth (HAM/EHB override user's --depth)
     auto actual_depth = config->depth;
     if (amiga::is_ham(config->mode))
@@ -8302,9 +8892,12 @@ int run_main(int argc, char* argv[]) {
     else if (config->mode == amiga::Mode::ehb)
         actual_depth = 6;
     else if (amiga::is_atari(config->mode) || amiga::is_vga(config->mode) ||
-             amiga::is_ega(config->mode) || amiga::is_cga(config->mode) ||
+             amiga::is_ega(config->mode) || (amiga::is_cga(config->mode) || amiga::is_tandy(config->mode)) ||
              amiga::is_snes(config->mode) || amiga::is_genesis(config->mode) ||
-             amiga::is_c64(config->mode)) {
+             amiga::is_c64(config->mode) || amiga::is_gba(config->mode) ||
+             (amiga::is_thomson(config->mode) || amiga::is_msx(config->mode) || amiga::is_retro_raster(config->mode)) || amiga::is_ted(config->mode) ||
+             amiga::is_sms(config->mode) || amiga::is_cpc(config->mode) ||
+             amiga::is_nibnib(config->mode)) {
         // Atari/DOS/SNES/Genesis/C64 modes have their bitplane depth baked
         // into the hardware (ST Low=4, VGA 13h=8, EGA=4, CGA 320=2,
         // cga-text80x100=4 attribute, SNES Mode 7=8 chunky, Genesis tiles=4,
@@ -8328,20 +8921,47 @@ int run_main(int argc, char* argv[]) {
     bool use_dpf_early = config->dual_playfield && !amiga::is_ham(config->mode) &&
                          config->mode != amiga::Mode::ehb && !amiga::is_atari(config->mode) &&
                          !amiga::is_vga(config->mode) && !amiga::is_ega(config->mode) &&
-                         !amiga::is_cga(config->mode);
+                         !(amiga::is_cga(config->mode) || amiga::is_tandy(config->mode));
     int print_depth = static_cast<int>(actual_depth);
     if (use_dpf_early) {
         auto early_chipset = effective_chipset(*config);
         print_depth = (early_chipset == amiga::Chipset::aga) ? 8 : 6;
     }
-    cli_print_target(
-        static_cast<std::size_t>(target_w), static_cast<std::size_t>(target_h), print_depth);
+    if ((amiga::is_thomson(config->mode) || amiga::is_msx(config->mode) || amiga::is_retro_raster(config->mode)) || amiga::is_ted(config->mode) ||
+        amiga::is_sms(config->mode) || amiga::is_cpc(config->mode)) {
+        // Thomson / TED / SMS / CPC have no Amiga bitplanes — report the buffer dims +
+        // color count (16 / 4 / 2 for Thomson; 121-color palette for TED).
+        // No transparency-slot-0 semantics either: clear lock_color0 so
+        // the palette dump doesn't mislabel slot 0 as 🔒 (the encoder
+        // side hard-offs it in run_pipeline).
+        config->lock_color0 = false;
+        cli_status("Target:   {}x{} @ {} colors",
+                   static_cast<std::size_t>(target_w),
+                   static_cast<std::size_t>(target_h),
+                   amiga::get_mode_params(config->mode).max_colors);
+    } else if (amiga::is_gba(config->mode)) {
+        // GBA has no bitplanes — report the buffer dims + pixel depth
+        // (8bpp paletted for mode4, 16bpp BGR555 for the direct modes).
+        cli_status("Target:   {}x{} @ {}",
+                   static_cast<std::size_t>(target_w),
+                   static_cast<std::size_t>(target_h),
+                   amiga::is_gba_paletted(config->mode) ? "8bpp" : "16bpp BGR555");
+    } else if (amiga::is_nibnib(config->mode)) {
+        cli_status("Target:   {}x{} @ RGB565, 4 bits per pixel",
+                   static_cast<std::size_t>(target_w),
+                   static_cast<std::size_t>(target_h));
+    } else {
+        cli_print_target(
+            static_cast<std::size_t>(target_w), static_cast<std::size_t>(target_h), print_depth);
+    }
 
     // Scale
     if (image->width() != target_w || image->height() != target_h) {
         // Interlace needs even height. If only 1 row short, pad instead of
         // resampling the entire image (avoids blur from bicubic).
-        if (image->width() == target_w && target_h == image->height() + 1) {
+        if (amiga::is_cga_pixels(config->mode) || amiga::is_tandy(config->mode)) {
+            image = scale::nearest(*image, target_w, target_h);
+        } else if (image->width() == target_w && target_h == image->height() + 1) {
             Image padded(target_w, target_h);
             for (std::size_t y = 0; y < image->height(); ++y)
                 for (std::size_t x = 0; x < target_w; ++x)
@@ -8398,9 +9018,12 @@ int run_main(int argc, char* argv[]) {
     // Genesis have their own (Shifter, EGA/VGA chip, VIC-II, PPU, VDP) —
     // suppress the misleading "Chipset: OCS" line for those.
     bool amiga_chipset = !amiga::is_atari(config->mode) && !amiga::is_vga(config->mode) &&
-                         !amiga::is_ega(config->mode) && !amiga::is_cga(config->mode) &&
+                         !amiga::is_ega(config->mode) && !(amiga::is_cga(config->mode) || amiga::is_tandy(config->mode)) &&
                          !amiga::is_cga_text(config->mode) && !amiga::is_c64(config->mode) &&
-                         !amiga::is_snes(config->mode) && !amiga::is_genesis(config->mode);
+                         !amiga::is_snes(config->mode) && !amiga::is_genesis(config->mode) &&
+                         !amiga::is_gba(config->mode) && !(amiga::is_thomson(config->mode) || amiga::is_msx(config->mode) || amiga::is_retro_raster(config->mode)) &&
+                         !amiga::is_ted(config->mode) && !amiga::is_sms(config->mode) &&
+                         !amiga::is_cpc(config->mode) && !amiga::is_nibnib(config->mode);
     if (amiga_chipset) cli_print_chipset(chipset);
 
     // Dual playfield: encoded image lives in PF2 of a 2N-plane display, with
@@ -8410,7 +9033,7 @@ int run_main(int argc, char* argv[]) {
     bool use_dpf_std = config->dual_playfield && !amiga::is_ham(config->mode) &&
                        config->mode != amiga::Mode::ehb && !amiga::is_atari(config->mode) &&
                        !amiga::is_vga(config->mode) && !amiga::is_ega(config->mode) &&
-                       !amiga::is_cga(config->mode);
+                       !(amiga::is_cga(config->mode) || amiga::is_tandy(config->mode));
     if (use_dpf_std) {
         config->depth = (chipset == amiga::Chipset::aga) ? 4 : 3;
     }
@@ -8693,6 +9316,327 @@ int run_main(int argc, char* argv[]) {
         return exit_code::ok;
     }
 
+    // --- Sega Master System / Game Gear and Amstrad CPC / CPC Plus ---
+    // Fixed-buffer modes. PNG preview + .h + raw .bin (SMS: tiles ++
+    // tilemap ++ CRAM; CPC: the 16 KB screen + companion .pal) + CPC .scr
+    // (AMSDOS header + screen). Reject .iff / viewer outputs.
+    if (amiga::is_sms(config->mode) || amiga::is_cpc(config->mode)) {
+        const bool is_cpc = amiga::is_cpc(config->mode);
+        if (has_transparency) {
+            for (std::size_t i = 0; i < transparency_mask.size(); ++i)
+                if (transparency_mask[i]) image->pixels()[i] = Color3f{0, 0, 0};
+        }
+        auto src_png = png_io::encode(*image);
+        if (!src_png) {
+            std::println(stderr, "source re-encode failed: {}", src_png.error().message);
+            return exit_code::internal;
+        }
+        auto aopts = make_api_options(*config);
+        neutralize_preprocess(aopts);
+        aopts.mode = std::string(mode_to_options_string(config->mode));
+        aopts.width = 0;
+        aopts.height = 0;
+        aopts.on_progress = make_cli_progress_reporter();
+        auto enc = api::encode_state_image(*image, aopts);
+        if (!enc.ok()) {
+            std::println(stderr, "encode error: {}", enc.error_msg);
+            return exit_code::internal;
+        }
+        auto& st = enc.state;
+        std::string mode_desc;
+        if (is_cpc) {
+            mode_desc = std::format("Amstrad CPC{} mode {} ({}x{}, {} inks{})",
+                                    amiga::is_cpc_plus(config->mode) ? " Plus" : "",
+                                    amiga::cpc_screen_mode(config->mode),
+                                    st.rendered.width(),
+                                    st.rendered.height(),
+                                    st.palette.size(),
+                                    amiga::is_cpc_plus(config->mode) ? " of 4096"
+                                                                     : " of 27");
+        } else {
+            mode_desc = std::format("{} mode 4 ({}x{}, 2 x 16 of {})",
+                                    amiga::is_game_gear(config->mode) ? "Game Gear"
+                                                                      : "Master System",
+                                    st.rendered.width(),
+                                    st.rendered.height(),
+                                    amiga::is_game_gear(config->mode) ? 4096 : 64);
+        }
+        cli_status("Mode:     {}", mode_desc);
+        if (!st.palette.empty()) cli_dump_palette(std::span<const Color3f>(st.palette), *config);
+        cli_print_dither(config->dither_method,
+                         resolved_dither_strength(make_api_options(*config)));
+        if (!is_cpc) {
+            cli_status("Tiles:    {} unique / {} cells (max {})",
+                       st.genesis_unique_tiles,
+                       st.genesis_total_cells,
+                       sms::kMaxTiles);
+        }
+        cli_print_encoded_other(std::format("{} bytes (frame)", st.raw_frame.size()),
+                                static_cast<std::size_t>(count_unique_colors(st.rendered)),
+                                static_cast<double>(st.quant_error),
+                                st.psnr,
+                                st.ssimulacra2_score);
+
+        if (config->preview)
+            show_terminal_preview(st.rendered, config->mode, /*hires=*/false,
+                                  /*interlace=*/false, st.has_transparency,
+                                  st.transparency_mask);
+
+        auto write_bytes = [&](const std::string& path, std::span<const std::uint8_t> bytes) {
+            std::ofstream of(path, std::ios::binary);
+            of.write(reinterpret_cast<const char*>(bytes.data()),
+                     static_cast<std::streamsize>(bytes.size()));
+            return static_cast<bool>(of);
+        };
+        const auto& out = config->output_path;
+        if (out.empty()) {
+            // No -o — skip output.
+        } else if (ends_with(out, ".iff") || ends_with(out, ".lbm") || ends_with(out, ".cpp") ||
+                   ends_with(out, ".c") || ends_with(out, ".pi1") || ends_with(out, ".pi2") ||
+                   ends_with(out, ".pi3") || (!is_cpc && ends_with(out, ".scr"))) {
+            std::println(stderr,
+                         "{} modes support .png, .h, {}and .bin/.raw output (got '{}').",
+                         is_cpc ? "CPC" : "Master System / Game Gear",
+                         is_cpc ? ".scr, " : "",
+                         out);
+            return exit_code::cant_create;
+        } else if (ends_with(out, ".bin") || ends_with(out, ".raw") || ends_with(out, ".scr")) {
+            std::vector<std::uint8_t> bytes = st.raw_frame;
+            if (ends_with(out, ".scr"))
+                bytes = api::cpc_scr_bytes(
+                    st.raw_frame, std::filesystem::path{out}.filename().string());
+            if (!write_bytes(out, bytes)) {
+                std::println(stderr, "write error: {}", out);
+                return exit_code::internal;
+            }
+            cli_status("Raw:      {} ({} bytes)", out, bytes.size());
+            if (is_cpc) {
+                std::filesystem::path pal_path{out};
+                pal_path.replace_extension(".pal");
+                auto pal = api::cpc_pal_bytes(config->mode, st.palette);
+                if (!write_bytes(pal_path.string(), pal)) {
+                    std::println(stderr, "write error: {}", pal_path.string());
+                    return exit_code::internal;
+                }
+                cli_status("Pal:      {} ({} bytes)", pal_path.string(), pal.size());
+            }
+        } else if (ends_with(out, ".h")) {
+            auto cr = api::convert_cheader(src_png->data(), src_png->size(), aopts);
+            if (!cr.error.empty()) {
+                std::println(stderr, "header: {}", cr.error);
+                return exit_code::internal;
+            }
+            if (!write_bytes(out, cr.data)) {
+                std::println(stderr, "write error: {}", out);
+                return exit_code::internal;
+            }
+            cli_status("Header:   {} ({} bytes)", out, cr.data.size());
+        } else {
+            auto r = save_preview(out, st.rendered, has_transparency, transparency_mask,
+                                  config->mode, /*hires=*/false, /*interlace=*/false);
+            if (!r) {
+                std::println(stderr, "PNG write error: {}", r.error().message);
+                return exit_code::internal;
+            }
+            cli_status("PNG:      {}", out);
+        }
+
+        if (!config->depfile.empty() && !out.empty()) {
+            std::array<std::string_view, 2> inputs{config->input_path, config->palette_file};
+            write_depfile(config->depfile, out, inputs);
+        }
+        return exit_code::ok;
+    }
+
+    // --- Thomson TO7/70 + TO8 and Commodore TED (Plus/4, C16) ---
+    // Fixed-buffer attribute / bitmap modes. PNG preview + native-layout
+    // raw .bin (+ companion .pal for the programmable TO8 modes) + generic
+    // C header. Reject .iff / viewer outputs.
+    if ((amiga::is_thomson(config->mode) || amiga::is_msx(config->mode) || amiga::is_retro_raster(config->mode)) || amiga::is_ted(config->mode)) {
+        if (has_transparency) {
+            for (std::size_t i = 0; i < transparency_mask.size(); ++i)
+                if (transparency_mask[i]) image->pixels()[i] = Color3f{0, 0, 0};
+        }
+        auto src_png = png_io::encode(*image);
+        if (!src_png) {
+            std::println(stderr, "MSX/Thomson/TED: source re-encode failed: {}",
+                         src_png.error().message);
+            return exit_code::internal;
+        }
+        auto aopts = make_api_options(*config);
+        neutralize_preprocess(aopts);
+        aopts.mode = std::string(mode_to_options_string(config->mode));
+        // Leave width/height at 0 (mode default) unless the user asked for a
+        // freeform size: the prepared image is already at the native buffer,
+        // and forwarding its dims would make the api re-derive a target that
+        // can diverge from the byte path (api-equiv parity, matches c64/SNES).
+        bool freeform_request =
+            config->width.has_value() || config->height.has_value() || config->no_scale;
+        if (freeform_request) {
+            aopts.width = static_cast<int>(image->width());
+            aopts.height = static_cast<int>(image->height());
+        } else {
+            aopts.width = 0;
+            aopts.height = 0;
+        }
+        aopts.on_progress = make_cli_progress_reporter();
+
+        auto enc = api::encode_state_image(*image, aopts);
+        if (!enc.ok()) {
+            std::println(stderr, "MSX/Thomson/TED encode error: {}", enc.error_msg);
+            return exit_code::internal;
+        }
+        auto& st = enc.state;
+        const char* mode_desc = [&] {
+            if (amiga::is_retro_raster(config->mode)) return "ZX/Atari Spectrum native screen";
+            if (amiga::is_msx(config->mode)) return "MSX native screen";
+            switch (config->mode) {
+            case amiga::Mode::thomson_to7_320x16:
+                return "Thomson TO7/70 forme-couleur (320x200, 16 fixed, 2/8x1)";
+            case amiga::Mode::thomson_to8_320x16:
+                return "Thomson TO8 forme-couleur (320x200, 16 prog, 2/8x1)";
+            case amiga::Mode::thomson_to8_160x16:
+                return "Thomson TO8 bitmap (160x200, 16 prog, 4bpp)";
+            case amiga::Mode::thomson_to8_320x4:
+                return "Thomson TO8 bitmap (320x200, 4 prog, 2 planes)";
+            case amiga::Mode::thomson_to8_640x2:
+                return "Thomson TO8 bitmap (640x200, 2 prog, 1bpp)";
+            case amiga::Mode::ted_hires:
+                return "Commodore TED hires (320x200, 2/8x8 cell, 121 palette)";
+            default:
+                return "Commodore TED multicolor (160x200, 4/4x8 cell, 121 palette)";
+            }
+        }();
+        cli_status("Mode:     {}", mode_desc);
+        if (!st.palette.empty()) cli_dump_palette(std::span<const Color3f>(st.palette), *config);
+        cli_print_dither(config->dither_method,
+                         resolved_dither_strength(make_api_options(*config)));
+        cli_print_encoded_other(
+            std::format("{} bytes (frame)", st.raw_frame.size()),
+            static_cast<std::size_t>(count_unique_colors(st.rendered)),
+            static_cast<double>(st.quant_error),
+            st.psnr,
+            st.ssimulacra2_score);
+
+        if (config->preview)
+            show_terminal_preview(st.rendered, config->mode, /*hires=*/false,
+                                  /*interlace=*/false, st.has_transparency,
+                                  st.transparency_mask);
+
+        if (config->output_path.empty()) {
+            // No -o — skip output.
+        } else if (amiga::is_retro_raster(config->mode) &&
+                   (ends_with(config->output_path, ".cpp") || ends_with(config->output_path, ".exe") ||
+                    ends_with(config->output_path, ".prg") || ends_with(config->output_path, ".scr") ||
+                    ends_with(config->output_path, ".spu"))) {
+            std::vector<std::uint8_t> bytes;
+            if (ends_with(config->output_path, ".cpp")) {
+                auto text = retro::viewer_source(config->mode, st.raw_frame);
+                if (!text) { std::println(stderr, "{}", text.error().message); return exit_code::cant_create; }
+                bytes.assign(text->begin(), text->end());
+            } else if (ends_with(config->output_path, ".exe") || ends_with(config->output_path, ".prg")) {
+                auto exe = retro::executable(config->mode, st.raw_frame);
+                if (!exe) { std::println(stderr, "{}", exe.error().message); return exit_code::cant_create; }
+                bytes = std::move(*exe);
+            } else {
+                if ((ends_with(config->output_path, ".scr")) != (config->mode == amiga::Mode::zx_spectrum)) {
+                    std::println(stderr, "Use .scr for ZX Spectrum and .spu for Atari Spectrum");
+                    return exit_code::cant_create;
+                }
+                bytes = st.raw_frame;
+            }
+            std::ofstream of(config->output_path, std::ios::binary);
+            of.write(reinterpret_cast<const char*>(bytes.data()), static_cast<std::streamsize>(bytes.size()));
+            of.close(); if (!of) return exit_code::cant_create;
+            cli_status("Export:   {} ({} bytes)", config->output_path, bytes.size());
+        } else if (ends_with(config->output_path, ".iff") ||
+                   ends_with(config->output_path, ".lbm") ||
+                   ends_with(config->output_path, ".cpp") ||
+                   ends_with(config->output_path, ".c") ||
+                   ends_with(config->output_path, ".pi1") ||
+                   ends_with(config->output_path, ".pi2") ||
+                   ends_with(config->output_path, ".pi3")) {
+            std::println(stderr,
+                         "MSX / Thomson / TED modes support .png, .h, .bin/.raw (MSX also .scN; TO7/70 .k7) "
+                         "(got '{}').",
+                         config->output_path);
+            return exit_code::cant_create;
+        } else if (amiga::is_msx(config->mode) &&
+                   ends_with(config->output_path, std::format(".sc{}", msx::screen_number(config->mode)))) {
+            auto bytes = msx::screen_file(config->mode, st.raw_frame);
+            if (!bytes) return exit_code::internal;
+            std::ofstream of(config->output_path, std::ios::binary);
+            of.write(reinterpret_cast<const char*>(bytes->data()), static_cast<std::streamsize>(bytes->size()));
+            of.close();
+            if (!of) return exit_code::cant_create;
+            cli_status("MSX:      {} ({} bytes; BLOAD with ,S)", config->output_path, bytes->size());
+        } else if (ends_with(config->output_path, ".k7")) {
+            auto tape = thomson::k7::encode(config->mode, st.raw_frame);
+            if (!tape) {
+                std::println(stderr, "K7: {}", tape.error().message);
+                return exit_code::cant_create;
+            }
+            std::ofstream of(config->output_path, std::ios::binary);
+            of.write(reinterpret_cast<const char*>(tape->data()),
+                     static_cast<std::streamsize>(tape->size()));
+            of.close();
+            if (!of) {
+                std::println(stderr, "K7 write error: {}", config->output_path);
+                return exit_code::cant_create;
+            }
+            cli_status("K7:       {} ({} bytes; TO7/70: LOADM\"\",,R)",
+                       config->output_path, tape->size());
+        } else if (ends_with(config->output_path, ".bin") ||
+                   ends_with(config->output_path, ".raw")) {
+            std::ofstream of(config->output_path, std::ios::binary);
+            of.write(reinterpret_cast<const char*>(st.raw_frame.data()),
+                     static_cast<std::streamsize>(st.raw_frame.size()));
+            if (!of) {
+                std::println(stderr, "MSX/Thomson/TED write error: {}", config->output_path);
+                return exit_code::internal;
+            }
+            cli_status("Raw:      {} ({} bytes)", config->output_path, st.raw_frame.size());
+
+            // Companion .pal for the programmable-palette TO8 modes
+            // (gate-array byte order: 2 bytes/color, low byte = (g4<<4)|b4,
+            // high byte = r4; see api.cpp::thomson_pal_bytes).
+            if (amiga::is_thomson_programmable(config->mode) && !st.palette.empty()) {
+                std::filesystem::path pal_path{config->output_path};
+                pal_path.replace_extension(".pal");
+                auto pal_bytes = api::thomson_pal_bytes(st.palette);
+                std::ofstream pf(pal_path, std::ios::binary);
+                pf.write(reinterpret_cast<const char*>(pal_bytes.data()),
+                         static_cast<std::streamsize>(pal_bytes.size()));
+                cli_status("Pal:      {} ({} bytes)", pal_path.string(), pal_bytes.size());
+            }
+        } else if (ends_with(config->output_path, ".h")) {
+            auto cr = api::convert_cheader(src_png->data(), src_png->size(), aopts);
+            if (!cr.error.empty()) {
+                std::println(stderr, "MSX/Thomson/TED header: {}", cr.error);
+                return exit_code::internal;
+            }
+            std::ofstream of(config->output_path);
+            of.write(reinterpret_cast<const char*>(cr.data.data()),
+                     static_cast<std::streamsize>(cr.data.size()));
+            cli_status("Header:   {} ({} bytes)", config->output_path, cr.data.size());
+        } else {
+            auto r = save_preview(config->output_path, st.rendered, has_transparency,
+                                  transparency_mask, config->mode, /*hires=*/false,
+                                  /*interlace=*/false);
+            if (!r) {
+                std::println(stderr, "PNG write error: {}", r.error().message);
+                return exit_code::internal;
+            }
+            cli_status("PNG:      {}", config->output_path);
+        }
+
+        if (!config->depfile.empty() && !config->output_path.empty()) {
+            std::array<std::string_view, 2> inputs{config->input_path, config->palette_file};
+            write_depfile(config->depfile, config->output_path, inputs);
+        }
+        return exit_code::ok;
+    }
+
     if (amiga::is_snes(config->mode)) {
         if (has_transparency) {
             for (std::size_t i = 0; i < transparency_mask.size(); ++i)
@@ -8795,6 +9739,245 @@ int run_main(int argc, char* argv[]) {
             auto cr = api::convert_cheader(src_png->data(), src_png->size(), aopts);
             if (!cr.error.empty()) {
                 std::println(stderr, "SNES header: {}", cr.error);
+                return exit_code::internal;
+            }
+            std::ofstream of(config->output_path);
+            of.write(reinterpret_cast<const char*>(cr.data.data()),
+                     static_cast<std::streamsize>(cr.data.size()));
+            cli_status("Header:   {} ({} bytes)", config->output_path, cr.data.size());
+        } else {
+            // PNG preview using st.rendered.
+            auto r = save_preview(config->output_path,
+                                  st.rendered,
+                                  has_transparency,
+                                  transparency_mask,
+                                  config->mode,
+                                  /*hires=*/false,
+                                  /*interlace=*/false);
+            if (!r) {
+                std::println(stderr, "PNG write error: {}", r.error().message);
+                return exit_code::internal;
+            }
+            cli_status("PNG:      {}", config->output_path);
+        }
+
+        if (!config->depfile.empty() && !config->output_path.empty()) {
+            std::array<std::string_view, 2> inputs{
+                config->input_path,
+                config->palette_file,
+            };
+            write_depfile(config->depfile, config->output_path, inputs);
+        }
+        return exit_code::ok;
+    }
+
+    // --- nibnib (RGB565 pair-delta format, CLI only) ---
+    if (amiga::is_nibnib(config->mode)) {
+        if (dither::needs_discrete_palette(config->dither_method)) {
+            std::println(stderr,
+                         "Error: dither '{}' needs a palette of colours; nibnib codes "
+                         "pixel-pair deltas. Use an error-diffusion or ordered method.",
+                         dither_name(config->dither_method));
+            return exit_code::usage;
+        }
+        if (has_transparency) {
+            for (std::size_t i = 0; i < transparency_mask.size(); ++i)
+                if (transparency_mask[i]) image->pixels()[i] = Color3f{0, 0, 0};
+        }
+        nibnib::Options nopts;
+        nopts.dither.method = config->dither_method;
+        const auto tune = dither_tuning::defaults_for(dither_tuning::Context{
+            .mode = config->mode,
+            .depth = 16,
+            .dpf = false,
+            .scap = false,
+            .copper = false,
+            .chipset = chipset,
+            .method = config->dither_method,
+        });
+        nopts.dither.strength =
+            config->dither_strength_explicit ? config->dither_strength : tune.strength;
+        nopts.dither.error_clamp =
+            config->error_clamp_explicit ? config->error_clamp : tune.error_clamp;
+        nopts.best = config->best;
+        nopts.on_progress = make_cli_progress_reporter();
+        auto enc = nibnib::encode(*image, nopts);
+        if (!enc) {
+            std::println(stderr, "nibnib encode error: {}", enc.error().message);
+            return exit_code::internal;
+        }
+        pipeline::PipelineResult pr;
+        pr.rendered = enc->rendered;
+        pr.finalize_psnr(*image, enc->quant_error);
+        cli_print_mode(std::format("nibnib ({}x{} RGB565, 4 bits per pixel)",
+                                   pr.rendered.width(),
+                                   pr.rendered.height()));
+        cli_print_dither(config->dither_method, nopts.dither.strength);
+        cli_print_encoded_other(std::format("{} bytes (nibnib)", enc->file.size()),
+                                static_cast<std::size_t>(count_unique_colors(pr.rendered)),
+                                static_cast<double>(enc->quant_error),
+                                pr.psnr,
+                                pr.ssimulacra2_score);
+
+        if (config->preview)
+            show_terminal_preview(pr.rendered,
+                                  config->mode,
+                                  /*hires=*/false,
+                                  /*interlace=*/false,
+                                  has_transparency,
+                                  transparency_mask);
+
+        if (config->output_path.empty()) {
+            // No -o (e.g. `--preview` only). Skip output writing.
+        } else if (ends_with(config->output_path, ".nibnib")) {
+            std::ofstream of(config->output_path, std::ios::binary);
+            of.write(reinterpret_cast<const char*>(enc->file.data()),
+                     static_cast<std::streamsize>(enc->file.size()));
+            if (!of) {
+                std::println(stderr, "nibnib write error: {}", config->output_path);
+                return exit_code::internal;
+            }
+            cli_status("nibnib:   {} ({} bytes)", config->output_path, enc->file.size());
+        } else if (ends_with(config->output_path, ".png")) {
+            auto r = save_preview(config->output_path,
+                                  pr.rendered,
+                                  has_transparency,
+                                  transparency_mask,
+                                  config->mode);
+            if (!r) {
+                std::println(stderr, "PNG write error: {}", r.error().message);
+                return exit_code::internal;
+            }
+            cli_status("PNG:      {}", config->output_path);
+        } else {
+            std::println(stderr,
+                         "nibnib supports .nibnib and .png output (got '{}').",
+                         config->output_path);
+            return exit_code::cant_create;
+        }
+
+        if (!config->depfile.empty() && !config->output_path.empty()) {
+            std::array<std::string_view, 2> inputs{
+                config->input_path,
+                config->palette_file,
+            };
+            write_depfile(config->depfile, config->output_path, inputs);
+        }
+        return exit_code::ok;
+    }
+
+    // --- Game Boy Advance bitmap modes (mode3 / mode4 / mode5) ---
+    if (amiga::is_gba(config->mode)) {
+        if (has_transparency) {
+            for (std::size_t i = 0; i < transparency_mask.size(); ++i)
+                if (transparency_mask[i]) image->pixels()[i] = Color3f{0, 0, 0};
+        }
+        // PNG-encoded source bytes for api::convert_cheader (bytes-only
+        // entry). The encode itself uses encode_state_image (no round-trip).
+        auto src_png = png_io::encode(*image);
+        if (!src_png) {
+            std::println(stderr, "GBA: source re-encode failed: {}", src_png.error().message);
+            return exit_code::internal;
+        }
+
+        auto aopts = make_api_options(*config);
+        neutralize_preprocess(aopts);
+        switch (config->mode) {
+        case amiga::Mode::gba_mode3:
+            aopts.mode = "gba-mode3";
+            break;
+        case amiga::Mode::gba_mode4:
+            aopts.mode = "gba-mode4";
+            break;
+        default:
+            aopts.mode = "gba-mode5";
+            break;
+        }
+        aopts.width = static_cast<int>(image->width());
+        aopts.height = static_cast<int>(image->height());
+        aopts.on_progress = make_cli_progress_reporter();
+
+        auto enc = api::encode_state_image(*image, aopts);
+        if (!enc.ok()) {
+            std::println(stderr, "GBA encode error: {}", enc.error_msg);
+            return exit_code::internal;
+        }
+        auto& st = enc.state;
+        cli_print_mode(amiga::is_gba_paletted(config->mode)
+                           ? std::format("GBA Mode 4 ({}x{} 8bpp, 256-color BGR555 palette)",
+                                         st.rendered.width(),
+                                         st.rendered.height())
+                           : std::format("GBA Mode {} ({}x{} 16bpp BGR555 direct-color)",
+                                         config->mode == amiga::Mode::gba_mode3 ? 3 : 5,
+                                         st.rendered.width(),
+                                         st.rendered.height()));
+        if (!st.palette.empty()) cli_dump_palette(std::span<const Color3f>(st.palette), *config);
+        cli_print_dither(config->dither_method, resolved_dither_strength(make_api_options(*config)));
+        std::size_t gba_colors = amiga::is_gba_paletted(config->mode)
+                                     ? st.palette.size()
+                                     : static_cast<std::size_t>(count_unique_colors(st.rendered));
+        cli_print_encoded_other(std::format("{} bytes (GBA frame)", st.raw_frame.size()),
+                                gba_colors,
+                                static_cast<double>(st.quant_error),
+                                st.psnr,
+                                st.ssimulacra2_score);
+
+        if (config->preview)
+            show_terminal_preview(st.rendered,
+                                  config->mode,
+                                  /*hires=*/false,
+                                  /*interlace=*/false,
+                                  st.has_transparency,
+                                  st.transparency_mask);
+
+        if (config->output_path.empty()) {
+            // No -o (e.g. `--preview` only). Skip output writing.
+        } else if (ends_with(config->output_path, ".iff") ||
+                   ends_with(config->output_path, ".lbm") ||
+                   ends_with(config->output_path, ".cpp") ||
+                   ends_with(config->output_path, ".c") ||
+                   ends_with(config->output_path, ".pi1") ||
+                   ends_with(config->output_path, ".pi2") ||
+                   ends_with(config->output_path, ".pi3")) {
+            std::println(stderr,
+                         "GBA modes support .png, .h, and .bin/.raw output (got '{}').",
+                         config->output_path);
+            return exit_code::cant_create;
+        } else if (ends_with(config->output_path, ".bin") ||
+                   ends_with(config->output_path, ".raw")) {
+            // st.raw_frame is the GBA frame: 8bpp indices (mode4) or a
+            // little-endian u16 BGR555 stream (mode3/mode5).
+            std::ofstream of(config->output_path, std::ios::binary);
+            of.write(reinterpret_cast<const char*>(st.raw_frame.data()),
+                     static_cast<std::streamsize>(st.raw_frame.size()));
+            if (!of) {
+                std::println(stderr, "GBA write error: {}", config->output_path);
+                return exit_code::internal;
+            }
+            cli_status("Raw:      {} ({} bytes)", config->output_path, st.raw_frame.size());
+
+            if (amiga::is_gba_paletted(config->mode)) {
+                // Companion .pal file: 256 × u16 LE BGR555 (512 bytes),
+                // mirroring the SNES 256-mode raw+companion convention.
+                std::filesystem::path pal_path{config->output_path};
+                pal_path.replace_extension(".pal");
+                std::vector<std::uint8_t> pal_bytes(256 * 2, 0);
+                for (std::size_t i = 0; i < st.palette.size() && i < 256; ++i) {
+                    auto w16 = console_color::to_bgr555_word(st.palette[i]);
+                    pal_bytes[i * 2 + 0] = static_cast<std::uint8_t>(w16 & 0xFF);
+                    pal_bytes[i * 2 + 1] = static_cast<std::uint8_t>((w16 >> 8) & 0xFF);
+                }
+                std::ofstream pf(pal_path, std::ios::binary);
+                pf.write(reinterpret_cast<const char*>(pal_bytes.data()),
+                         static_cast<std::streamsize>(pal_bytes.size()));
+                cli_status("Pal:      {} ({} bytes)", pal_path.string(), pal_bytes.size());
+            }
+        } else if (ends_with(config->output_path, ".h")) {
+            // Route through api::convert_cheader → api.cpp::gba_header so
+            // the .h layout has a single source of truth.
+            auto cr = api::convert_cheader(src_png->data(), src_png->size(), aopts);
+            if (!cr.error.empty()) {
+                std::println(stderr, "GBA header: {}", cr.error);
                 return exit_code::internal;
             }
             std::ofstream of(config->output_path);
@@ -9023,6 +10206,61 @@ int run_main(int argc, char* argv[]) {
         return exit_code::ok;
     }
 
+    // Dedicated pixel-art mode: the API supplies fixed half-block packing.
+    if (amiga::is_cga_pixels(config->mode) || amiga::is_tandy(config->mode)) {
+        auto opts = make_api_options(*config);
+        neutralize_preprocess(opts);
+        auto enc = api::encode_state_image(*image, opts);
+        if (!enc.ok()) {
+            std::println(stderr, "CGA pixel encode: {}", enc.error_msg);
+            return exit_code::internal;
+        }
+        auto& st = enc.state;
+        cli_status("Mode:     {} ({}x{}, {} RGBI colors)",
+                   mode_to_options_string(config->mode), st.rendered.width(), st.rendered.height(), st.palette.size());
+        if (!config->output_indexed_path.empty()) {
+            std::ofstream of(config->output_indexed_path, std::ios::binary);
+            of.write(reinterpret_cast<const char*>(st.indices.data()), static_cast<std::streamsize>(st.indices.size()));
+            if (!of) return exit_code::cant_create;
+        }
+        if (!config->output_path.empty()) {
+            if (ends_with(config->output_path, ".raw") || ends_with(config->output_path, ".bin")) {
+                std::ofstream of(config->output_path, std::ios::binary);
+                auto raw = amiga::is_tandy(config->mode)
+                    ? tandy::raw_export(st.raw_frame, st.palette) : st.raw_frame;
+                of.write(reinterpret_cast<const char*>(raw.data()), static_cast<std::streamsize>(raw.size()));
+                if (!of) return exit_code::cant_create;
+            } else if (ends_with(config->output_path, ".c")) {
+                cheader_dos_c::Options copts;
+                if (!config->symbol_name.empty()) copts.symbol_name = config->symbol_name;
+                std::vector<std::uint8_t> registers;
+                if (amiga::is_tandy(config->mode)) {
+                    auto regs = tandy::palette_registers(st.palette);
+                    registers.assign(regs.begin(), regs.end());
+                }
+                auto saved = cheader_dos_c::save(config->output_path, config->mode,
+                    st.rendered.width(), st.rendered.height(), st.raw_frame, registers, copts);
+                if (!saved) {
+                    std::println(stderr, "CGA DOS viewer: {}", saved.error().message);
+                    return exit_code::cant_create;
+                }
+            } else if (ends_with(config->output_path, ".png")) {
+                auto saved = png_io::save_palettized(
+                    config->output_path, st.indices, st.palette, st.rendered.width(), st.rendered.height());
+                if (!saved) return exit_code::cant_create;
+            } else {
+                std::println(stderr, "CGA pixel modes export .png, .raw, .bin or DOS viewer .c");
+                return exit_code::usage;
+            }
+        }
+        if (!config->depfile.empty() && !config->output_path.empty()) {
+            std::array<std::string_view, 1> inputs{config->input_path};
+            write_depfile(config->depfile, config->output_path, inputs);
+        }
+        if (config->preview) show_terminal_preview(st.rendered, config->mode);
+        return exit_code::ok;
+    }
+
     // --- Text-mode graphics (glyph-matched, CGA or EGA font) ---
     if (amiga::is_cga_text(config->mode)) {
         // Freeform = user passed any sizing flag (--no-scale / --width /
@@ -9161,6 +10399,10 @@ int run_main(int argc, char* argv[]) {
         // shifts cell content by sub-pixel amounts that the cell-mean
         // metric absorbs; measured 0.16% error reduction at 30s cost.
         // Skip the sweep for this mode and use the single-pass encode.
+        if (config->cell_refine && cga_metric != cga_text::Metric::blur) {
+            std::println(stderr, "--cell-refine requires the CGA text blur metric");
+            return 1;
+        }
         auto cga_kernel = cga_text::parse_kernel(config->cga_text_kernel);
         auto res = cga_text::encode(dithered,
                                     config->mode,
@@ -9169,7 +10411,8 @@ int run_main(int argc, char* argv[]) {
                                     fixed_offset,
                                     cga_metric,
                                     cga_kernel,
-                                    make_cli_progress_reporter());
+                                    make_cli_progress_reporter(),
+                                    config->cell_refine);
         if (!res) {
             std::println(stderr, "CGA text encode error: {}", res.error().message);
             return 1;
@@ -9402,6 +10645,7 @@ int run_main(int argc, char* argv[]) {
                               st.psnr,
                               st.ssimulacra2_score);
         }
+        if (config->report_rows) cli_print_row_mismatch(st.row_mismatch);
 
         // HAM: dump the (resolved) base palette only after encode finishes
         // — cli_print_palette above prints the base-color count BEFORE
@@ -9428,6 +10672,7 @@ int run_main(int argc, char* argv[]) {
             out.interlace = config->interlace;
             out.has_transparency = has_transparency;
             out.transparency_mask = transparency_mask;
+            out.transparent_output_slot = config->transparent_output_slot;
             out.output_path = config->output_path;
             out.symbol_override = config->symbol_name;
             out.fade_in = config->fade_in;
@@ -9440,15 +10685,15 @@ int run_main(int argc, char* argv[]) {
                 out.scanline_changes = &st.scanline_changes;
                 out.changes_per_line = st.changes_per_line;
             }
-            // HAM+strips: 6-plane mid-line MOVE table. HAM6 has its own slot
-            // table (kStrips6bplHam6); HAM other depths reuse the OCS table.
+            // HAM6+strips: 6-plane mid-line MOVE table (strips is HAM6-only).
             if (config->scap && !st.strips_line_moves.empty()) {
-                out.strips_line_moves = &st.strips_line_moves;
-                bool strips_ham6 = config->mode == amiga::Mode::ham6;
-                auto& table = strips_ham6 ? strips::kStrips6bplHam6 : strips::kStrips6bplOcs;
-                out.strips_label = strips_ham6 ? "strips_ham6_ocs" : "strips_dpf_ocs";
-                out.strips_anchor_hpos = table.line_gate_hpos;
-                out.strips_total_planes = table.total_planes;
+                if (const auto* variant = strips::strips_variant_for(config->mode, false)) {
+                    out.strips_line_moves = &st.strips_line_moves;
+                    out.strips_label = std::string(variant->label);
+                    out.strips_anchor_hpos = variant->table->line_gate_hpos;
+                    out.strips_total_planes = variant->table->total_planes;
+                    out.strips_display_shift = variant->table->display_shift_px;
+                }
             }
             int rc = write_amiga_output(out);
             if (rc != 0) return rc;
@@ -9621,6 +10866,9 @@ int run_main(int argc, char* argv[]) {
                               static_cast<double>(total_error),
                               ehb_psnr,
                               ehb_s2);
+            if (config->report_rows)
+                cli_print_row_mismatch(
+                    *image, rendered, transparency_mask, chipset == amiga::Chipset::aga);
 
             if (config->preview)
                 show_terminal_preview(rendered,
@@ -9644,6 +10892,7 @@ int run_main(int argc, char* argv[]) {
                 out.interlace = config->interlace;
                 out.has_transparency = has_transparency;
                 out.transparency_mask = transparency_mask;
+                out.transparent_output_slot = config->transparent_output_slot;
                 out.output_path = config->output_path;
                 out.symbol_override = config->symbol_name;
                 out.fade_in = config->fade_in;
@@ -9656,7 +10905,7 @@ int run_main(int argc, char* argv[]) {
                 out.allow_raw = false;
                 out.allow_pal = false;
                 out.disallow_message =
-                    "EHB copper: only .png, .iff, .h, and .cpp/.c output supported";
+                    "EHB copper: only .png, .iff, .h, .cpp/.c and .idx output supported";
                 int rc = write_amiga_output(out);
                 if (rc != 0) return rc;
             }
@@ -9763,6 +11012,7 @@ int run_main(int argc, char* argv[]) {
                           static_cast<double>(st.quant_error),
                           st.psnr,
                           st.ssimulacra2_score);
+        if (config->report_rows) cli_print_row_mismatch(st.row_mismatch);
 
         // EHB only writes the 32 base entries per frame; halve is hw.
         if (!fade_sequence.empty()) {
@@ -9820,6 +11070,7 @@ int run_main(int argc, char* argv[]) {
             out.interlace = config->interlace;
             out.has_transparency = has_transparency;
             out.transparency_mask = transparency_mask;
+            out.transparent_output_slot = config->transparent_output_slot;
             out.output_path = config->output_path;
             out.symbol_override = config->symbol_name;
             out.fade_in = config->fade_in;
@@ -9850,25 +11101,15 @@ int run_main(int argc, char* argv[]) {
         // down; EHB returns early before reaching it, so inline the
         // same logic + --transparent-output-slot swap here.
         if (!config->output_indexed_path.empty() && !st.indices.empty()) {
-            std::ofstream f(config->output_indexed_path, std::ios::binary | std::ios::trunc);
-            if (!f) {
-                std::println(
-                    stderr, "--output-indexed: cannot open '{}'", config->output_indexed_path);
-                return 1;
-            }
-            std::vector<std::uint8_t> out_idx = st.indices;
-            apply_transparent_slot_swap(
-                out_idx, transparency_mask, config->transparent_output_slot);
-            f.write(reinterpret_cast<const char*>(out_idx.data()),
-                    static_cast<std::streamsize>(out_idx.size()));
-            cli_status("Indexed: {} ({} bytes, {}x{}{})",
-                       config->output_indexed_path,
-                       out_idx.size(),
-                       st.rendered.width(),
-                       st.rendered.height(),
-                       config->transparent_output_slot > 0
-                           ? std::format(", transparent→slot {}", config->transparent_output_slot)
-                           : std::string{});
+            if (auto rc = write_idx_file("--output-indexed",
+                                         "Indexed:",
+                                         config->output_indexed_path,
+                                         st.indices,
+                                         transparency_mask,
+                                         config->transparent_output_slot,
+                                         st.rendered.width(),
+                                         st.rendered.height()))
+                return rc;
         }
 
         // Joint --ji / --oe writes (EHB mode): the standard joint
@@ -10032,6 +11273,22 @@ int run_main(int argc, char* argv[]) {
 
         std::size_t skip_initial_lace = config->interlace ? 2 : 0;
 
+        // --palette seeds the sliced base palette (api.cpp does the same).
+        std::vector<Color3f> copper_user_pal;
+        if (!config->palette_file.empty()) {
+            auto loaded = palette_io::load_palette(config->palette_file);
+            if (!loaded) {
+                std::println(stderr, "Palette load error: {}", loaded.error().message);
+                return 1;
+            }
+            Palette user_pal = *std::move(loaded);
+            snap_palette(user_pal, chipset, config->mode);
+            copper_user_pal = std::move(user_pal.colors);
+        }
+
+        std::optional<std::vector<copper::DepthZone>> sliced_zones;
+        if (config->depth_auto || !config->zones.empty()) sliced_zones = config->zones;
+
         // Single-pass encoder factored so best below can replay it
         // under a parallel jitter sweep without duplicating the args.
         auto encode_once = [&](const Image& img,
@@ -10045,7 +11302,7 @@ int run_main(int argc, char* argv[]) {
                 d,
                 chipset,
                 static_cast<std::size_t>(config->copper_changes),
-                nullptr,
+                copper_user_pal.empty() ? nullptr : &copper_user_pal,
                 config->lock_color0,
                 copper_locks,
                 diversity,
@@ -10060,7 +11317,9 @@ int run_main(int argc, char* argv[]) {
                 config->sliced_vertical_dither,
                 sliced_excluded,
                 parse_quantizer_override(config->quantizer),
-                beam_on);
+                beam_on,
+                /*dither_checked=*/true,
+                sliced_zones);
         };
 
         Result<copper::CopperResult> copper_result;
@@ -10222,6 +11481,8 @@ int run_main(int argc, char* argv[]) {
             auto shift_palette = [&](std::vector<Color3f>& p) {
                 std::vector<Color3f> shifted(pf2_base, Color3f{0, 0, 0});
                 shifted.insert(shifted.end(), p.begin(), p.end());
+                shifted.at(0) = p.at(0);
+                shifted[pf2_base] = Color3f{0, 0, 0};
                 p = std::move(shifted);
             };
             shift_palette(copper_result->base_palette);
@@ -10229,7 +11490,7 @@ int run_main(int argc, char* argv[]) {
                 shift_palette(pal);
             for (auto& line : copper_result->scanline_changes)
                 for (auto& ch : line)
-                    ch.reg = static_cast<std::uint8_t>(ch.reg + pf2_base);
+                    ch.reg = ch.reg == 0 ? 0 : static_cast<std::uint8_t>(ch.reg + pf2_base);
             copper_result->num_colors += pf2_base;
         }
 
@@ -10255,8 +11516,24 @@ int run_main(int argc, char* argv[]) {
                            100.0f * used / float(row0));
             }
         }
+        auto cop_plane_bytes = copper_result->planes.total_bytes();
+        if (!copper_result->zones.empty()) {
+            std::string list;
+            for (std::size_t z = 0; z < copper_result->zones.size(); ++z) {
+                auto& zone = copper_result->zones[z];
+                auto end = z + 1 < copper_result->zones.size()
+                               ? copper_result->zones[z + 1].start_row
+                               : copper_result->planes.height;
+                if (!list.empty()) list += ", ";
+                list += std::format("{}-{} {}bpl", zone.start_row, end - 1, zone.depth);
+            }
+            cop_plane_bytes = copper::zoned_plane_bytes(copper_result->zones,
+                                                        copper_result->planes.height,
+                                                        copper_result->planes.bytes_per_row);
+            cli_status("Zones:    {}", list);
+        }
         cli_print_encoded(static_cast<int>(copper_result->planes.depth),
-                          static_cast<int>(copper_result->planes.total_bytes()),
+                          static_cast<int>(cop_plane_bytes),
                           static_cast<int>(copper_result->base_palette.size()),
                           chipset == amiga::Chipset::aga,
                           cop_cap_entries,
@@ -10268,6 +11545,9 @@ int run_main(int argc, char* argv[]) {
                           static_cast<double>(copper_result->total_error),
                           cop_psnr,
                           cop_s2);
+        if (config->report_rows)
+            cli_print_row_mismatch(
+                *image, *preview, transparency_mask, chipset == amiga::Chipset::aga);
 
         if (config->preview)
             show_terminal_preview(*preview,
@@ -10290,6 +11570,7 @@ int run_main(int argc, char* argv[]) {
             out.dpf = use_dpf_std;
             out.has_transparency = has_transparency;
             out.transparency_mask = transparency_mask;
+            out.transparent_output_slot = config->transparent_output_slot;
             out.output_path = config->output_path;
             out.symbol_override = config->symbol_name;
             out.fade_in = config->fade_in;
@@ -10299,7 +11580,18 @@ int run_main(int argc, char* argv[]) {
             out.scanline_changes = &copper_result->scanline_changes;
             out.scanline_palettes = &copper_result->scanline_palettes;
             out.changes_per_line = copper_result->changes_per_line;
+            out.zones = &copper_result->zones;
             int rc = write_amiga_output(out);
+            if (rc != 0) return rc;
+        }
+        if (!config->output_zones.empty()) {
+            if (copper_result->zones.empty()) {
+                std::println(stderr, "Error: --output-zones needs --sliced with --depth auto "
+                                     "or --zones");
+                return exit_code::usage;
+            }
+            int rc = write_zone_outputs(
+                config->output_zones, *copper_result, *preview, config->mode, config->hires);
             if (rc != 0) return rc;
         }
 
@@ -10316,24 +11608,26 @@ int run_main(int argc, char* argv[]) {
     }
 
     // --- strips (mid-line palette swaps) ---
-    // Two paths:
-    //   * DPF (production): --strips + --dpf + OCS lores depth=3 → 8 PF2
-    //     colors, full cpp viewer export.
-    //   * Lores 5bpp (investigation): --strips + OCS lores depth=5 (no
-    //     --dpf) → 32 colors, single playfield, PNG preview only,
-    //     no copper-list cpp output yet.
+    // Paths (HAM6 is handled by the HAM branch above):
+    //   * lores: --strips + OCS lores depth 1-4 → 2-16 colors, 8-px grid.
+    //   * DPF: --strips + --dpf + OCS lores depth=3 → 8 PF2 colors.
+    //   * EHB: --strips + --mode ehb → 32 base + 32 half-brites.
     if (config->scap) {
         bool strips_ehb = config->mode == amiga::Mode::ehb;
         bool strips_dpf = use_dpf_std && config->mode == amiga::Mode::lores;
-        // HAM6+strips is handled by the HAM branch above, so the gate here
-        // only needs to cover the EHB/DPF combos. Keep the error wording
-        // explicit about all three legal forms.
-        if ((!strips_dpf && !strips_ehb) || chipset != amiga::Chipset::ocs || config->interlace) {
+        bool strips_lores = !config->dual_playfield && config->mode == amiga::Mode::lores &&
+                            config->depth >= 1 && config->depth <= 4;
+        if ((!strips_dpf && !strips_ehb && !strips_lores) || chipset != amiga::Chipset::ocs ||
+            config->interlace) {
             std::println(stderr,
-                         "Error: --strips requires OCS (no interlace) with either "
-                         "--dpf lores depth=3, --mode ehb, or --mode ham6.");
+                         "Error: --strips requires OCS (no interlace) with --mode lores "
+                         "depth 1-4, --dpf lores depth=3, --mode ehb, or --mode ham6.");
             return 1;
         }
+        const auto* variant = strips::strips_variant_for(config->mode, strips_dpf);
+        if (strips::strips_forces_color0_unlocked(
+                config->mode, config->dual_playfield, config->depth))
+            config->lock_color0 = false;
         if (has_transparency) {
             for (std::size_t i = 0; i < transparency_mask.size(); ++i)
                 if (transparency_mask[i]) image->pixels()[i] = Color3f{0, 0, 0};
@@ -10362,7 +11656,9 @@ int run_main(int argc, char* argv[]) {
         }
         auto& st = enc.state;
 
-        const char* strips_label = strips_ehb ? "OCS EHB 6bpp" : "OCS DPF";
+        std::string strips_label = strips_lores
+                                       ? std::format("{} {}bpp", variant->name, config->depth)
+                                       : std::string(variant->name);
         cli_print_mode(std::format("Strips ({}, {} slots, {:.1f} useful swaps/line)",
                                    strips_label,
                                    st.strips_slot_count,
@@ -10375,6 +11671,8 @@ int run_main(int argc, char* argv[]) {
                             st.palette.size(),
                             st.palette.size() * 2,
                             resolve_quantizer_name(config->mode, chipset, config->quantizer)));
+        } else if (strips_lores) {
+            cli_print_palette(std::format("{} colors (auto, ocs-optimal)", st.palette.size()));
         } else {
             // DPF strips: st.palette is the 16-entry COLOR00..15 register
             // layout (output_palette in scap.cpp). OCS DPF uses both
@@ -10435,6 +11733,7 @@ int run_main(int argc, char* argv[]) {
                           static_cast<double>(st.quant_error),
                           st.psnr,
                           st.ssimulacra2_score);
+        if (config->report_rows) cli_print_row_mismatch(st.row_mismatch);
 
         if (config->preview)
             show_terminal_preview(st.rendered,
@@ -10456,19 +11755,20 @@ int run_main(int argc, char* argv[]) {
             out.dpf = strips_dpf;
             out.has_transparency = has_transparency;
             out.transparency_mask = transparency_mask;
+            out.transparent_output_slot = config->transparent_output_slot;
             out.output_path = config->output_path;
             out.symbol_override = config->symbol_name;
             out.mask_layout = config->mask_layout;
             out.mask_invert = config->mask_invert;
             out.strips_line_moves = &st.strips_line_moves;
-            out.strips_label = strips_ehb ? "strips_ehb_ocs" : "strips_dpf_ocs";
-            auto& table = strips_ehb ? strips::kStrips6bplEhb : strips::kStrips6bplOcs;
-            out.strips_anchor_hpos = table.line_gate_hpos;
-            out.strips_total_planes = table.total_planes;
+            out.strips_label = std::string(variant->label);
+            out.strips_anchor_hpos = variant->table->line_gate_hpos;
+            out.strips_total_planes = variant->table->total_planes;
+            out.strips_display_shift = variant->table->display_shift_px;
             out.allow_iff = false;
             out.allow_raw = false;
             out.allow_pal = false;
-            out.disallow_message = "Strips output: only .png, .h, and .cpp/.c supported";
+            out.disallow_message = "Strips output: only .png, .h, .cpp/.c and .idx supported";
             int rc = write_amiga_output(out);
             if (rc != 0) return rc;
         }
@@ -10724,7 +12024,7 @@ int run_main(int argc, char* argv[]) {
 
     if (!plain_best_done) {
         // CGA: build the fixed 4- or 2-color palette (auto-select variant if asked).
-        if (amiga::is_cga(config->mode) && !user_pal_std) {
+        if ((amiga::is_cga(config->mode) || amiga::is_tandy(config->mode)) && !user_pal_std) {
             if (config->mode == amiga::Mode::cga_composite_hires) {
                 // Real CGA mode 06: 1bpp framebuffer, bg fixed at black,
                 // fg selectable from RGBI 0..15. Pick the FG whose
@@ -10991,6 +12291,10 @@ int run_main(int argc, char* argv[]) {
             // no longer needs to force median-cut for byte-stability.
             // resolve_algorithm picks gpu-restart on Apple Metal,
             // median-cut otherwise.
+            const int plain_bins = config->copper || config->scap
+                                       ? quantize::kPnnBins
+                                       : quantize::plain_pnn_bins(
+                                             config->mode, chipset, max_colors);
             auto quantized = palette_locks::two_pass_quantize(
                 [&](std::size_t k) -> Result<Palette> {
                     return auto_quantize(*quant_src,
@@ -10998,7 +12302,8 @@ int run_main(int argc, char* argv[]) {
                                          chipset,
                                          config->palette_diversity,
                                          config->quantizer,
-                                         config->mode);
+                                         config->mode,
+                                         plain_bins);
                 },
                 qc.qcount,
                 qc.kfallback,
@@ -11066,7 +12371,7 @@ int run_main(int argc, char* argv[]) {
         //     64-entry gamut. Refinement's snap-to-gamut collapses them to ~11
         //     effective colors and drops PSNR 3+ dB.
         //   - CGA: hardware-fixed palettes can't be reprogrammed.
-        bool skip_refine = amiga::is_chunky(config->mode) || amiga::is_cga(config->mode) ||
+        bool skip_refine = amiga::is_chunky(config->mode) || (amiga::is_cga(config->mode) || amiga::is_tandy(config->mode)) ||
                            amiga::is_ega(config->mode) || amiga::is_atari_hi(config->mode);
         if (config->refine_iterations > 0 && config->palette_file.empty() && !skip_refine &&
             reserve_count_std == 0) {
@@ -11118,6 +12423,30 @@ int run_main(int argc, char* argv[]) {
             }
         } else {
             dither_result = dither::apply(*image, pal_span, dith);
+        }
+
+        if (palette_pairs::plain_fit_mode(config->mode) && actual_depth >= 2 && actual_depth <= 8 &&
+            !config->copper && !config->scap && config->palette_file.empty() &&
+            reserve_count_std == 0 && !has_transparency) {
+            pal.colors.resize(pal_size);
+            palette_pairs::joint_refit(
+                *image,
+                pal.colors,
+                dither_result,
+                std_locked,
+                palette_pairs::grid_for(chipset, config->mode),
+                false,
+                [&](const std::vector<Color3f>& p) {
+                    return dither::apply(*image, std::span<const Color3f>(p), dith);
+                },
+                /*concurrent=*/true);
+            palette_pairs::refine(*image,
+                                  pal.colors,
+                                  dither_result,
+                                  dith,
+                                  std_locked,
+                                  palette_pairs::grid_for(chipset, config->mode));
+            pal_span = std::span<const Color3f>(pal.colors);
         }
 
         // CGA composite hires (mode 06): cell-pattern dither against the
@@ -11268,27 +12597,18 @@ int run_main(int argc, char* argv[]) {
     // from the api state. Writes after dither/pin so the bytes match
     // the final palette; runs before the --tile crop so non-tile
     // outputs are unaffected (--tile is excluded from --best anyway).
+    // The swap runs on a copy, so the in-memory indices keep slot 0 =
+    // transparent for later renders / status output.
     if (!config->output_indexed_path.empty() && !dither_result.indices.empty()) {
-        std::ofstream f(config->output_indexed_path, std::ios::binary | std::ios::trunc);
-        if (!f) {
-            std::println(stderr, "--output-indexed: cannot open '{}'", config->output_indexed_path);
-            return 1;
-        }
-        // Apply --transparent-output-slot swap on a copy so the
-        // in-memory indices stay consistent (slot 0 = transparent)
-        // for any subsequent renders / status output.
-        std::vector<std::uint8_t> out_idx = dither_result.indices;
-        apply_transparent_slot_swap(out_idx, transparency_mask, config->transparent_output_slot);
-        f.write(reinterpret_cast<const char*>(out_idx.data()),
-                static_cast<std::streamsize>(out_idx.size()));
-        cli_status("Indexed: {} ({} bytes, {}x{}{})",
-                   config->output_indexed_path,
-                   out_idx.size(),
-                   image->width(),
-                   image->height(),
-                   config->transparent_output_slot > 0
-                       ? std::format(", transparent→slot {}", config->transparent_output_slot)
-                       : std::string{});
+        if (auto rc = write_idx_file("--output-indexed",
+                                     "Indexed:",
+                                     config->output_indexed_path,
+                                     dither_result.indices,
+                                     transparency_mask,
+                                     config->transparent_output_slot,
+                                     image->width(),
+                                     image->height()))
+            return rc;
     }
 
     // Single emit-site for the auto-palette status. See comment ~L7547
@@ -11377,9 +12697,11 @@ int run_main(int argc, char* argv[]) {
         auto pf2_base = std::size_t{1} << (planes->depth / 2);
         std::vector<Color3f> shifted(pf2_base, Color3f{0, 0, 0});
         shifted.insert(shifted.end(), used_palette.begin(), used_palette.end());
+        // PF2 index zero is transparent and displays COLOR00.
+        shifted[0] = used_palette[0];
         used_palette = std::move(shifted);
         for (auto& idx : dither_result.indices)
-            idx = static_cast<std::uint8_t>(idx + pf2_base);
+            idx = idx == 0 ? 0 : static_cast<std::uint8_t>(idx + pf2_base);
     }
 
     float std_psnr = color_space::compute_psnr_blurred(
@@ -11403,6 +12725,9 @@ int run_main(int argc, char* argv[]) {
                       static_cast<double>(dither_result.total_error),
                       std_psnr,
                       std_s2);
+    if (config->report_rows)
+        cli_print_row_mismatch(
+            *image, *preview, transparency_mask, chipset == amiga::Chipset::aga);
 
     // --fade-to: joint k-means clusters (source ⊕ targets) and replaces
     // the bitmap's indices / palette / planes / rendered preview with
@@ -11500,7 +12825,7 @@ int run_main(int argc, char* argv[]) {
         // routes through the unified write_amiga_output helper. DOS / Atari
         // modes have per-format dispatch below (Degas .pi*, cheader_dos_c
         // 16-bit C viewers, mode-specific .raw writers).
-        bool dos_or_atari = amiga::is_atari(config->mode) || amiga::is_cga(config->mode) ||
+        bool dos_or_atari = amiga::is_atari(config->mode) || (amiga::is_cga(config->mode) || amiga::is_tandy(config->mode)) ||
                             amiga::is_ega(config->mode) || amiga::is_vga(config->mode);
         if (!dos_or_atari) {
             AmigaOutputBundle out;
@@ -11519,6 +12844,7 @@ int run_main(int argc, char* argv[]) {
             out.dpf = use_dpf_std;
             out.has_transparency = has_transparency;
             out.transparency_mask = transparency_mask;
+            out.transparent_output_slot = config->transparent_output_slot;
             out.output_path = config->output_path;
             out.symbol_override = config->symbol_name;
             out.fade_in = config->fade_in;
@@ -11596,7 +12922,7 @@ int run_main(int argc, char* argv[]) {
             //          all DOS modes including EGA/VGA).
             // Amiga modes use the existing AmigaOS viewer.
             bool want_c16 = ends_with(config->output_path, ".c");
-            if (want_c16 && amiga::is_cga(config->mode)) {
+            if (want_c16 && (amiga::is_cga(config->mode) || amiga::is_tandy(config->mode))) {
                 auto raw = cheader_dos_c::pack_cga_banked(
                     dither_result.indices, target_w, target_h, config->mode);
                 std::uint8_t ctrl2 = static_cast<std::uint8_t>((config->cga_palette & 0x3) << 4) |
@@ -11710,7 +13036,7 @@ int run_main(int argc, char* argv[]) {
                              "text80x100, EGA 320/640/hi, VGA 13h/10h/12h.");
                 return 1;
             } else if (amiga::is_vga(config->mode) || amiga::is_ega(config->mode) ||
-                       amiga::is_cga(config->mode)) {
+                       (amiga::is_cga(config->mode) || amiga::is_tandy(config->mode))) {
                 std::println(stderr,
                              "DOS viewer output: use .c extension "
                              "(ia16-elf-gcc, 16-bit real mode).");
@@ -11757,7 +13083,7 @@ int run_main(int argc, char* argv[]) {
                     config->output_path, planes.value(), used_palette, config->mode);
             } else if (amiga::is_ega(config->mode)) {
                 save_raw_ega(config->output_path, planes.value(), used_palette);
-            } else if (amiga::is_cga(config->mode)) {
+            } else if ((amiga::is_cga(config->mode) || amiga::is_tandy(config->mode))) {
                 save_raw_cga(
                     config->output_path, dither_result.indices, target_w, target_h, config->mode);
             } else {
@@ -11808,79 +13134,14 @@ int run_main(int argc, char* argv[]) {
     //   {dir}/{base}/{stem}      → printf-style substitution
     // Format is selected by the resolved path's extension.
     if (joint_mode && !config->output_each.empty()) {
-        namespace fs = std::filesystem;
-        auto resolve = [&](const std::string& pat, const std::string& src) -> std::string {
-            fs::path p(src);
-            std::string dir = p.parent_path().string();
-            std::string name = p.filename().string();  // with extension
-            std::string stem = p.stem().string();      // without extension
-            if (!pat.empty() && pat[0] == '.') {
-                fs::path o = dir.empty() ? fs::path(stem + pat) : fs::path(dir) / (stem + pat);
-                return o.string();
-            }
-            std::string out = pat;
-            auto repl = [&](std::string_view tok, std::string_view val) {
-                std::size_t pos = 0;
-                while ((pos = out.find(tok, pos)) != std::string::npos) {
-                    out.replace(pos, tok.size(), val);
-                    pos += val.size();
-                }
-            };
-            repl("{dir}", dir);
-            repl("{stem}", stem);
-            repl("{name}", name);  // rarely useful — filename with ext
-            return out;
-        };
         auto write_outputs = [&](const std::string& src,
                                  std::span<const std::uint8_t> idx,
                                  const std::vector<bool>& tmask,
                                  std::size_t w,
-                                 std::size_t h) -> int {
-            for (auto& pat : config->output_each) {
-                auto out_path = resolve(pat, src);
-                if (ends_with(out_path, ".idx")) {
-                    std::ofstream f(out_path, std::ios::binary | std::ios::trunc);
-                    if (!f) {
-                        std::println(stderr, "--output-each: cannot open '{}'", out_path);
-                        return exit_code::cant_create;
-                    }
-                    // Apply --transparent-output-slot swap on a copy.
-                    std::vector<std::uint8_t> out_idx(idx.begin(), idx.end());
-                    apply_transparent_slot_swap(out_idx, tmask, config->transparent_output_slot);
-                    f.write(reinterpret_cast<const char*>(out_idx.data()),
-                            static_cast<std::streamsize>(out_idx.size()));
-                    cli_status(
-                        "Joint-out: {} ({} bytes, {}x{}{})",
-                        out_path,
-                        out_idx.size(),
-                        w,
-                        h,
-                        config->transparent_output_slot > 0
-                            ? std::format(", transparent→slot {}", config->transparent_output_slot)
-                            : std::string{});
-                } else if (ends_with(out_path, ".png")) {
-                    std::vector<std::uint8_t> idx_v(idx.begin(), idx.end());
-                    auto r = png_io::save_palettized(out_path,
-                                                     idx_v,
-                                                     pal.colors,
-                                                     w,
-                                                     h,
-                                                     /*transparent_index=*/-1);
-                    if (!r) {
-                        std::println(
-                            stderr, "--output-each: PNG write error: {}", r.error().message);
-                        return exit_code::cant_create;
-                    }
-                    cli_status("Joint-out: {} (paletted, {}x{})", out_path, w, h);
-                } else {
-                    std::println(stderr,
-                                 "--output-each: unsupported extension "
-                                 "in '{}' (expected .idx or .png)",
-                                 out_path);
-                    return exit_code::usage;
-                }
-            }
-            return 0;
+                                 std::size_t h) {
+            return write_oe_outputs(
+                config->output_each, src, idx, tmask, pal.colors, w, h,
+                config->transparent_output_slot);
         };
         // Positional first — its indices were already produced by
         // the main encode pipeline. Per-input dither for the rest.

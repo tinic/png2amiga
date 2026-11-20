@@ -304,6 +304,94 @@ inline constexpr std::array<std::uint32_t, 16> kC64Levy = {
 };
 
 // ---------------------------------------------------------------------------
+// Thomson EF9369 DAC gamma LUT. A Thomson color channel is a 4-bit index
+// 0..15; its 8-bit DAC value is intens[idx]. The EF9369 has a built-in
+// gamma-2.8 correction, so the level is 255·(v/15)^(1/2.8) (MAME
+// thom_configure_palette, src/mame/thomson/thomson_m.cpp). The ramp is
+// non-uniform (0 then jumps to ~96) — do NOT use OCS nibble replication.
+// (Was theodore's slightly-brighter table; MAME's is the documented EF9369
+// curve and renders a touch darker.)
+// ---------------------------------------------------------------------------
+inline constexpr std::array<int, 16> kThomsonIntens = {
+    0, 96, 124, 143, 159, 172, 183, 194, 203, 212, 220, 228, 235, 242, 248, 255};
+
+// Snap an 8-bit sRGB channel to the nearest of the 16 Thomson intens[]
+// levels; returns the 4-bit index 0..15.
+constexpr std::uint8_t thomson_channel_index(int v8) noexcept {
+    int best_i = 0;
+    int best_d = 1 << 30;
+    for (int i = 0; i < 16; ++i) {
+        int d = v8 - kThomsonIntens[static_cast<std::size_t>(i)];
+        d = d < 0 ? -d : d;
+        if (d < best_d) {
+            best_d = d;
+            best_i = i;
+        }
+    }
+    return static_cast<std::uint8_t>(best_i);
+}
+
+// Thomson 4-bit (r,g,b) channel indices → packed 0xRRGGBB via intens[].
+constexpr std::uint32_t thomson_rgb_hex(int r, int g, int b) noexcept {
+    return (static_cast<std::uint32_t>(kThomsonIntens[static_cast<std::size_t>(r)]) << 16) |
+           (static_cast<std::uint32_t>(kThomsonIntens[static_cast<std::size_t>(g)]) << 8) |
+           static_cast<std::uint32_t>(kThomsonIntens[static_cast<std::size_t>(b)]);
+}
+
+// ---------------------------------------------------------------------------
+// Thomson TO7/70 fixed RGB palette, using the to7.fr display interpretation:
+// https://to7.fr/static/to7/js/to7screen.js (TO7screen.palette).
+// Pastel colors are NOT TO8 EF9369 channel indices. MAME's TO8-derived
+// approximation differs substantially, notably pink, light blue and orange.
+// Keep this separate from kThomsonIntens and programmable TO8 palettes.
+// Index order: black, red, green, yellow, blue, magenta, cyan, white,
+// grey, pink, light green, sand, light blue, parme, light cyan, orange.
+// ---------------------------------------------------------------------------
+inline constexpr std::array<std::uint32_t, 16> kThomsonTo770Rgb = {
+    0x000000, 0xff0000, 0x00ff00, 0xffff00,
+    0x0000ff, 0xff00ff, 0x00ffff, 0xffffff,
+    0xaaaaaa, 0xffaaaa, 0xaaffaa, 0xffffaa,
+    0x2aaaff, 0xffaaff, 0xaaffff, 0xffaa2a,
+};
+
+// ---------------------------------------------------------------------------
+// Commodore TED (Plus/4, C16) FIXED palette — 128 entries indexed by the
+// color byte (luma<<4)|chroma. luma = bits 6-4 (0..7), chroma = bits 3-0
+// (0..15). chroma 0 = black at every luma → 121 distinct hardware colours,
+// which is what ted_colors() enumerates. Note the rendered gamut is smaller:
+// Colodore's PAL decoding saturates at luma 7, where 7 chromas land on pure
+// white and two more pairs collide, so the table holds 111 unique RGB values.
+// That is faithful to the source, not a transcription error — verified
+// against VICE's colodore_ted.vpl byte for byte.
+// ---------------------------------------------------------------------------
+inline constexpr std::array<std::uint32_t, 128> kTedPalette = {
+    // luma 0
+    0x000000, 0x171717, 0x46070a, 0x002a26, 0x3e0246, 0x003300, 0x0f0d70, 0x1f2100,
+    0x3e0e00, 0x301700, 0x0f2b00, 0x460326, 0x00310a, 0x031761, 0x1f0770, 0x033100,
+    // luma 1
+    0x000000, 0x262626, 0x591417, 0x013b37, 0x510c59, 0x054501, 0x1e1c85, 0x303200,
+    0x511c01, 0x422700, 0x1e3c00, 0x590e37, 0x014217, 0x0f2675, 0x301385, 0x0f4300,
+    // luma 2
+    0x000000, 0x373737, 0x6d2327, 0x0c4e49, 0x641b6d, 0x12580c, 0x2e2c9b, 0x414400,
+    0x642c0c, 0x553800, 0x2e4e00, 0x6d1d49, 0x0c5527, 0x1d378a, 0x41229b, 0x1d5600,
+    // luma 3
+    0x000000, 0x4a4a4a, 0x813338, 0x1a615d, 0x792a82, 0x206c1a, 0x3f3db1, 0x545700,
+    0x793d1a, 0x684a07, 0x3f6200, 0x812d5d, 0x1a6938, 0x2d49a0, 0x5433b1, 0x2d6907,
+    // luma 4
+    0x000000, 0x7b7b7b, 0xb86267, 0x449690, 0xaf58b9, 0x4ca144, 0x706deb, 0x878a1f,
+    0xaf6e44, 0x9d7c2b, 0x70961f, 0xb85a90, 0x449e67, 0x5b7bd9, 0x8762eb, 0x5b9e2b,
+    // luma 5
+    0x000000, 0x9b9b9b, 0xdb8186, 0x61b7b1, 0xd176dc, 0x69c360, 0x8f8cff, 0xa8ab38,
+    0xd18d60, 0xbf9c45, 0x8fb738, 0xdb79b1, 0x61c086, 0x799bfd, 0xa880ff, 0x79c045,
+    // luma 6
+    0x000000, 0xe0e0e0, 0xffc3c9, 0xa0fef8, 0xffb7ff, 0xa9ff9f, 0xd3d0ff, 0xedf171,
+    0xffd19f, 0xffe081, 0xd3fe71, 0xffbaf8, 0xa0ffc9, 0xbbe0ff, 0xedc3ff, 0xbbff81,
+    // luma 7
+    0x000000, 0xffffff, 0xffffff, 0xfdffff, 0xffffff, 0xfffffd, 0xffffff, 0xffffc9,
+    0xfffffd, 0xffffdb, 0xffffc9, 0xffffff, 0xfdffff, 0xffffff, 0xffffff, 0xffffdb,
+};
+
+// ---------------------------------------------------------------------------
 // CGA 16-color master palette (IRGB, fixed at hardware). Real IBM 5153
 // monitor emulation at maximum contrast, sourced from int10h's 2022
 // measurement (https://int10h.org/blog/2022/06/ibm-5153-color-true-cga-palette/).

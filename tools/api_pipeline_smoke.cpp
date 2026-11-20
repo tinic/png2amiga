@@ -16,13 +16,30 @@
 //   --error-clamp <f>
 //   --lock-color0 / --no-lock-color0
 //   --interlace
-//   --copper-changes <K>
+//   --width <W> / --height <H>  output size (0 = mode default)
+//   --slice-changes <K>
+//   --raw-out <path>       also write EncodeState::raw_frame
+//   --pal-out <path>       also write the CPC companion .pal bytes
 //   <input.png> <output.png>
 //
 // Anything not in this list is left at api::Options defaults — that's the
 // point: this is the bare api::run_pipeline path, no CLI tuning.
 #include "api.hpp"
+#include "check_ordered_refine.hpp"
+#include "check_palette_pairs.hpp"
+#include "check_ehb_pairs.hpp"
+#include "check_to8_palette.hpp"
+#include "check_thomson_k7.hpp"
+#include "check_msx.hpp"
+#include "check_retro.hpp"
+#include "check_cga160.hpp"
+#include "check_tandy.hpp"
+#include "ham.hpp"
 #include "png_io.hpp"
+#include <nlohmann/json.hpp>
+#include <cmath>
+
+#include <array>
 
 #include <cstring>
 #include <fstream>
@@ -64,12 +81,76 @@ bool parse_hex(std::string_view s, api::ReserveSpec& out) {
     return true;
 }
 
+// Two adversarial rows: duplicate SET paths must not crowd out a useful
+// held color, and distinct AGA low nibbles must never be merged.
+int check_ham_beam() {
+    auto linear = [](ham::SRGBColor c) {
+        return color_space::srgb_u8_to_linear(c.r, c.g, c.b);
+    };
+    for (bool low_nibbles : {false, true}) {
+        std::vector<ham::SRGBColor> colors(16, {0, 0, 0});
+        if (low_nibbles) {
+            for (auto& c : colors) c.g = 1;
+            colors[1].g = 2;
+        }
+        std::vector<Color3f> palette;
+        for (auto c : colors) palette.push_back(linear(c));
+        std::vector<Color3f> row;
+        if (low_nibbles) {
+            row = {linear({0, 1, 0}),
+                   linear({0, 2, 255}),
+                   linear({0, 2, 255})};
+        } else {
+            row = {linear({0, 8, 0}),
+                   linear({0, 17, 255})};
+        }
+        std::array<ham::HamPrecomp, 1> pre{ham::HamPrecomp(palette, 4)};
+        std::array<std::span<const ham::SRGBColor>, 1> palettes{colors};
+        std::vector<std::uint16_t> strips(row.size(), 0);
+        auto result = ham::encode_scanline_dp_per_strip(
+            row, colors[0], pre, palettes, strips, 16, ham::HamMetric::srgb_mse);
+        // Preparing G=17 at pixel zero costs 9^2, then B=255 is exact.
+        // With 24-bit anchors, preparing G=2 costs 1^2, then stays exact.
+        const float upper_bound = (low_nibbles ? 1.0f : 81.0f) / 65536.0f;
+        if (result.values.size() != row.size() || result.error > upper_bound + 1e-7f) {
+            std::println(stderr, "HAM beam lost a useful held color (low_nibbles={}, error={})",
+                         low_nibbles, result.error);
+            return 1;
+        }
+    }
+    std::println("PASS: HAM6 beam preserves distinct held colors, including AGA low nibbles");
+    return 0;
+}
+
 }  // namespace
 
 int main(int argc, char** argv) {
+    if (argc == 2 && std::strcmp(argv[1], "--check-tandy") == 0) return check_tandy();
+    if (argc == 2 && std::strcmp(argv[1], "--check-cga160") == 0)
+        return check_cga160();
+    if (argc == 3 && std::strcmp(argv[1], "--check-retro") == 0)
+        return check_retro(argv[2]);
+    if (argc == 3 && std::strcmp(argv[1], "--check-msx") == 0)
+        return check_msx(argv[2]);
+    if (argc == 3 && std::strcmp(argv[1], "--check-thomson-k7") == 0)
+        return check_thomson_k7(argv[2]);
+    if ((argc == 5 || argc == 6) && std::strcmp(argv[1], "--check-to8-palette") == 0)
+        return check_to8_palette(argv[2],argv[3],std::string_view(argv[4]) == "1",
+                                 argc == 6 ? std::stof(argv[5]) : -1e30f);
+    if (argc == 3 && std::strcmp(argv[1], "--check-ehb-pairs") == 0)
+        return check_ehb_pairs(argv[2]);
+    if (argc == 3 && std::strcmp(argv[1], "--check-palette-pairs") == 0)
+        return check_palette_pairs(argv[2]);
+
+    if (argc == 2 && std::strcmp(argv[1], "--check-ham-beam") == 0)
+        return check_ham_beam();
+
+    if (argc == 2 && std::strcmp(argv[1], "--check-ordered-refine") == 0)
+        return check_ordered_refine();
+
     api::Options opts;
     opts.mode = "lores";
-    std::string in_path, out_path;
+    std::string in_path, out_path, raw_out, pal_out, meta_out;
     bool apply_tuning = false;
     bool dither_strength_set = false;
     bool error_clamp_set = false;
@@ -87,6 +168,10 @@ int main(int argc, char** argv) {
             return argv[++i];
         };
         if (a == "--mode") opts.mode = std::string(next(a));
+        else if (a == "--raw-out") raw_out = std::string(next(a));
+        else if (a == "--meta-out")
+            meta_out = std::string(next(a));
+        else if (a == "--pal-out") pal_out = std::string(next(a));
         else if (a == "--depth") {
             opts.depth = std::atoi(std::string(next(a)).c_str());
             depth_set = true;
@@ -95,11 +180,23 @@ int main(int argc, char** argv) {
         else if (a == "--strips") opts.scap = true;
         else if (a == "--dpf" || a == "--dual-playfield") opts.dual_playfield = true;
         else if (a == "--best") opts.best = true;
+        else if (a == "--cell-refine")
+            opts.cell_refine = true;
+        else if (a == "--tile-budget")
+            opts.tile_budget = std::stoul(std::string(next(a)));
+        else if (a == "--tile-reserve")
+            opts.tile_reserve = std::stoul(std::string(next(a)));
+        else if (a == "--c64-petscii-graphics")
+            opts.c64_petscii_graphics_only = true;
+        else if (a == "--cga-text-metric")
+            opts.cga_text_metric = std::string(next(a));
         else if (a == "--interlace") opts.interlace = true;
+        else if (a == "--width") opts.width = std::atoi(std::string(next(a)).c_str());
+        else if (a == "--height") opts.height = std::atoi(std::string(next(a)).c_str());
         else if (a == "--chipset") opts.chipset = std::string(next(a));
         else if (a == "--lock-color0") opts.lock_color0 = true;
         else if (a == "--no-lock-color0") opts.lock_color0 = false;
-        else if (a == "--copper-changes") opts.copper_changes = std::atoi(std::string(next(a)).c_str());
+        else if (a == "--slice-changes") opts.copper_changes = std::atoi(std::string(next(a)).c_str());
         else if (a == "--dither") opts.dither = std::string(next(a));
         else if (a == "--dither-strength") {
             opts.dither_strength = std::stof(std::string(next(a)));
@@ -271,6 +368,35 @@ int main(int argc, char** argv) {
     std::ofstream out(out_path, std::ios::binary);
     out.write(reinterpret_cast<const char*>(png->data()),
               static_cast<std::streamsize>(png->size()));
+    if (!raw_out.empty()) {
+        std::ofstream rf(raw_out, std::ios::binary);
+        rf.write(reinterpret_cast<const char*>(state.raw_frame.data()),
+                 static_cast<std::streamsize>(state.raw_frame.size()));
+    }
+    if (!pal_out.empty() && amiga::is_cpc(state.mode)) {
+        auto pal = api::cpc_pal_bytes(state.mode, state.palette);
+        std::ofstream pf(pal_out, std::ios::binary);
+        pf.write(reinterpret_cast<const char*>(pal.data()),
+                 static_cast<std::streamsize>(pal.size()));
+    }
+    if (!meta_out.empty()) {
+        std::vector<std::array<int, 3>> colors;
+        for (auto c : state.palette) {
+            auto rgb = color_space::linear_to_srgb(c).clamped();
+            colors.push_back({static_cast<int>(std::lround(rgb.r * 255)),
+                              static_cast<int>(std::lround(rgb.g * 255)),
+                              static_cast<int>(std::lround(rgb.b * 255))});
+        }
+        nlohmann::json meta = {{"palette", colors},
+                               {"bg", state.c64_bg_color},
+                               {"mc1", state.c64_mc1},
+                               {"mc2", state.c64_mc2},
+                               {"cols", state.c64_cols},
+                               {"rows", state.c64_rows},
+                               {"glyphs", state.c64_unique_glyphs}};
+        std::ofstream mf(meta_out);
+        mf << meta.dump();
+    }
     // Debug aid: dump raw indices alongside the PNG so callers can A/B
     // against the CLI's --output-indexed output without re-running.
 #ifdef _MSC_VER

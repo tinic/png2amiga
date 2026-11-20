@@ -20,14 +20,32 @@ const BUDGETS = [
   // glue. Without pthreads we sit at ~24 KB; with pthreads ~50 KB.
   // Headroom for future Emscripten updates.
   { match: /^png2amiga-.*\.js$/,    max:  64 * 1024, label: 'wasm glue'  },
-  // 3.05 MB up from 2.45 MB — ASTC bilinear-decim encoder now dispatches
-  // 4 (grid, weight-quant) candidates per block on 6x6/8x*/10x*/12x*
-  // and 1:1+2-decim on 5x5/6x5. Each new (TexW, TexH, GridW, GridH, WL)
-  // tuple instantiates a fresh template, and the LSQ/coord-descent/
-  // refit kernels balloon under -O3. Mean ΔS2 vs astcenc -medium
-  // closes by ~0.4 across the decim footprints (5x5 +1.38, 10x10
-  // +0.80) — the bundle cost buys real quality.
-  { match: /^png2amiga-.*\.wasm$/,  max:   3.05 * 1024 * 1024, label: 'wasm binary' },
+  // 2.45 MB up from 2.40 MB — cga-composite mode replaced its fixed
+  // 16-color palette dither with a port of Andrew "reenigne" Jenner's
+  // NTSC chroma-multiplexer (the same decoder MartyPC / DOSBox / 86Box
+  // use). The 1024-entry signal table + IQ rotation + per-row aabb
+  // cell-pattern search adds ~5 KB to the WASM binary in exchange for
+  // an artifact-colour gamut the user actually sees on hardware.
+  // 2.55 MB up from 2.45 MB — the Thomson (TO7/70 + TO8) and Commodore TED
+  // encoders plus the 128-entry TED palette + Thomson gamma/colour tables
+  // add ~50 KB of binary in exchange for seven new hardware target modes.
+  // 2.65 MB up from 2.55 MB — the Master System / Game Gear tile encoder
+  // (clustering, flip dedup, merge + Lloyd refit) and the Amstrad CPC /
+  // CPC Plus encoders add ~80 KB for eight new hardware target modes.
+  // 2.75 MB up from 2.65 MB — strip lifetime color refinement and the
+  // Emscripten 6 toolchain bring the SIMD release build to 2.67 MB.
+  // 2.85 MB up from 2.75 MB — constrained cell refinement and S2-guarded
+  // Amiga / TO8 palette fitting bring the SIMD release build to 2.78 MB.
+  // 3.00 MB up from 2.85 MB — joint palette refit across every
+  // chosen-palette mode and the dither-checked sliced planner bring the
+  // SIMD release build to 2.94 MB.
+  // 3.25 MB up from 3.00 MB — the resumable per-row diffuser and batched
+  // parallel sliced-planner trials bring the SIMD release build to 3.05 MB.
+  // 3.50 MB up from 3.25 MB — the HAM-aware HAM6 strips planner with
+  // resumable DP scoring brings the SIMD release build to 3.27 MB.
+  // 4.10 MB up from 3.50 MB — the etc2-encoder branch adds the BC1/BC7/
+  // ETC2/ASTC texture encoders (~0.6 MB of templated block kernels).
+  { match: /^png2amiga-.*\.wasm$/,  max:   4.1 * 1024 * 1024, label: 'wasm binary' },
   { match: /^wasm\.worker-.*\.js$/, max:  20 * 1024, label: 'worker'     },
   { match: /^crt-.*\.js$/,          max:  30 * 1024, label: 'crt module' },
   { match: /^index-.*\.css$/,       max: 500 * 1024, label: 'css'        },

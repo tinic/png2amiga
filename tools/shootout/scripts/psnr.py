@@ -83,9 +83,11 @@ LABELS = {
     'p2a-ham6-noncap-best':  'png2amiga HAM6 + best (FS)',
     'p2a-ham6-cap':          'png2amiga HAM6 + SLICED (FS)',
     'p2a-ham6-best':         'png2amiga HAM6 + SLICED + best (FS)',
+    'p2a-ham6-strips':       'png2amiga HAM6 + SLICED + STRIPS (FS)',
     'p2a-ehb-plain':         'png2amiga EHB (FS)',
     'p2a-ehb-plain-best':    'png2amiga EHB + best (FS)',
     'p2a-ehb-best':          'png2amiga EHB + STRIPS + best (FS)',
+    'p2a-ehb-strips':        'png2amiga EHB + STRIPS (FS)',
     # Lores 32-colour head-to-head: png2amiga lores-d5 vs ham_convert
     # ocs32 vs libimagequant (pngquant). Same colour count, same FS
     # dither — isolates quantizer + dither without HAM-style ops.

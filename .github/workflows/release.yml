@@ -11,8 +11,18 @@ permissions:
   contents: read
 
 jobs:
+  verify-web-assets:
+    name: Verify committed web assets
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          submodules: true
+      - run: python3 tools/web-assets-manifest.py check
+
   build-linux:
     name: Build Linux (x86_64)
+    needs: verify-web-assets
     runs-on: ubuntu-24.04
     # Run inside the official gcc:15 Docker image (Debian trixie base).
     # Sidesteps Ubuntu's launchpad PPA flakes that the
@@ -20,7 +30,7 @@ jobs:
     # image, no third-party APT source needed.
     container: gcc:15
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
         with:
           submodules: true
           fetch-depth: 0  # need full history for git rev-list --count HEAD
@@ -48,7 +58,7 @@ jobs:
         run: ctest --test-dir build --output-on-failure
 
       - name: Upload binary
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v5
         with:
           name: linux-x86_64
           path: build/png2amiga
@@ -56,9 +66,10 @@ jobs:
 
   build-macos:
     name: Build macOS (arm64)
+    needs: verify-web-assets
     runs-on: macos-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
         with:
           submodules: true
           fetch-depth: 0  # need full history for git rev-list --count HEAD
@@ -89,7 +100,7 @@ jobs:
         run: ctest --test-dir build --output-on-failure
 
       - name: Upload binary
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v5
         with:
           name: macos-arm64
           path: build/png2amiga
@@ -97,9 +108,10 @@ jobs:
 
   build-windows:
     name: Build Windows (x86_64)
+    needs: verify-web-assets
     runs-on: windows-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
         with:
           submodules: true
           fetch-depth: 0  # need full history for git rev-list --count HEAD
@@ -109,11 +121,13 @@ jobs:
       # corruption) reproducibly, while the same source + gcc 15.2.0
       # UCRT64 toolchain ran clean on a self-hosted Windows builder.
       # Switching to MSVC sidesteps the unreproducible GH-CI failure.
-      # windows-latest ships Visual Studio 2022, so CMake's
-      # `Visual Studio 17 2022` generator finds cl/MSBuild directly
-      # without an extra setup step.
+      # Don't pin the generator: the windows-latest image moves between
+      # VS versions (2022 -> 2026 as of the win25-vs2026 image), so a
+      # hard-coded `Visual Studio 17 2022` breaks on the bump. Let CMake
+      # auto-detect the newest installed VS generator; `-A x64` still
+      # selects the 64-bit platform for whichever VS it picks.
       - name: Setup Python (for Pillow in ctests)
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v6
         with:
           python-version: '3.x'
       - run: pip install Pillow numpy
@@ -123,7 +137,7 @@ jobs:
         run: cmake --version
 
       - name: Configure
-        run: cmake -B build -G "Visual Studio 17 2022" -A x64
+        run: cmake -B build -A x64
 
       - name: Build
         run: cmake --build build --config Release --parallel
@@ -132,10 +146,32 @@ jobs:
         run: ctest --test-dir build --build-config Release --output-on-failure
 
       - name: Upload binary
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v5
         with:
           name: windows-x86_64
           path: build/Release/png2amiga.exe
+          if-no-files-found: error
+
+      # Second binary at the plain x86-64 baseline (no AVX2/FMA/SSE4.1) for
+      # pre-Haswell Intel / pre-Zen AMD, where the default build dies with an
+      # illegal instruction before printing anything. Same sources, scalar
+      # kernels — a bit slower, and its output differs from the AVX2 build in
+      # the last fp bits (~55-70 dB PSNR apart, i.e. a handful of pixels
+      # landing on a different palette entry).
+      - name: Configure (baseline SIMD)
+        run: cmake -B build-compat -A x64 -DPNG2AMIGA_BASELINE_SIMD=ON
+
+      - name: Build (baseline SIMD)
+        run: cmake --build build-compat --config Release --parallel
+
+      - name: Test (baseline SIMD)
+        run: ctest --test-dir build-compat --build-config Release --output-on-failure
+
+      - name: Upload compat binary
+        uses: actions/upload-artifact@v5
+        with:
+          name: windows-x86_64-compat
+          path: build-compat/Release/png2amiga.exe
           if-no-files-found: error
 
   release:
@@ -146,7 +182,7 @@ jobs:
       contents: write
     steps:
       - name: Download all build artifacts
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v5
         with:
           path: artifacts
 
@@ -156,13 +192,15 @@ jobs:
           cp artifacts/linux-x86_64/png2amiga       release/png2amiga-linux-x86_64
           cp artifacts/macos-arm64/png2amiga        release/png2amiga-macos-arm64
           cp artifacts/windows-x86_64/png2amiga.exe release/png2amiga-windows-x86_64.exe
+          cp artifacts/windows-x86_64-compat/png2amiga.exe \
+             release/png2amiga-windows-x86_64-compat.exe
           chmod +x release/png2amiga-linux-x86_64 release/png2amiga-macos-arm64
           cd release
           zip "../png2amiga-${GITHUB_REF_NAME}.zip" *
           ls -la "../png2amiga-${GITHUB_REF_NAME}.zip"
 
       - name: Create GitHub Release
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@v3
         with:
           files: png2amiga-${{ github.ref_name }}.zip
           generate_release_notes: true

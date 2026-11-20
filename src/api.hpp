@@ -9,6 +9,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <functional>
+#include <span>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -122,6 +123,10 @@ struct Options {
     std::string mode = "lores";  // lores, hires, ham6, ham8, ehb
     std::string chipset;         // "ocs", "aga", or "" for auto
     int depth = 5;               // bitplane depth (1-8, mode-dependent)
+    // Lores/hires: the fewest planes that keep the image 1:1 at chipset
+    // precision. With `copper` (sliced) the depth may change down the frame:
+    // the encoder picks depth zones (copper::DepthZone).
+    bool depth_auto = false;
     bool interlace = false;      // set LACE bit in CAMG
     float gamma = 1.0f;
     float brightness = 0.0f;
@@ -352,6 +357,10 @@ struct Options {
     // "wide77". Only consumed by the blur metric.
     std::string cga_text_kernel = "auto";
 
+    // Optional cell refinement: Thomson attribute, C64, TED, CGA text (blur).
+    // Trades encoding time for quality; keeps the original if S2 decreases.
+    bool cell_refine = false;
+
     // cga-composite: choose between pre-1983 IBM 5150 chroma-burst
     // phase ("old", default) and the 1983+ revised card ("new"). All
     // other analog-stage knobs (hue/sat/contrast/luma) stay at
@@ -453,6 +462,16 @@ struct ConvertResult {
     std::vector<std::uint8_t> scanlinePaletteBytes;
     int scanlinePaletteSize{};
 
+    // Amiga modes: per scanline, the number of pixels that differ from the
+    // source at the chipset's colour precision (0 = the row is 1:1). Empty
+    // for other platforms.
+    std::vector<std::uint32_t> rowMismatch;
+
+    // Depth zones (sliced with depth_auto): zone i starts at zoneRows[i] and
+    // shows zoneDepths[i] planes. Empty without zones.
+    std::vector<int> zoneRows;
+    std::vector<int> zoneDepths;
+
     // Per-pixel palette index map for non-HAM, non-sliced/strips modes.
     // Layout: width × height bytes, idx = pixel's slot in paletteBytes.
     // Empty when the encoder doesn't emit a single 1:1 index grid
@@ -540,6 +559,34 @@ ConvertResult convert_raw(const std::uint8_t* input_data,
 ConvertResult convert_ktx2(const std::uint8_t* input_data,
                            std::size_t input_size,
                            const Options& options);
+// MSX BASIC BLOAD screen file (.sc2/.sc5/.sc6/.sc7/.sc8).
+ConvertResult convert_msx(const std::uint8_t* input_data,
+                          std::size_t input_size, const Options& options);
+
+// TO7/70 K7 tape containing a binary picture viewer (LOADM"",,R).
+ConvertResult convert_k7(const std::uint8_t* input_data,
+                         std::size_t input_size, const Options& options);
+
+// Thomson TO8 companion .pal bytes for a programmable palette. Each color
+// is encoded as 2 gate-array bytes (low byte = (g4<<4)|b4, high byte = r4),
+// where r4/g4/b4 are the 4-bit intens[] channel indices. Input is the
+// linear-RGB palette; channels are snapped to the nearest intens[] level.
+std::vector<std::uint8_t> thomson_pal_bytes(std::span<const Color3f> palette);
+
+// Amstrad CPC companion .pal bytes: classic = one Gate Array color byte per
+// ink (0x40 | hardware number); Plus = 2 ASIC palette-RAM bytes per ink
+// (R<<4|B, G).
+std::vector<std::uint8_t> cpc_pal_bytes(amiga::Mode mode, std::span<const Color3f> inks);
+
+// Amstrad CPC .scr: 128-byte AMSDOS header (binary, load &C000) followed
+// by the 16384-byte screen. `name` is the 8.3 file name for the header.
+std::vector<std::uint8_t> cpc_scr_bytes(std::span<const std::uint8_t> screen,
+                                        std::string_view name);
+
+// cpc-* only: convert and return the .scr bytes (AMSDOS header + screen).
+ConvertResult convert_scr(const std::uint8_t* input_data,
+                          std::size_t input_size,
+                          const Options& options);
 
 // c64 only: convert and return a runnable C64 .prg with embedded
 // 6502 displayer (Koala for c64-multicolor, Art-Studio for c64-hires,
@@ -638,6 +685,7 @@ struct EncodeState {
     float quant_error{};
     float psnr{};
     float ssimulacra2_score{};
+    std::vector<std::uint32_t> row_mismatch;  // see PipelineResult::row_mismatch
 
     // Raw byte stream for chunky modes (VGA 13h, SNES Mode 7). Empty for
     // bitplane modes (use `planes` instead). For SNES 256 it's the 8bpp

@@ -1,6 +1,6 @@
 // Type-side declarations.
 
-export type Chipset = 'ocs' | 'aga' | 'stf' | 'ste' | 'vga' | 'ega' | 'cga' | 'snes' | 'genesis' | 'c64' | 'etc2'
+export type Chipset = 'ocs' | 'aga' | 'stf' | 'ste' | 'vga' | 'ega' | 'cga' | 'tandy' | 'snes' | 'genesis' | 'c64' | 'gba' | 'zx' | 'msx1' | 'msx2' | 'thomson' | 'ted' | 'sms' | 'cpc' | 'cpcplus' | 'rp2350' | 'etc2'
 
 export interface ModeOption {
   value: string
@@ -75,6 +75,7 @@ export interface Options {
   width: number
   height: number
   best: boolean
+  cellRefine: boolean
   alphaThreshold: number
   alphaDither: string
   alphaDitherStrength: number
@@ -92,6 +93,7 @@ export interface Options {
   reserves: { index: number; r: number; g: number; b: number }[]
   dualPlayfield: boolean
   scap: boolean
+  depthAuto: boolean
   cgaTextMetric: string
   cgaTextKernel: string
   cgaCompositeNewCga: boolean
@@ -167,10 +169,16 @@ const ALL_MODES: ModeOption[] = [
   { value: 'ega-320',          label: 'EGA 320x200 (16 colors)',       chipset: 'ega' },
   { value: 'ega-640',          label: 'EGA 640x200 (16 colors)',       chipset: 'ega' },
   { value: 'ega-hi',           label: 'EGA 640x350 (16 colors)',       chipset: 'ega' },
+  // Native Tandy 1000 graphics; DOS viewers require Tandy hardware.
+  { value: 'tandy-320', label: 'Tandy 320x200 (16 colors)', chipset: 'tandy' },
+  { value: 'tandy-160', label: 'Tandy 160x200 (16 colors)', chipset: 'tandy' },
+  { value: 'tandy-640', label: 'Tandy 640x200 (4 colors)', chipset: 'tandy' },
   // IBM PC CGA.
   { value: 'cga-320',          label: 'CGA 320x200',           chipset: 'cga' },
   { value: 'cga-640',          label: 'CGA 640x200 mono',      chipset: 'cga' },
   { value: 'cga-composite-hires', label: 'CGA Comp 640',       chipset: 'cga' },
+  { value: 'cga-160', label: 'CGA 160x100 (16 colors)', chipset: 'cga' },
+  { value: 'cga-160x200', label: 'CGA 160x200 (16 colors)', chipset: 'cga' },
   { value: 'cga-text80x200',   label: 'CGA Text 80x200', chipset: 'cga' },
   { value: 'cga-text80x100',   label: 'CGA Text 80x100', chipset: 'cga' },
   { value: 'cga-text80x50',    label: 'CGA Text 80x50',  chipset: 'cga' },
@@ -193,11 +201,48 @@ const ALL_MODES: ModeOption[] = [
   // ETC2 RGB8 — block-compressed texture format (4 bpp, 4×4 blocks).
   // Not a retro mode but available via --mode etc2. Output is KTX2.
   { value: 'etc2',           label: 'ETC2 RGB8 (KTX2)', chipset: 'etc2' },
+  // Game Boy Advance bitmap modes — linear framebuffers, no bitplanes.
+  // mode3/mode5 are 16bpp BGR555 direct color; mode4 is 8bpp + a
+  // 256-entry BGR555 palette.
+  { value: 'gba-mode3', label: 'Mode 3 (240×160, direct)',  chipset: 'gba' },
+  { value: 'gba-mode4', label: 'Mode 4 (240×160, palette)', chipset: 'gba' },
+  { value: 'gba-mode5', label: 'Mode 5 (160×128, direct)',  chipset: 'gba' },
+  { value: 'zx-spectrum', label: 'ZX Spectrum (256×192, 2 colors/8×8)', chipset: 'zx' },
+  { value: 'stf-spectrum512', label: 'Spectrum 512 (320×199, raster palette)', chipset: 'stf' },
+  { value: 'ste-spectrum4096', label: 'Spectrum 4096 (320×199, raster palette)', chipset: 'ste' },
+  { value: 'msx1-screen2', label: 'SCREEN 2 (256×192, 2 colors/8×1)', chipset: 'msx1' },
+  { value: 'msx2-screen5', label: 'SCREEN 5 (256×212, 16 colors)', chipset: 'msx2' },
+  { value: 'msx2-screen6', label: 'SCREEN 6 (512×212, 4 colors)', chipset: 'msx2' },
+  { value: 'msx2-screen7', label: 'SCREEN 7 (512×212, 16 colors)', chipset: 'msx2' },
+  { value: 'msx2-screen8', label: 'SCREEN 8 (256×212, 256 colors)', chipset: 'msx2' },
+  // Thomson TO7/70 + TO8 — EF9369 gamma palette, two-page VRAM.
+  { value: 'thomson-to7-320x16', label: 'TO7/70 320×16 (forme-couleur)', chipset: 'thomson' },
+  { value: 'thomson-to8-320x16', label: 'TO8 320×16 (forme-couleur)',    chipset: 'thomson' },
+  { value: 'thomson-to8-160x16', label: 'TO8 160×16 (4bpp bitmap)',      chipset: 'thomson' },
+  { value: 'thomson-to8-320x4',  label: 'TO8 320×4 (2 planes)',          chipset: 'thomson' },
+  { value: 'thomson-to8-640x2',  label: 'TO8 640×2 (1bpp)',              chipset: 'thomson' },
+  // Commodore TED (Plus/4, C16) — fixed 121-color palette.
+  { value: 'ted-multicolor', label: 'Multicolor (160x200, 4/cell)', chipset: 'ted' },
+  { value: 'ted-hires', label: 'Hires (320x200, 2/cell)',      chipset: 'ted' },
+  // Sega Master System / Game Gear — VDP mode 4 tiles, 2 × 16 colors.
+  { value: 'sms-mode4', label: 'Master System (256×192)', chipset: 'sms' },
+  { value: 'gg-mode4',  label: 'Game Gear (160×144)',     chipset: 'sms' },
+  // Amstrad CPC — 27-color firmware palette / CPC Plus 4096 colors.
+  { value: 'cpc-mode0', label: 'Mode 0 (160×200, 16 inks)', chipset: 'cpc' },
+  { value: 'cpc-mode1', label: 'Mode 1 (320×200, 4 inks)',  chipset: 'cpc' },
+  { value: 'cpc-mode2', label: 'Mode 2 (640×200, 2 inks)',  chipset: 'cpc' },
+  { value: 'cpc-plus-mode0', label: 'Mode 0 (160×200, 16 inks)', chipset: 'cpcplus' },
+  { value: 'cpc-plus-mode1', label: 'Mode 1 (320×200, 4 inks)',  chipset: 'cpcplus' },
+  { value: 'cpc-plus-mode2', label: 'Mode 2 (640×200, 2 inks)',  chipset: 'cpcplus' },
+  // nibnib (github.com/raphlinus/nibnib): RGB565 at 4 bits per pixel as
+  // pixel-pair deltas, for an RP2350. Free size like lores (default 320
+  // wide, even width); no palette of colours, no bitplanes.
+  { value: 'nibnib', label: 'nibnib (RGB565, 4 bits/pixel)', chipset: 'rp2350' },
 ]
 
 // Chipsets whose mode list is exactly `m.chipset === chipset`.
 const FIXED_CHIPSETS = new Set<Chipset>(
-  ['stf', 'ste', 'vga', 'ega', 'cga', 'snes', 'genesis', 'c64', 'etc2'])
+  ['stf', 'ste', 'vga', 'ega', 'cga', 'tandy', 'snes', 'genesis', 'c64', 'gba', 'zx', 'msx1', 'msx2', 'thomson', 'ted', 'sms', 'cpc', 'cpcplus', 'rp2350', 'etc2'])
 
 // Filter modes available for a given chipset
 export function modesForChipset(chipset: Chipset): ModeOption[] {
@@ -231,9 +276,20 @@ export const CHIPSETS: ChipsetOption[] = [
   { value: 'vga',     label: 'IBM PC VGA (18-bit DAC)' },
   { value: 'ega',     label: 'IBM PC EGA (6-bit IrgbIRGB)' },
   { value: 'cga',     label: 'IBM PC CGA (fixed palette)' },
+  { value: 'tandy', label: 'Tandy 1000 (RGBI)' },
   { value: 'snes',    label: 'SNES Mode 7' },
+  { value: 'sms',     label: 'Sega Master System / Game Gear' },
   { value: 'genesis', label: 'Sega Genesis / Mega Drive' },
   { value: 'etc2',    label: 'ETC2 (KTX2 texture)' },
+  { value: 'gba',     label: 'Game Boy Advance' },
+  { value: 'zx', label: 'ZX Spectrum' },
+  { value: 'msx1', label: 'MSX1 (TMS9918)' },
+  { value: 'msx2', label: 'MSX2 (V9938)' },
+  { value: 'thomson', label: 'Thomson TO7/70 + TO8' },
+  { value: 'ted',     label: 'Commodore Plus/4 (TED)' },
+  { value: 'cpc',     label: 'Amstrad CPC (27 colors)' },
+  { value: 'cpcplus', label: 'Amstrad CPC Plus (4096 colors)' },
+  { value: 'rp2350',  label: 'RP2350: nibnib (RGB565)' },
 ]
 
 // VIC-II palette options — only meaningful when chipset is 'c64'.
@@ -335,6 +391,9 @@ export const DITHER_METHODS: DitherGroup[] = [
     { value: 'opt-line-checker',label: 'Optimal\nLine-Chk' },
     { value: 'opt-vline',       label: 'Optimal\nVLine' },
     { value: 'opt-vline-checker',label: 'Optimal\nVLine-Chk' },
+    { value: 'opt-rowdot',      label: 'Optimal\nRow-Dot' },
+    { value: 'opt-rowdot-aligned',label: 'Optimal\nRow-Dot Al.' },
+    { value: 'opt-rowdot-checker',label: 'Optimal\nRow-Dot Chk' },
     { value: 'tri-tone',        label: 'Tri-tone' },
     { value: 'knoll',           label: 'Knoll' },
     // Naming aligns with Yliluoma's article: Algorithm 1 is the exhaustive
@@ -347,6 +406,7 @@ export const DITHER_METHODS: DitherGroup[] = [
     { value: 'structure-fs',    label: 'Structure\nFS' },
     { value: 'contrast-fs',     label: 'Contrast\nFS' },
     { value: 'zhoufang',        label: 'Zhou–\nFang' },
+    { value: 'smooth',          label: 'Smooth' },
   ]},
   { group: 'Bayer', items: [
     { value: 'bayer2x2', label: 'Bayer 2×2' },
@@ -375,6 +435,9 @@ export const DITHER_METHODS: DitherGroup[] = [
     { value: 'line4',         label: 'Lines 4' },
     { value: 'line8',         label: 'Lines 8' },
     { value: 'line-checker',  label: 'Line\nChecker' },
+    { value: 'rowdot',        label: 'Row-Dot' },
+    { value: 'rowdot-aligned',label: 'Row-Dot\nAligned' },
+    { value: 'rowdot-checker',label: 'Row-Dot\nChecker' },
     { value: 'vline2',        label: 'VLines 2' },
     { value: 'vline4',        label: 'VLines 4' },
     { value: 'vline8',        label: 'VLines 8' },
@@ -426,17 +489,17 @@ export const ALPHA_DITHER_METHODS: NamedItem[] = [
 ]
 
 export const SLIDERS: Slider[] = [
-  { key: 'gamma',          label: 'Gamma',       min: 0.1, max: 5, step: 0.05, default: 1,
+  { key: 'gamma',          label: 'Gamma',       min: 0.1, max: 5, step: 0.01, default: 1,
     tip: 'Power curve applied before color matching. >1 darkens midtones, <1 brightens them.' },
-  { key: 'brightness',     label: 'Brightness',  min: -1,  max: 1, step: 0.05, default: 0,
+  { key: 'brightness',     label: 'Brightness',  min: -1,  max: 1, step: 0.01, default: 0,
     tip: 'Additive lightness shift in perceptual OKLab space.' },
-  { key: 'contrast',       label: 'Contrast',    min: 0,   max: 3, step: 0.05, default: 1,
+  { key: 'contrast',       label: 'Contrast',    min: 0,   max: 3, step: 0.01, default: 1,
     tip: 'Scale around perceptual mid-gray. 1.0 = no change, >1 increases contrast.' },
-  { key: 'saturation',     label: 'Saturation',  min: 0,   max: 3, step: 0.05, default: 1,
+  { key: 'saturation',     label: 'Saturation',  min: 0,   max: 3, step: 0.01, default: 1,
     tip: 'Chroma scaling in OKLab space. 0 = grayscale, 1 = original, >1 = boosted color.' },
   { key: 'hueShift',       label: 'Hue',         min: -180, max: 180, step: 1,  default: 0,
     tip: 'Rotate all colors in OKLab. Shifts hues to better match the Amiga palette.' },
-  { key: 'sharpen',        label: 'Sharpen',     min: -1,  max: 2, step: 0.05, default: 0,
+  { key: 'sharpen',        label: 'Sharpen',     min: -1,  max: 2, step: 0.01, default: 0,
     tip: 'Negative = blur (reduces noise), positive = sharpen (enhances edges).' },
   { key: 'blackPoint',     label: 'Black Pt',    min: 0,   max: 0.5, step: 0.01, default: 0,
     tip: 'Clip the darkest fraction of the image. Deepens blacks.' },
@@ -559,6 +622,15 @@ const IBM_EXAMPLES: Example[] = [
 // photos). Per-image tuning mirrors png2c64's EXAMPLES list.
 // ostromoukhov (used by png2c64's `alien`) was removed from png2amiga
 // in v1.58, so we substitute floyd-steinberg.
+const TANDY_EXAMPLES: Example[] = IBM_EXAMPLES.map(ex => ({
+  ...ex, opts: { chipset: 'tandy' as const, mode: 'tandy-320' },
+}))
+
+// nibnib: the Amiga photo set, retargeted (no curated images yet).
+const NIBNIB_EXAMPLES: Example[] = AMIGA_EXAMPLES.map(ex => ({
+  ...ex, opts: { chipset: 'rp2350' as const, mode: 'nibnib' },
+}))
+
 const C64_EXAMPLES: Example[] = [
   { name: 'alien',    file: 'c64/alien.png',     opts: { chipset: 'c64', mode: 'c64-multicolor', gamma: 1, contrast: 1.5, dither: 'floyd-steinberg', ditherStrength: 1, matchRange: false } },
   { name: 'dog',      file: 'c64/dog.png',       opts: { chipset: 'c64', mode: 'c64-multicolor', gamma: 1.5, ditherStrength: 1 } },
@@ -582,10 +654,21 @@ const EXAMPLES_BY_CHIPSET: Record<Chipset, Example[]> = {
   vga:     IBM_EXAMPLES,
   ega:     IBM_EXAMPLES,
   cga:     IBM_EXAMPLES,
+  tandy:   TANDY_EXAMPLES,
   c64:     C64_EXAMPLES,
   snes:    AMIGA_EXAMPLES,
   genesis: AMIGA_EXAMPLES,
   etc2:    AMIGA_EXAMPLES,
+  gba:     AMIGA_EXAMPLES,
+  zx: AMIGA_EXAMPLES,
+  msx1: AMIGA_EXAMPLES,
+  msx2: AMIGA_EXAMPLES,
+  thomson: AMIGA_EXAMPLES,
+  ted:     AMIGA_EXAMPLES,
+  sms:     AMIGA_EXAMPLES,
+  cpc:     AMIGA_EXAMPLES,
+  cpcplus: AMIGA_EXAMPLES,
+  rp2350:  NIBNIB_EXAMPLES,
 }
 
 export function examplesForChipset(chipset: Chipset): Example[] {
@@ -633,6 +716,7 @@ export function defaultOptions(): Options {
     // indexed copper modes ignore this flag (their planner is already
     // mature). +0.5..2 dB PSNR for ~4-5× the encode cost. Off by default.
     best: false,
+    cellRefine: false,
     // Alpha
     alphaThreshold: 0,
     alphaDither: 'none',
@@ -662,6 +746,9 @@ export function defaultOptions(): Options {
     // 16-31 AGA), with PF1 (foreground) bitplanes zeroed. Forces depth=3
     // (OCS) or 4 (AGA). CAMG DBLPF flag set.
     dualPlayfield: false,
+    // Depth "Auto": fewest planes that keep the image 1:1; with Sliced the
+    // depth changes per horizontal zone (lores/hires only).
+    depthAuto: false,
     // strips — Super Sliced palette: mid-line palette swaps
     // inside DPF's PF2. OCS lores only (Phase 1). Requires dpf + ocs.
     scap: false,
@@ -707,9 +794,11 @@ export function isAtariMode(mode: string): boolean {
 
 export function isVgaMode(mode: string): boolean { return mode.startsWith('vga-') }
 export function isEgaMode(mode: string): boolean { return mode.startsWith('ega-') }
+export function isCgaPixels(mode: string): boolean { return mode === 'cga-160' || mode === 'cga-160x200' }
 export function isCgaMode(mode: string): boolean { return mode.startsWith('cga-') }
+export function isTandyMode(mode: string): boolean { return mode.startsWith('tandy-') }
 export function isDosMode(mode: string): boolean {
-  return isVgaMode(mode) || isEgaMode(mode) || isCgaMode(mode)
+  return isVgaMode(mode) || isEgaMode(mode) || isCgaMode(mode) || isTandyMode(mode)
 }
 export function isSnesMode(mode: string): boolean {
   return mode.startsWith('snes-')
@@ -727,8 +816,76 @@ export function isGenesisMode(mode: string): boolean {
 export function isEtc2Mode(mode: string): boolean {
   return mode === 'etc2' || mode === 'etc2-rgb' || mode === 'etc2-rgb8'
 }
+export function isGbaMode(mode: string): boolean {
+  return mode.startsWith('gba-')
+}
+// GBA direct-color modes (16bpp BGR555 per pixel, no palette). mode4 is
+// 8bpp paletted, so it's excluded.
+export function isGbaDirectMode(mode: string): boolean {
+  return mode === 'gba-mode3' || mode === 'gba-mode5'
+}
+// nibnib: RGB565 pair deltas. Free size (Resize works as for lores) but
+// no palette of colours: palette-picking dithers, custom palettes,
+// reserves and locks do not apply.
+export function isNibnibMode(mode: string): boolean {
+  return mode === 'nibnib'
+}
 export function isC64Mode(mode: string): boolean {
   return mode.startsWith('c64-')
+}
+// Copper-driven features — sliced palette, strips, dual playfield — exist
+// only on Amiga. Gate them on this rather than on !isFixedBufferMode():
+// that predicate deliberately reports false for tile-freeform modes
+// (c64-charset, Genesis, SNES) so Native PAR survives Resize, which let the
+// Sliced toggle leak into the c64 charset modes.
+export function isAmigaMode(mode: string): boolean {
+  const cs = ALL_MODES.find(m => m.value === mode)?.chipset
+  return cs === 'ocs' || cs === 'aga'
+}
+// Modes where loading an external palette actually reaches the encoder.
+// Verified against the CLI per family, not inferred:
+//   applied  — Amiga (incl. HAM), VGA/EGA/CGA-320, CGA composite, GBA
+//              mode4, Atari ST/STE
+//   ignored  — C64 (VIC-II palette fixed in hardware), CGA text (fixed
+//              16-colour attribute set), SNES Mode 7, Genesis (per-tile
+//              palette lines)
+//   rejected — Thomson / TED / SMS / CPC / GBA direct / nibnib (api.cpp returns unsupported_mode)
+// Offering the picker for the last two groups is worse than useless: it
+// either silently does nothing or fails the convert.
+const NO_CUSTOM_PALETTE = [
+  isCgaPixels, isTandyMode,
+  isAtariSpectrumMode, isC64Mode, isCgaText, isSnesMode, isGenesisMode, isZxMode, isMsxMode, isThomsonMode, isTedMode,
+  isSmsMode, isCpcMode, isGbaDirectMode, isNibnibMode,
+] as const
+export function supportsCustomPalette(mode: string): boolean {
+  return NO_CUSTOM_PALETTE.every(p => !p(mode))
+}
+export function isZxMode(mode: string): boolean { return mode === 'zx-spectrum' }
+export function isAtariSpectrumMode(mode: string): boolean {
+  return mode === 'stf-spectrum512' || mode === 'ste-spectrum4096'
+}
+export function isMsxMode(mode: string): boolean {
+  return mode.startsWith('msx1-') || mode.startsWith('msx2-')
+}
+export function isThomsonMode(mode: string): boolean {
+  return mode.startsWith('thomson-')
+}
+// Thomson forme-couleur attribute modes (2 colors per 8×1 cell). The
+// 320×16 (TO7/70 + TO8) modes; the 160×16 / 320×4 / 640×2 are plain
+// bitmaps with no per-cell constraint.
+export function isThomsonFormeCouleur(mode: string): boolean {
+  return mode === 'thomson-to7-320x16' || mode === 'thomson-to8-320x16'
+}
+export function isTedMode(mode: string): boolean {
+  return mode.startsWith('ted-')
+}
+// Sega Master System / Game Gear VDP mode 4.
+export function isSmsMode(mode: string): boolean {
+  return mode === 'sms-mode4' || mode === 'gg-mode4'
+}
+// Amstrad CPC + CPC Plus.
+export function isCpcMode(mode: string): boolean {
+  return mode.startsWith('cpc-')
 }
 // c64 charset modes accept arbitrary width/height (padded to cell size)
 // and a configurable tile-budget. Distinguished from the bitmap c64
@@ -743,10 +900,26 @@ export function isC64CharsetMode(mode: string): boolean {
 // True for any cga-text super-chunky mode (80×{200, 100, 50, 25}).
 // All four use the same encoder + UI shape; only the cell height (and
 // hence row count / output buffer size) differs.
+const CGA_TEXT_MODES = new Set([
+  'cga-text80x200', 'cga-text80x100',
+  'cga-text80x50', 'cga-text80x25',
+  'cga-text40x200', 'cga-text40x100',
+])
 export function isCgaText(mode: string): boolean {
-  return mode === 'cga-text80x200' || mode === 'cga-text80x100'
-      || mode === 'cga-text80x50'  || mode === 'cga-text80x25'
-      || mode === 'cga-text40x200' || mode === 'cga-text40x100'
+  return CGA_TEXT_MODES.has(mode)
+}
+
+// Match api.cpp's cell_refine validation, including CGA's metric restriction.
+export function supportsCellRefine({ mode, cgaTextMetric }: Pick<Options, 'mode' | 'cgaTextMetric'>): boolean {
+  return ALL_MODES.some(m => m.value === mode) && (
+    isC64Mode(mode) || isTedMode(mode) || isThomsonFormeCouleur(mode) || mode === 'msx1-screen2' ||
+    (isCgaText(mode) && cgaTextMetric === 'blur')
+  )
+}
+
+export function requiresCellRefineDiffusion(options: Pick<Options, 'mode' | 'cgaTextMetric' | 'cellRefine'>): boolean {
+  return options.cellRefine && supportsCellRefine(options) &&
+    options.mode !== 'c64-petscii' && !isCgaText(options.mode)
 }
 // per-platform tile size (8×8 for c64-charset / Genesis / SNES Mode 7).
 // At freeform mode the Native PAR / fixed-buffer behavior is replaced
@@ -771,8 +944,11 @@ export function isFixedBufferMode(mode: string): boolean {
   // fixed-buffer when Resize is enabled; the UI uses isEffectiveFixedBuffer
   // (Vue side) to keep Native PAR available at default size.
   if (isTileFreeformMode(mode)) return false
-  return isDosMode(mode) || isC64Mode(mode) || isAtariMode(mode)
+  return FIXED_BUFFER_FAMILIES.some(p => p(mode))
 }
+const FIXED_BUFFER_FAMILIES = [
+  isDosMode, isC64Mode, isAtariMode, isGbaMode, isZxMode, isMsxMode, isThomsonMode, isTedMode, isSmsMode, isCpcMode,
+] as const
 
 // Hardware Pixel Aspect Ratio (display_pixel_width / display_pixel_height).
 // Mirrors ModeParams::par in src/amiga.hpp. Used to CSS-stretch the preview
@@ -787,6 +963,9 @@ const MODE_PAR: Record<string, number> = {
   'ega-320':    0.833,
   'ega-640':    0.417,
   'ega-hi':     0.73,
+  'tandy-160': 5 / 3, 'tandy-320': 5 / 6, 'tandy-640': 5 / 12,
+  'cga-160':    5 / 6,
+  'cga-160x200': 5 / 3,
   'cga-320':    0.833,
   'cga-640':    0.417,
   'cga-composite-hires': 0.417,
@@ -821,14 +1000,44 @@ const MODE_PAR: Record<string, number> = {
   //   low  320×200 → 4:3 ⇒ PAR ≈ 0.833 (slightly tall, like ega-320)
   //   med  640×200 → 4:3 ⇒ PAR ≈ 0.417 (2.4× tall, like ega-640)
   //   hi   640×400 monochrome monitor ⇒ PAR 1.0 (square)
+  'stf-spectrum512': 0.833, 'ste-spectrum4096': 0.833,
   'stf-low':  0.833,  'ste-low':  0.833,
   'stf-med':  0.417,  'ste-med':  0.417,
   'stf-hi':   1,      'ste-hi':   1,
+  // Game Boy Advance — square pixels on the native LCD.
+  'gba-mode3': 1,
+  'gba-mode4': 1,
+  'gba-mode5': 1,
+  // Thomson 4:3 monitor: 320×200 → 0.833 (like DOS/Atari 320×200); 160×200
+  // → 1.667 (2× hardware doubling); 640×200 → 0.417 (like ega-640).
+  'msx1-screen2': 1.143, 'msx2-screen5': 1.143, 'msx2-screen6': 0.5715,
+  'msx2-screen7': 0.5715, 'msx2-screen8': 1.143,
+  'thomson-to7-320x16': 0.833,
+  'thomson-to8-320x16': 0.833,
+  'thomson-to8-320x4':  0.833,
+  'thomson-to8-160x16': 1.667,
+  'thomson-to8-640x2':  0.417,
+  // Commodore TED — same PAL VIC-II geometry as the C64.
+  'ted-hires': 0.936,
+  'ted-multicolor': 1.872,
+  // Sega 8-bit VDP: 256-wide line at 8:7 (same pixel clock as SNES /
+  // Genesis H32); Game Gear LCD square.
+  'sms-mode4': 1.143,
+  'gg-mode4':  1,
+  // Amstrad CPC: mode 1 ~square, mode 0 wide (2:1), mode 2 tall (1:2).
+  'cpc-mode0': 2,   'cpc-plus-mode0': 2,
+  'cpc-mode1': 1,   'cpc-plus-mode1': 1,
+  'cpc-mode2': 0.5, 'cpc-plus-mode2': 0.5,
 }
 
 export function modePar(mode: string): number { return MODE_PAR[mode] ?? 1 }
 
-const ERROR_DIFFUSION = new Set(['floyd-steinberg', 'sierra-lite', 'atkinson', 'jarvis', 'stucki', 'gilbert', 'riemersma', 'dbs'])
+// Match dither::uses_error_diffusion, which drives the cell refinement path.
+// Gilbert and DBS have no diffusion kernel; the structure-aware FS variants do.
+const ERROR_DIFFUSION = new Set([
+  'floyd-steinberg', 'sierra-lite', 'atkinson', 'jarvis', 'stucki',
+  'riemersma', 'structure-fs', 'contrast-fs', 'zhoufang',
+])
 
 export function isErrorDiffusion(dither: string): boolean {
   return ERROR_DIFFUSION.has(dither)
@@ -847,6 +1056,11 @@ export function isHiresMode(mode: string): boolean {
 // nearest-neighbor scale on-canvas with whole factors. 640-wide buffers
 // already fill most screen widths so don't double them; 320-wide ones do.
 const DOS_PREVIEW_SCALE: Record<string, PreviewScale> = {
+  'tandy-160': { sx: 4, sy: 2 },
+  'tandy-320': { sx: 2, sy: 2 },
+  'tandy-640': { sx: 1, sy: 2 },
+  'cga-160':         { sx: 4, sy: 4 },
+  'cga-160x200':      { sx: 4, sy: 2 },
   'cga-320':         { sx: 2, sy: 2 },
   'ega-320':         { sx: 2, sy: 2 },
   'vga-13h':         { sx: 2, sy: 2 },
@@ -875,6 +1089,28 @@ const DOS_PREVIEW_SCALE: Record<string, PreviewScale> = {
   'c64-charset-multicolor':  { sx: 4, sy: 2 },
   'c64-multicolor':  { sx: 4, sy: 2 },
   'c64-fli':         { sx: 4, sy: 2 },
+  // Thomson — 320-wide buffers 2×2 → 640×400; 160-wide 4×2 (2:1 doubling
+  // baked in); 640-wide 1×2. PAR 1.0 (square pixels).
+  'msx1-screen2': { sx: 2, sy: 2 }, 'msx2-screen5': { sx: 2, sy: 2 },
+  'msx2-screen6': { sx: 1, sy: 2 }, 'msx2-screen7': { sx: 1, sy: 2 },
+  'msx2-screen8': { sx: 2, sy: 2 },
+  'thomson-to7-320x16':  { sx: 2, sy: 2 },
+  'thomson-to8-320x16':  { sx: 2, sy: 2 },
+  'thomson-to8-320x4':   { sx: 2, sy: 2 },
+  'thomson-to8-160x16':  { sx: 4, sy: 2 },
+  'thomson-to8-640x2':   { sx: 1, sy: 2 },
+  // TED — hires 320 (2×2), multicolor 160 (4×2).
+  'ted-hires':         { sx: 2, sy: 2 },
+  'ted-multicolor':         { sx: 4, sy: 2 },
+  'sms-mode4':         { sx: 2, sy: 2 },
+  'gg-mode4':          { sx: 2, sy: 2 },
+  // CPC — all three modes land on a 640×400 backing canvas.
+  'cpc-mode0':      { sx: 4, sy: 2 },
+  'cpc-mode1':      { sx: 2, sy: 2 },
+  'cpc-mode2':      { sx: 1, sy: 2 },
+  'cpc-plus-mode0': { sx: 4, sy: 2 },
+  'cpc-plus-mode1': { sx: 2, sy: 2 },
+  'cpc-plus-mode2': { sx: 1, sy: 2 },
 }
 
 // Generic Amiga-mode preview scale by (hires?, interlace?). 1×1 for
@@ -917,7 +1153,8 @@ export function decomposeMode(uiMode: string): DecomposedMode {
 // EHB always-6, Atari mode-defined, DOS hardware-defined, C64 cell
 // constraints) report 0 to mean "no user-adjustable depth slider".
 const FIXED_DEPTH_PREDICATES = [
-  isHamMode, isEhbMode, isAtariMode, isDosMode, isC64Mode,
+  isHamMode, isEhbMode, isAtariMode, isDosMode, isC64Mode, isGbaMode,
+  isZxMode, isMsxMode, isThomsonMode, isTedMode, isSmsMode, isCpcMode, isNibnibMode,
 ] as const
 export function maxDepth(mode: string, chipset: Chipset): number {
   for (const p of FIXED_DEPTH_PREDICATES) if (p(mode)) return 0
@@ -928,12 +1165,32 @@ export function maxDepth(mode: string, chipset: Chipset): number {
 // Modes whose default bitplane depth is fixed by hardware. Looked up
 // before the family-based fallbacks below so e.g. cga-640 picks 1 not 4.
 const FIXED_DEFAULT_DEPTH: Record<string, number> = {
+  'zx-spectrum': 1, 'stf-spectrum512': 4, 'ste-spectrum4096': 4,
   'stf-low': 4, 'ste-low': 4,
   'stf-med': 2, 'ste-med': 2,
   'stf-hi':  1, 'ste-hi':  1,
+  'tandy-160': 4, 'tandy-320': 4, 'tandy-640': 2,
+  'cga-160': 4, 'cga-160x200': 4,
   'cga-640': 1,
   'cga-320': 2, 'cga-composite-hires': 1,
   'vga-13h': 8,
+  // GBA: mode4 is 8bpp paletted; direct modes are 16bpp (conceptual).
+  'gba-mode4': 8,
+  'gba-mode3': 16, 'gba-mode5': 16,
+  // Thomson: 16/4/2-color buffers (conceptual bit depth).
+  'msx1-screen2': 4, 'msx2-screen5': 4, 'msx2-screen6': 2,
+  'msx2-screen7': 4, 'msx2-screen8': 8,
+  'thomson-to7-320x16': 4, 'thomson-to8-320x16': 4, 'thomson-to8-160x16': 4,
+  'thomson-to8-320x4': 2, 'thomson-to8-640x2': 1,
+  // TED: hires 1bpp (2/cell), multicolor 2bpp (4/cell).
+  'ted-hires': 1, 'ted-multicolor': 2,
+  // SMS / GG: 4bpp tiles, 2 × 16 colors.
+  'sms-mode4': 4, 'gg-mode4': 4,
+  // CPC: 16 / 4 / 2 inks.
+  'cpc-mode0': 4, 'cpc-mode1': 2, 'cpc-mode2': 1,
+  'cpc-plus-mode0': 4, 'cpc-plus-mode1': 2, 'cpc-plus-mode2': 1,
+  // nibnib: RGB565, 16 bits per pixel (conceptual, as GBA direct).
+  'nibnib': 16,
 }
 
 // Family-level fallbacks for defaultDepth. Tried in order after the
@@ -966,7 +1223,26 @@ export function numColors(mode: string, depth: number): string {
     const dataBits = defaultDepth(mode) - 2
     return `${1 << dataBits} base + modify`
   }
-  return String(1 << depth)
+  // GBA direct color: 16bpp BGR555 → 32768-color gamut (not 1<<16).
+  if (isGbaDirectMode(mode)) return '32768'
+  // nibnib: RGB565 → 65536-color gamut.
+  if (isNibnibMode(mode)) return '65536'
+  // TED: fixed 121-color palette; the per-cell color count is the depth.
+  if (isTedMode(mode)) return `${1 << depth}/cell (121 palette)`
+  return FIXED_COLOR_LABELS[mode] ?? String(1 << depth)
+}
+// Modes whose color count is a fixed gamut label rather than 1 << depth.
+const FIXED_COLOR_LABELS: Record<string, string> = {
+  'zx-spectrum': '15 (2/cell, shared BRIGHT)',
+  'stf-spectrum512': '42 + black/line from 512',
+  'ste-spectrum4096': '42 + black/line from 4096',
+  'msx1-screen2': '15 opaque (2/cell)',
+  'msx2-screen5': '16 of 512', 'msx2-screen6': '4 of 512',
+  'msx2-screen7': '16 of 512', 'msx2-screen8': '256',
+  'sms-mode4': '2 × 16 of 64',
+  'gg-mode4':  '2 × 16 of 4096',
+  'cpc-mode0': '16 of 27', 'cpc-mode1': '4 of 27', 'cpc-mode2': '2 of 27',
+  'cpc-plus-mode0': '16 of 4096', 'cpc-plus-mode1': '4 of 4096', 'cpc-plus-mode2': '2 of 4096',
 }
 
 // Bitplane count for display

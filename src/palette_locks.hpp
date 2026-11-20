@@ -131,6 +131,15 @@ AssembledPalette assemble_locked_palette(
 // ---------------------------------------------------------------------------
 void finalize_palette(std::vector<Color3f>& colors, std::size_t num_colors, bool lock_color0);
 
+// Fill the unlocked slots of `colors` from `quantized` in order,
+// skipping any quantizer entry that bit-matches a locked slot (the
+// lock_color0 black that two_pass_quantize's K retry returns, or a
+// lock/reserve colour). Locked slots must already hold their colours.
+// Unfilled tail slots keep their current value.
+void fill_unlocked_slots(std::span<Color3f> colors,
+                         const std::vector<bool>& locked,
+                         std::span<const Color3f> quantized);
+
 // True if the palette contains a bit-exact black entry. Used inside
 // two_pass_quantize() below; exposed because some sites need to peek
 // at intermediate quantizer output between snap and diversify.

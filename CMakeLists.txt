@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.28)
-project(png2amiga VERSION 1.97.0 LANGUAGES C CXX)
+project(png2amiga VERSION 1.121.0 LANGUAGES C CXX)
 
 if(EMSCRIPTEN OR MSVC)
     set(CMAKE_CXX_STANDARD 23)
@@ -13,6 +13,11 @@ set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 if(NOT CMAKE_BUILD_TYPE)
     set(CMAKE_BUILD_TYPE Release)
 endif()
+
+# Compile for the plain x86-64 baseline instead of AVX2+FMA. See the SIMD
+# baseline block further down for what it turns off and why.
+option(PNG2AMIGA_BASELINE_SIMD
+    "x86-64 baseline build: no AVX2/FMA/SSE4.1, runs on pre-2013 CPUs" OFF)
 
 # Capture the total commit count as a monotonically increasing build number.
 # Re-runs of cmake pick up new commits; CI runs cmake fresh each time so the
@@ -56,6 +61,7 @@ set(PNG2AMIGA_CORE_SOURCES
     src/quantize_metal_wrap.cpp
     src/palette_search.cpp
     src/dither.cpp
+    src/smooth_dither.cpp
     src/bitplane.cpp
     src/degas.cpp
     src/ham.cpp
@@ -74,6 +80,14 @@ set(PNG2AMIGA_CORE_SOURCES
     src/genesis.cpp
     src/c64.cpp
     src/c64_prg.cpp
+    src/msx.cpp
+    src/retro.cpp
+    src/thomson.cpp
+    src/ted.cpp
+    src/tile_merge.cpp
+    src/sms.cpp
+    src/cpc.cpp
+    src/nibnib.cpp
     src/pipeline.cpp
     src/ssimulacra2.cpp
     src/etc2.cpp
@@ -96,23 +110,43 @@ if(EMSCRIPTEN)
     # without Metal (Linux / Windows). On macOS-with-Metal the file
     # is compiled separately with apple-clang via a custom command
     # (see below) so the symbols come from there instead.
-    add_executable(png2amiga_wasm
+    # Two variants from identical sources:
+    #   png2amiga_wasm        → png2amiga.js/.wasm, built with -msimd128
+    #   png2amiga_wasm_nosimd → png2amiga-nosimd.js/.wasm, scalar arms only
+    # V8 and SpiderMonkey only enable WASM SIMD on CPUs with SSE4.1, so a
+    # pre-Penryn / pre-Bulldozer machine can't instantiate the SIMD module at
+    # all — it fails at compile time, before any of our code runs, and the app
+    # just never becomes ready. web/src/workers/wasm.worker.ts probes for SIMD
+    # support and imports whichever module the browser can actually run.
+    # Both are always built: the worker's fallback import has to resolve at
+    # Vite build time, so an optional second variant would break the web build.
+    set(PNG2AMIGA_WASM_TARGETS png2amiga_wasm png2amiga_wasm_nosimd)
+    foreach(tgt IN LISTS PNG2AMIGA_WASM_TARGETS)
+    add_executable(${tgt}
         ${PNG2AMIGA_CORE_SOURCES}
         src/quantize_metal.cpp
         src/wasm_bindings.cpp
     )
-    target_include_directories(png2amiga_wasm PRIVATE
+    target_include_directories(${tgt} PRIVATE
         src
         ${CMAKE_SOURCE_DIR}/third_party
         ${CMAKE_BINARY_DIR}/generated)
-    target_link_libraries(png2amiga_wasm PRIVATE stb spng zstd astcenc webp_headers webpdecode webpdspdecode webputilsdecode constixel nlohmann_json)
+    target_link_libraries(${tgt} PRIVATE stb spng zstd astcenc webp_headers webpdecode webpdspdecode webputilsdecode constixel nlohmann_json)
+    # -msimd128 on the SIMD variant only. Without it every backend gate in
+    # source (__wasm_simd128__) falls through to its scalar arm — same
+    # results, slower.
+    if("${tgt}" STREQUAL "png2amiga_wasm")
+        set(PNG2AMIGA_WASM_SIMD_FLAG -msimd128)
+    else()
+        set(PNG2AMIGA_WASM_SIMD_FLAG)
+    endif()
     # -pthread enables std::thread / std::jthread / std::mutex / std::atomic
     # in WASM via Emscripten's pthreads-on-web-workers shim. Requires the
     # browser to be cross-origin isolated (COOP/COEP headers, see
     # service/nginx.conf and vite.config.js). Pool size = the number of
     # cores reported by navigator.hardwareConcurrency, allocated lazily.
-    target_compile_options(png2amiga_wasm PRIVATE
-        -O3 -msimd128 -flto
+    target_compile_options(${tgt} PRIVATE
+        -O3 ${PNG2AMIGA_WASM_SIMD_FLAG} -flto
         -pthread
         # cga_font.hpp's `kCgaCanonicalBitmaps` consteval table calls
         # `make_glyph_canonical_bitmap` 32 times, each running a 256-step
@@ -121,11 +155,11 @@ if(EMSCRIPTEN)
         # generated at compile time. GCC's limit is much higher; this
         # flag is harmless on builds that don't need it.
         -fconstexpr-steps=10000000)
-    target_link_options(png2amiga_wasm PRIVATE
+    target_link_options(${tgt} PRIVATE
         --bind
         -O3
         -flto
-        -msimd128
+        ${PNG2AMIGA_WASM_SIMD_FLAG}
         -pthread
         # Preserve C++ function names in the .wasm so V8's --prof
         # output and Linux perf jitdump emit readable symbols instead
@@ -160,7 +194,9 @@ if(EMSCRIPTEN)
         -sDEFAULT_PTHREAD_STACK_SIZE=2097152
         -sSTACK_SIZE=2097152
     )
+    endforeach()
     set_target_properties(png2amiga_wasm PROPERTIES OUTPUT_NAME "png2amiga")
+    set_target_properties(png2amiga_wasm_nosimd PROPERTIES OUTPUT_NAME "png2amiga-nosimd")
 else()
     # --- Native CLI build ---
     include(cmake/CompilerWarnings.cmake)
@@ -185,6 +221,20 @@ else()
         ${CMAKE_BINARY_DIR}/generated)
     target_link_libraries(api_pipeline_smoke PRIVATE stb spng zstd astcenc webp_headers webpdecode webpdspdecode webputilsdecode constixel nlohmann_json)
     target_compile_options(api_pipeline_smoke PRIVATE ${PNG2AMIGA_WARNING_FLAGS})
+
+    # iff_camg_check: the CAMG viewport bits api::convert_iff (the web
+    # export path) writes, per mode.  Issue #13: hires exports had no
+    # HIRES bit.
+    add_executable(iff_camg_check
+        tools/iff_camg_check.cpp
+        ${PNG2AMIGA_CORE_SOURCES}
+    )
+    target_include_directories(iff_camg_check PRIVATE
+        src
+        ${CMAKE_SOURCE_DIR}/third_party
+        ${CMAKE_BINARY_DIR}/generated)
+    target_link_libraries(iff_camg_check PRIVATE stb spng zstd astcenc webp_headers webpdecode webpdspdecode webputilsdecode constixel nlohmann_json)
+    target_compile_options(iff_camg_check PRIVATE ${PNG2AMIGA_WARNING_FLAGS})
 
     # palette_search: experimental population-based palette search for
     # small palettes (lores OCS d ≤ 4). --best does k-means + 161
@@ -287,35 +337,49 @@ else()
     target_compile_options(png2amiga PRIVATE ${PNG2AMIGA_WARNING_FLAGS})
 
     # SIMD baseline for the hand-vectorized kernels in quantize.cpp /
-    # ssimulacra2.cpp. Three backends are supported in source:
-    #   - AVX2 + FMA   → x86_64 Windows / Linux / Intel Mac
+    # ssimulacra2.cpp. Four backends are supported in source:
+    #   - AVX2 + FMA   → x86_64 Windows / Linux / Intel Mac (default)
     #   - ARM NEON     → Apple Silicon / ARM64 Linux (implicit on AArch64)
     #   - WASM SIMD    → Emscripten (set via -msimd128 on the WASM target)
-    # No scalar fallback. AVX2 is universal on modern x86_64 (Intel
+    #   - scalar       → the #else arm of every backend gate; what the
+    #                    baseline compat build below compiles down to.
+    # AVX2 is the default because it's universal on modern x86_64 (Intel
     # Haswell 2013+, AMD Zen 2017+); NEON is mandatory on AArch64.
+    #
+    # -DPNG2AMIGA_BASELINE_SIMD=ON drops every extension above the plain
+    # x86-64 baseline (no AVX2, no FMA, no SSE4.1) so the binary also runs
+    # on pre-Haswell Intel / pre-Zen AMD. Slower — the scalar arms replace
+    # the vectorized ones — but it starts instead of dying with an illegal
+    # instruction. Shipped as png2amiga-windows-x86_64-compat.exe; see
+    # .github/workflows/release.yml. On ARM64 the option is a no-op (the
+    # -mavx2 probe already fails there and NEON is the baseline ISA).
+    set(PNG2AMIGA_SIMD_TARGETS
+        png2amiga api_pipeline_smoke iff_camg_check bench_ssimulacra2 palette_search)
+    if(PNG2AMIGA_BASELINE_SIMD)
+        message(STATUS "png2amiga: baseline SIMD build (no AVX2/FMA/SSE4.1)")
+    endif()
     if(MSVC)
-        target_compile_options(png2amiga PRIVATE /arch:AVX2)
-        target_compile_options(api_pipeline_smoke PRIVATE /arch:AVX2)
-        target_compile_options(bench_ssimulacra2 PRIVATE /arch:AVX2)
-        target_compile_options(palette_search PRIVATE /arch:AVX2)
         # /fp:contract — enable FMA contraction (a*b + c → vfmadd) only.
         # Stays under /fp:precise so reassociation, FTZ/DAZ, and
         # signed-zeros/NaN handling all keep IEEE semantics — none of
         # the Walczyk cbrt's Newton iterations are affected. Earlier
         # /fp:fast attempt regressed badly (FTZ/DAZ killed the cbrt's
         # subnormal-transit beam-search paths); contract-only avoids that.
-        target_compile_options(png2amiga PRIVATE /fp:contract)
-        target_compile_options(api_pipeline_smoke PRIVATE /fp:contract)
-        target_compile_options(bench_ssimulacra2 PRIVATE /fp:contract)
-        target_compile_options(palette_search PRIVATE /fp:contract)
-        # MSVC's /arch:AVX2 does NOT predefine __AVX2__ (gcc/clang do).
-        # ssimulacra2.cpp's SIMD-backend gate keys on __AVX2__, so define
-        # it explicitly here for the MSVC path. Same for __FMA__ (the
-        # fmadd intrinsics live in the same immintrin.h block).
-        target_compile_definitions(png2amiga PRIVATE __AVX2__ __FMA__)
-        target_compile_definitions(api_pipeline_smoke PRIVATE __AVX2__ __FMA__)
-        target_compile_definitions(bench_ssimulacra2 PRIVATE __AVX2__ __FMA__)
-        target_compile_definitions(palette_search PRIVATE __AVX2__ __FMA__)
+        # Harmless under the baseline build: without /arch:AVX2 there's no
+        # FMA instruction to contract into.
+        foreach(tgt IN LISTS PNG2AMIGA_SIMD_TARGETS)
+            target_compile_options(${tgt} PRIVATE /fp:contract)
+            if(NOT PNG2AMIGA_BASELINE_SIMD)
+                target_compile_options(${tgt} PRIVATE /arch:AVX2)
+                # MSVC's /arch:AVX2 does NOT predefine __AVX2__ (gcc/clang
+                # do). ssimulacra2.cpp's SIMD-backend gate keys on __AVX2__,
+                # so define it explicitly here for the MSVC path. Same for
+                # __FMA__ — which color_space.hpp's x86 block also gates on,
+                # so leaving it undefined is what routes the baseline build
+                # to the scalar kernels instead of emitting vfmadd.
+                target_compile_definitions(${tgt} PRIVATE __AVX2__ __FMA__)
+            endif()
+        endforeach()
         # cga_font.hpp's `kCgaCanonicalBitmaps` consteval table calls
         # `make_glyph_canonical_bitmap` 32 times, each scanning 256
         # glyphs with an O(n²) dedup walk — overshoots MSVC's default
@@ -331,11 +395,10 @@ else()
         # so universal-binary builds switching arch will Do The Right Thing.
         include(CheckCXXCompilerFlag)
         check_cxx_compiler_flag("-mavx2" PNG2AMIGA_HAS_MAVX2)
-        if(PNG2AMIGA_HAS_MAVX2)
-            target_compile_options(png2amiga PRIVATE -mavx2 -mfma)
-            target_compile_options(api_pipeline_smoke PRIVATE -mavx2 -mfma)
-            target_compile_options(bench_ssimulacra2 PRIVATE -mavx2 -mfma)
-            target_compile_options(palette_search PRIVATE -mavx2 -mfma)
+        if(PNG2AMIGA_HAS_MAVX2 AND NOT PNG2AMIGA_BASELINE_SIMD)
+            foreach(tgt IN LISTS PNG2AMIGA_SIMD_TARGETS)
+                target_compile_options(${tgt} PRIVATE -mavx2 -mfma)
+            endforeach()
         endif()
         # -ffp-contract=fast — GCC/Clang equivalent of MSVC's /fp:contract.
         # Allows FMA contraction across separate statements (e.g.
@@ -343,10 +406,9 @@ else()
         # the rest of IEEE semantics intact. See the MSVC branch above
         # for why we don't go further (full -ffast-math regresses the
         # Walczyk cbrt's subnormal transit beam-search paths).
-        target_compile_options(png2amiga PRIVATE -ffp-contract=fast)
-        target_compile_options(api_pipeline_smoke PRIVATE -ffp-contract=fast)
-        target_compile_options(bench_ssimulacra2 PRIVATE -ffp-contract=fast)
-        target_compile_options(palette_search PRIVATE -ffp-contract=fast)
+        foreach(tgt IN LISTS PNG2AMIGA_SIMD_TARGETS)
+            target_compile_options(${tgt} PRIVATE -ffp-contract=fast)
+        endforeach()
         # Native clang (Apple clang / mainline clang) caps constexpr
         # evaluation at 1,048,576 steps — same as the Emscripten path.
         # cga_font.hpp's kCgaCanonicalBitmaps table overshoots that on
@@ -425,6 +487,7 @@ else()
         # bool/int stubs that quantize_metal_wrap.cpp links against.
         target_sources(png2amiga PRIVATE src/quantize_metal.cpp)
         target_sources(api_pipeline_smoke PRIVATE src/quantize_metal.cpp)
+        target_sources(iff_camg_check PRIVATE src/quantize_metal.cpp)
         target_sources(palette_search PRIVATE src/quantize_metal.cpp)
     endif()
 
@@ -515,6 +578,14 @@ else()
         add_dependencies(api_pipeline_smoke quantize_metal_obj)
         target_link_libraries(api_pipeline_smoke PRIVATE ${_metal_cpp_obj})
         target_link_libraries(api_pipeline_smoke PRIVATE -lc++ -lc++abi)
+
+        # iff_camg_check: same core sources, same Metal hook-up.
+        target_compile_definitions(iff_camg_check PRIVATE PNG2AMIGA_HAVE_METAL=1)
+        target_link_libraries(iff_camg_check PRIVATE
+            "-framework Foundation" "-framework Metal" "-framework QuartzCore")
+        add_dependencies(iff_camg_check quantize_metal_obj)
+        target_link_libraries(iff_camg_check PRIVATE ${_metal_cpp_obj})
+        target_link_libraries(iff_camg_check PRIVATE -lc++ -lc++abi)
 
         # palette_search uses the same core sources (quantize::quantize
         # → ocs_bruteforce → maybe gpu_restart on Metal-enabled). Same
@@ -1120,6 +1191,47 @@ sys.exit(0 if got==expect else (print(f'expected {expect}, got {got}') or 1))"
     )
     set_tests_properties("smoke-bc7-thirdparty-decode-png"
         PROPERTIES DEPENDS "smoke-bc7-thirdparty-decode")
+    # Plain lores + STRIPS (1-4 planes, 8-px slot grid): the .h carries the
+    # strips_lores_ocs copper list, one 40-slot chain per row.
+    add_test(
+        NAME "smoke-lores-strips-h"
+        COMMAND png2amiga --mode lores --depth 3 --sliced --slice-changes 7 --strips
+                --symbol lstrips ${PNG2AMIGA_TEST_INPUT}
+                ${CMAKE_BINARY_DIR}/lores-strips.h
+    )
+    add_test(
+        NAME "smoke-lores-strips-h-content"
+        COMMAND ${PNG2AMIGA_PYTHON} -c
+            "content = open('${CMAKE_BINARY_DIR}/lores-strips.h').read(); \
+            assert 'strips_lores_ocs (anchor=0x3C' in content, 'strips_lores_ocs label missing'; \
+            assert 'lstrips_strips_copper_list' in content, 'strips copper list missing'"
+    )
+    set_tests_properties("smoke-lores-strips-h-content"
+                         PROPERTIES DEPENDS "smoke-lores-strips-h")
+    # 5+ lores planes steal the copper's even cycles: no strips variant.
+    add_test(
+        NAME "strips-rejects-lores-depth5"
+        COMMAND png2amiga --mode lores --depth 5 --strips
+                ${PNG2AMIGA_TEST_INPUT}
+                ${CMAKE_BINARY_DIR}/strips-reject-d5.png
+    )
+    set_tests_properties("strips-rejects-lores-depth5" PROPERTIES WILL_FAIL TRUE)
+    # Amiga outputs only write known formats; anything else (e.g. .exe,
+    # which comes from building the .cpp viewer) is an error, not a PNG.
+    add_test(
+        NAME "amiga-output-rejects-exe"
+        COMMAND png2amiga --mode lores --depth 3
+                ${PNG2AMIGA_TEST_INPUT}
+                ${CMAKE_BINARY_DIR}/amiga-output.exe
+    )
+    set_tests_properties("amiga-output-rejects-exe" PROPERTIES WILL_FAIL TRUE)
+    # -o x.idx writes 1 byte per pixel (the bitplane value) in every Amiga
+    # path: plain, sliced, strips and HAM.
+    add_test(
+        NAME "amiga-output-idx"
+        COMMAND ${Python3_EXECUTABLE} ${CMAKE_SOURCE_DIR}/tools/check_idx_output.py
+                --cli $<TARGET_FILE:png2amiga>
+    )
 
     # --tile: pre-replicate input 3x3, run pipeline, crop centre. Verify
     # that the encoded .h has the requested centre dimensions (W x H,
@@ -1350,6 +1462,11 @@ sys.exit(0 if got==expect else (print(f'expected {expect}, got {got}') or 1))"
         "ste-low;ste_low"
         "ste-med;ste_med"
         "ste-hi;ste_hi"
+        "tandy-160;tandy_160"
+        "tandy-320;tandy_320"
+        "tandy-640;tandy_640"
+        "cga-160;cga_160"
+        "cga-160x200;cga_160x200"
         "cga-320;cga_320"
         "cga-640;cga_640"
         "cga-composite;cga_composite"
@@ -1553,6 +1670,286 @@ sys.exit(0 if got==expect else (print(f'expected {expect}, got {got}') or 1))"
                              PROPERTIES DEPENDS "smoke-snes-${ext}")
     endforeach()
 
+    # Game Boy Advance bitmap modes — mode3/mode5 (16bpp direct: .png + .h),
+    # mode4 (8bpp paletted: .bin → companion .pal, + .h).
+    set(gba_outputs
+        "mode3.png|--mode gba-mode3"
+        "mode3.h|--mode gba-mode3 --symbol gba3_test"
+        "mode4.bin|--mode gba-mode4"
+        "mode4.h|--mode gba-mode4 --symbol gba4_test"
+        "mode5.png|--mode gba-mode5"
+        "mode5.h|--mode gba-mode5 --symbol gba5_test"
+    )
+    foreach(spec ${gba_outputs})
+        string(REPLACE "|" ";" spec_parts ${spec})
+        list(GET spec_parts 0 ext)
+        list(GET spec_parts 1 mode_args)
+        separate_arguments(mode_args UNIX_COMMAND "${mode_args}")
+        add_test(
+            NAME "smoke-gba-${ext}"
+            COMMAND png2amiga ${mode_args}
+                    ${PNG2AMIGA_TEST_INPUT}
+                    ${CMAKE_BINARY_DIR}/smoke-gba.${ext}
+        )
+        add_test(
+            NAME "smoke-gba-${ext}-exists"
+            COMMAND ${CMAKE_COMMAND} -E sha256sum
+                    ${CMAKE_BINARY_DIR}/smoke-gba.${ext}
+        )
+        set_tests_properties("smoke-gba-${ext}-exists"
+                             PROPERTIES DEPENDS "smoke-gba-${ext}")
+    endforeach()
+
+    # GBA mode4 .bin must write a companion .pal (256 × u16 LE BGR555).
+    add_test(
+        NAME "smoke-gba-mode4-pal-exists"
+        COMMAND ${CMAKE_COMMAND} -E sha256sum
+                ${CMAKE_BINARY_DIR}/smoke-gba.mode4.pal
+    )
+    set_tests_properties("smoke-gba-mode4-pal-exists"
+                         PROPERTIES DEPENDS "smoke-gba-mode4.bin")
+
+    # GBA Mode 4 honors the palette-pinning flags (lock / reserve /
+    # external palette / pin) — same plumbing as the VGA chunky path.
+    add_test(
+        NAME "gba-mode4-lock-reserve"
+        COMMAND png2amiga --mode gba-mode4
+                --lock-index 5 ff0000 --reserve-range 6 00ff00
+                ${PNG2AMIGA_TEST_INPUT}
+                ${CMAKE_BINARY_DIR}/test_gba4_lock.h
+    )
+    add_test(
+        NAME "gba-mode4-pin"
+        COMMAND png2amiga --mode gba-mode4 --dither bayer4x4
+                --pin-index-at 5 10 10
+                ${PNG2AMIGA_TEST_INPUT}
+                ${CMAKE_BINARY_DIR}/test_gba4_pin.h
+    )
+    # External palette: a GIMP .gpl is loaded, snapped to BGR555, used
+    # as-is (no auto-quantize).
+    file(WRITE ${CMAKE_BINARY_DIR}/gba_ext.gpl
+         "GIMP Palette\nName: gba-test\n255 0 0\n0 255 0\n0 0 255\n255 255 0\n")
+    add_test(
+        NAME "gba-mode4-external-pal"
+        COMMAND png2amiga --mode gba-mode4
+                --palette ${CMAKE_BINARY_DIR}/gba_ext.gpl
+                ${PNG2AMIGA_TEST_INPUT}
+                ${CMAKE_BINARY_DIR}/test_gba4_extpal.h
+    )
+
+    # GBA direct-color modes have no palette → these flags must be rejected.
+    add_test(
+        NAME "gba-mode3-reserve-rejected"
+        COMMAND png2amiga --mode gba-mode3 --reserve-range 6 00ff00
+                ${PNG2AMIGA_TEST_INPUT}
+                ${CMAKE_BINARY_DIR}/test_gba3_rsv.h
+    )
+    set_tests_properties("gba-mode3-reserve-rejected" PROPERTIES WILL_FAIL TRUE)
+    add_test(
+        NAME "gba-mode5-lock-rejected"
+        COMMAND png2amiga --mode gba-mode5 --lock-index 5 ff0000
+                ${PNG2AMIGA_TEST_INPUT}
+                ${CMAKE_BINARY_DIR}/test_gba5_lock.h
+    )
+    set_tests_properties("gba-mode5-lock-rejected" PROPERTIES WILL_FAIL TRUE)
+
+    # Thomson TO7/70 + TO8 and Commodore TED — PNG preview + .h header +
+    # native-layout .bin for every mode.
+    set(thomson_ted_outputs
+        "to7fc.png|--mode thomson-to7-320x16"
+        "to7fc.h|--mode thomson-to7-320x16 --symbol to7_test"
+        "to7fc.bin|--mode thomson-to7-320x16"
+        "to8fc.png|--mode thomson-to8-320x16"
+        "to8fc.h|--mode thomson-to8-320x16 --symbol to8fc_test"
+        "to8fc.bin|--mode thomson-to8-320x16"
+        "to8b16.png|--mode thomson-to8-160x16"
+        "to8b16.h|--mode thomson-to8-160x16 --symbol to8b16_test"
+        "to8b16.bin|--mode thomson-to8-160x16"
+        "to8b4.png|--mode thomson-to8-320x4"
+        "to8b4.h|--mode thomson-to8-320x4 --symbol to8b4_test"
+        "to8b4.bin|--mode thomson-to8-320x4"
+        "to8b2.png|--mode thomson-to8-640x2"
+        "to8b2.h|--mode thomson-to8-640x2 --symbol to8b2_test"
+        "to8b2.bin|--mode thomson-to8-640x2"
+        "tedhi.png|--mode ted-hires"
+        "tedhi.h|--mode ted-hires --symbol tedhi_test"
+        "tedhi.bin|--mode ted-hires"
+        "tedmc.png|--mode ted-multicolor"
+        "tedmc.h|--mode ted-multicolor --symbol tedmc_test"
+        "tedmc.bin|--mode ted-multicolor"
+    )
+    foreach(spec ${thomson_ted_outputs})
+        string(REPLACE "|" ";" spec_parts ${spec})
+        list(GET spec_parts 0 ext)
+        list(GET spec_parts 1 mode_args)
+        separate_arguments(mode_args UNIX_COMMAND "${mode_args}")
+        add_test(
+            NAME "smoke-thomsonted-${ext}"
+            COMMAND png2amiga ${mode_args}
+                    ${PNG2AMIGA_TEST_INPUT}
+                    ${CMAKE_BINARY_DIR}/smoke-thomsonted.${ext}
+        )
+        add_test(
+            NAME "smoke-thomsonted-${ext}-exists"
+            COMMAND ${CMAKE_COMMAND} -E sha256sum
+                    ${CMAKE_BINARY_DIR}/smoke-thomsonted.${ext}
+        )
+        set_tests_properties("smoke-thomsonted-${ext}-exists"
+                             PROPERTIES DEPENDS "smoke-thomsonted-${ext}")
+    endforeach()
+
+    # TO8 .bin must write a companion .pal (programmable palette, 2 B/color).
+    add_test(
+        NAME "smoke-thomson-to8-pal-exists"
+        COMMAND ${CMAKE_COMMAND} -E sha256sum
+                ${CMAKE_BINARY_DIR}/smoke-thomsonted.to8b16.pal
+    )
+    set_tests_properties("smoke-thomson-to8-pal-exists"
+                         PROPERTIES DEPENDS "smoke-thomsonted-to8b16.bin")
+
+    # TO7/70 has a FIXED palette → no companion .pal is written.
+    add_test(
+        NAME "thomson-to7-no-pal"
+        COMMAND ${CMAKE_COMMAND} -E compare_files
+                ${CMAKE_BINARY_DIR}/missing-to7.pal ${CMAKE_BINARY_DIR}/missing-to7.pal
+    )
+    set_tests_properties("thomson-to7-no-pal" PROPERTIES WILL_FAIL TRUE)
+
+    # Thomson / TED reject Amiga / viewer outputs.
+    add_test(
+        NAME "thomson-iff-rejected"
+        COMMAND png2amiga --mode thomson-to8-160x16
+                ${PNG2AMIGA_TEST_INPUT} ${CMAKE_BINARY_DIR}/test_thomson.iff
+    )
+    set_tests_properties("thomson-iff-rejected" PROPERTIES WILL_FAIL TRUE)
+    add_test(
+        NAME "ted-reserve-rejected"
+        COMMAND png2amiga --mode ted-hires --reserve-range 6 00ff00
+                ${PNG2AMIGA_TEST_INPUT} ${CMAKE_BINARY_DIR}/test_ted_rsv.h
+    )
+    set_tests_properties("ted-reserve-rejected" PROPERTIES WILL_FAIL TRUE)
+
+    # Sega Master System / Game Gear and Amstrad CPC / CPC Plus — PNG
+    # preview + .h + raw .bin for every mode, .scr for CPC.
+    set(sms_cpc_outputs
+        "sms.png|--mode sms-mode4"
+        "sms.h|--mode sms-mode4 --symbol sms_test"
+        "sms.bin|--mode sms-mode4"
+        "gg.png|--mode gg-mode4"
+        "gg.h|--mode gg-mode4 --symbol gg_test"
+        "gg.bin|--mode gg-mode4"
+        "cpc0.png|--mode cpc-mode0"
+        "cpc0.h|--mode cpc-mode0 --symbol cpc0_test"
+        "cpc0.bin|--mode cpc-mode0"
+        "cpc1.scr|--mode cpc-mode1"
+        "cpc1.h|--mode cpc-mode1 --symbol cpc1_test"
+        "cpc2.png|--mode cpc-mode2"
+        "cpc2.bin|--mode cpc-mode2"
+        "cpcp0.h|--mode cpc-plus-mode0 --symbol cpcp0_test"
+        "cpcp0.bin|--mode cpc-plus-mode0"
+        "cpcp1.png|--mode cpc-plus-mode1"
+        "cpcp2.h|--mode cpc-plus-mode2 --symbol cpcp2_test"
+    )
+    foreach(spec ${sms_cpc_outputs})
+        string(REPLACE "|" ";" spec_parts ${spec})
+        list(GET spec_parts 0 ext)
+        list(GET spec_parts 1 mode_args)
+        separate_arguments(mode_args UNIX_COMMAND "${mode_args}")
+        add_test(
+            NAME "smoke-smscpc-${ext}"
+            COMMAND png2amiga ${mode_args}
+                    ${PNG2AMIGA_TEST_INPUT}
+                    ${CMAKE_BINARY_DIR}/smoke-smscpc.${ext}
+        )
+        add_test(
+            NAME "smoke-smscpc-${ext}-exists"
+            COMMAND ${CMAKE_COMMAND} -E sha256sum
+                    ${CMAKE_BINARY_DIR}/smoke-smscpc.${ext}
+        )
+        set_tests_properties("smoke-smscpc-${ext}-exists"
+                             PROPERTIES DEPENDS "smoke-smscpc-${ext}")
+    endforeach()
+
+    # --native-par with a source narrower than the buffer: a fixed-buffer
+    # mode fits the image to its buffer (photo.jpg is 540x360, 3:2).  The
+    # old "don't upscale small sources" rule left cpc-mode2 at 540x180,
+    # boxed on all four sides; it must pillarbox to the full height.
+    foreach(np_spec "cpc-mode2|600x200" "cpc-mode1|300x200" "stf-med|640x178")
+        string(REPLACE "|" ";" np_parts ${np_spec})
+        list(GET np_parts 0 np_mode)
+        list(GET np_parts 1 np_dims)
+        add_test(
+            NAME "native-par-small-source-${np_mode}"
+            COMMAND png2amiga --mode ${np_mode} --native-par
+                    ${CMAKE_SOURCE_DIR}/examples/photo.jpg
+                    ${CMAKE_BINARY_DIR}/native-par-small-${np_mode}.png)
+        set_tests_properties("native-par-small-source-${np_mode}"
+                             PROPERTIES PASS_REGULAR_EXPRESSION "Target: +${np_dims} ")
+    endforeach()
+
+    # Output sizes: CPC screen 16384, .scr = 128-byte AMSDOS header +
+    # screen (checksum over bytes 0..66), .pal = 1 Gate Array byte per ink
+    # (classic) or 2 ASIC bytes per ink (Plus); SMS .bin = 32 B/tile
+    # (≤ 448) + 768 × 2 tilemap + 32 CRAM; GG = 360 × 32 + 360 × 2 + 64.
+    add_test(
+        NAME "smoke-smscpc-sizes"
+        COMMAND ${PNG2AMIGA_PYTHON} -c "
+import os, sys
+b = '${CMAKE_BINARY_DIR}/smoke-smscpc.'
+sz = lambda e: os.path.getsize(b + e)
+scr = open(b + 'cpc1.scr', 'rb').read()
+ok = (sz('cpc0.bin') == 16384 and sz('cpc2.bin') == 16384 and sz('cpcp0.bin') == 16384
+      and len(scr) == 16512 and scr[0x12] == 2 and scr[0x15:0x17] == bytes([0, 0xC0])
+      and scr[0x43] | (scr[0x44] << 8) == sum(scr[:67]) & 0xFFFF
+      and sz('cpc0.pal') == 16 and sz('cpc1.pal') == 4 and sz('cpc2.pal') == 2
+      and sz('cpcp0.pal') == 32
+      and (sz('sms.bin') - 768 * 2 - 32) % 32 == 0 and sz('sms.bin') <= 448 * 32 + 768 * 2 + 32
+      and sz('gg.bin') <= 360 * 32 + 360 * 2 + 64 and (sz('gg.bin') - 360 * 2 - 64) % 32 == 0)
+sys.exit(0 if ok else 1)")
+    set_tests_properties("smoke-smscpc-sizes" PROPERTIES DEPENDS
+        "smoke-smscpc-cpc0.bin;smoke-smscpc-cpc2.bin;smoke-smscpc-cpcp0.bin;smoke-smscpc-cpc1.scr;smoke-smscpc-sms.bin;smoke-smscpc-gg.bin")
+
+    # Decode .bin / screen + inks with an independent decoder and require a
+    # bit-exact match with the preview (tools/check_sms_cpc_roundtrip.py).
+    foreach(m sms-mode4 gg-mode4 cpc-mode0 cpc-mode1 cpc-mode2
+              cpc-plus-mode0 cpc-plus-mode1 cpc-plus-mode2)
+        add_test(
+            NAME "roundtrip-${m}"
+            COMMAND ${PNG2AMIGA_PYTHON}
+                    ${CMAKE_SOURCE_DIR}/tools/check_sms_cpc_roundtrip.py
+                    --smoke $<TARGET_FILE:api_pipeline_smoke>
+                    --mode ${m}
+                    --input ${PNG2AMIGA_TEST_INPUT}
+                    --work ${CMAKE_BINARY_DIR}/roundtrip-smscpc
+        )
+    endforeach()
+
+    # Rejected: Amiga / viewer outputs, .scr outside CPC, palette flags.
+    add_test(
+        NAME "sms-iff-rejected"
+        COMMAND png2amiga --mode sms-mode4
+                ${PNG2AMIGA_TEST_INPUT} ${CMAKE_BINARY_DIR}/test_sms.iff
+    )
+    set_tests_properties("sms-iff-rejected" PROPERTIES WILL_FAIL TRUE)
+    add_test(
+        NAME "gg-scr-rejected"
+        COMMAND png2amiga --mode gg-mode4
+                ${PNG2AMIGA_TEST_INPUT} ${CMAKE_BINARY_DIR}/test_gg.scr
+    )
+    set_tests_properties("gg-scr-rejected" PROPERTIES WILL_FAIL TRUE)
+    add_test(
+        NAME "cpc-lock-rejected"
+        COMMAND png2amiga --mode cpc-mode1 --lock-index 1 ff0000
+                ${PNG2AMIGA_TEST_INPUT} ${CMAKE_BINARY_DIR}/test_cpc_lock.h
+    )
+    set_tests_properties("cpc-lock-rejected" PROPERTIES WILL_FAIL TRUE)
+    add_test(
+        NAME "cpc-depth-rejected"
+        COMMAND png2amiga --mode cpc-plus-mode0 --depth 2
+                ${PNG2AMIGA_TEST_INPUT} ${CMAKE_BINARY_DIR}/test_cpc_depth.png
+    )
+    set_tests_properties("cpc-depth-rejected" PROPERTIES WILL_FAIL TRUE)
+
     # C64 — every (mode, output-format) combo we promise. Bitmap modes:
     # PNG preview, .raw bytes, .prg displayer; .koa for multicolor only;
     # .hir for hires only. Charset modes: PNG, .raw, .h header. PETSCII
@@ -1617,6 +2014,10 @@ sys.exit(0 if got==expect else (print(f'expected {expect}, got {got}') or 1))"
         "c64-afli|--mode c64-afli"
         "c64-petscii|--mode c64-petscii"
         "c64-charset-hires|--mode c64-charset-hires"
+        "gba-mode3|--mode gba-mode3"
+        "gba-mode4|--mode gba-mode4"
+        "gba-mode5|--mode gba-mode5"
+        "nibnib|--mode nibnib --width 64"
     )
     foreach(spec ${no_output_modes})
         string(REPLACE "|" ";" parts ${spec})
@@ -2007,8 +2408,56 @@ sys.exit(0 if got==expect else (print(f'expected {expect}, got {got}') or 1))"
     # which exercises api::encode_state with a CLI-equivalent option
     # set (--apply-tuning fills in dither_tuning defaults).
     # ---------------------------------------------------------------
+    add_test(NAME retro-screen-contract
+        COMMAND api_pipeline_smoke --check-retro ${CMAKE_SOURCE_DIR}/examples/maui.jpg)
+    add_test(NAME msx-screen-contract
+        COMMAND api_pipeline_smoke --check-msx ${CMAKE_SOURCE_DIR}/examples/maui.jpg)
+    add_test(NAME thomson-k7-contract
+        COMMAND api_pipeline_smoke --check-thomson-k7 ${CMAKE_SOURCE_DIR}/examples/maui.jpg)
+
+    foreach(_to8_method opt-checker floyd-steinberg)
+        foreach(_to8_cells 0 1)
+            add_test(NAME "to8-palette-${_to8_method}-cells${_to8_cells}"
+                COMMAND api_pipeline_smoke --check-to8-palette
+                    ${CMAKE_SOURCE_DIR}/examples/maui.jpg ${_to8_method} ${_to8_cells})
+        endforeach()
+    endforeach()
+    add_test(NAME ehb-pairs-contract
+        COMMAND api_pipeline_smoke --check-ehb-pairs ${CMAKE_SOURCE_DIR}/examples/maui.jpg)
+
+    add_test(NAME palette-pairs-contract
+        COMMAND api_pipeline_smoke --check-palette-pairs ${CMAKE_SOURCE_DIR}/examples/maui.jpg)
+
     set(_equiv_chk
         "${PNG2AMIGA_PYTHON};${CMAKE_SOURCE_DIR}/tools/check_api_equiv.py;--cli;$<TARGET_FILE:png2amiga>;--api;$<TARGET_FILE:api_pipeline_smoke>")
+    foreach(_pair_depth RANGE 2 8)
+        if(_pair_depth GREATER 5)
+            set(_pair_chipset aga)
+        else()
+            set(_pair_chipset ocs)
+        endif()
+        add_test(NAME "api-equiv-palette-pairs-d${_pair_depth}"
+            COMMAND ${_equiv_chk} --in ${CMAKE_SOURCE_DIR}/examples/maui.jpg
+                -- --mode lores --depth ${_pair_depth} --chipset ${_pair_chipset}
+                --dither opt-checker)
+    endforeach()
+
+    foreach(_low_mode hires lores-lace hires-lace)
+        foreach(_low_depth 2 3)
+            add_test(NAME "api-equiv-palette-fit-${_low_mode}-d${_low_depth}"
+                COMMAND ${_equiv_chk} --in ${CMAKE_SOURCE_DIR}/examples/maui.jpg
+                    -- --mode ${_low_mode} --depth ${_low_depth} --dither opt-checker)
+        endforeach()
+    endforeach()
+    add_test(NAME "api-equiv-palette-fit-hires-aga-d8"
+        COMMAND ${_equiv_chk} --in ${CMAKE_SOURCE_DIR}/examples/maui.jpg
+            -- --mode hires --depth 8 --chipset aga --dither opt-checker)
+
+    add_test(NAME "ham6-beam-held-colors"
+        COMMAND $<TARGET_FILE:api_pipeline_smoke> --check-ham-beam)
+
+    add_test(NAME "iff-camg-web-export"
+        COMMAND $<TARGET_FILE:iff_camg_check> ${CMAKE_SOURCE_DIR}/examples/brick.png)
 
     add_test(NAME "api-equiv-lores-plain"
         COMMAND ${_equiv_chk}
@@ -2043,6 +2492,12 @@ sys.exit(0 if got==expect else (print(f'expected {expect}, got {got}') or 1))"
     # and strips EHB byte-match the api smoke. ehb+sliced + hires still
     # use inline pipelines; their api-equiv tests land when those branches
     # migrate too.
+    add_test(NAME "api-equiv-ehb-opt-checker"
+        COMMAND ${_equiv_chk} --in ${CMAKE_SOURCE_DIR}/examples/maui.jpg
+            -- --mode ehb --dither opt-checker)
+    add_test(NAME "api-equiv-ehb-dbs"
+        COMMAND ${_equiv_chk} --in ${CMAKE_SOURCE_DIR}/examples/maui.jpg
+            -- --mode ehb --dither dbs)
     add_test(NAME "api-equiv-ehb-plain"
         COMMAND ${_equiv_chk}
             --in ${_pal_makena_in}
@@ -2055,6 +2510,10 @@ sys.exit(0 if got==expect else (print(f'expected {expect}, got {got}') or 1))"
         COMMAND ${_equiv_chk}
             --in ${_pal_makena_in}
             -- --mode ehb --strips)
+    add_test(NAME "api-equiv-strips-lores"
+        COMMAND ${_equiv_chk}
+            --in ${_pal_makena_in}
+            -- --mode lores --depth 3 --sliced --slice-changes 7 --strips)
     # hires plain — main.cpp's std-lores path matches api once smoke
     # resolves the per-mode depth default (hires non-AGA → 4, lores → 5).
     add_test(NAME "api-equiv-hires-plain"
@@ -2168,6 +2627,21 @@ sys.exit(0 if got==expect else (print(f'expected {expect}, got {got}') or 1))"
         COMMAND ${_equiv_chk} --in ${_pal_makena_in} -- --mode snes-mode7-direct)
     add_test(NAME "api-equiv-snes-256"
         COMMAND ${_equiv_chk} --in ${_pal_makena_in} -- --mode snes-mode7-256)
+    add_test(NAME "api-equiv-gba-mode3"
+        COMMAND ${_equiv_chk} --in ${_pal_makena_in} -- --mode gba-mode3)
+    add_test(NAME "api-equiv-gba-mode4"
+        COMMAND ${_equiv_chk} --in ${_pal_makena_in} -- --mode gba-mode4)
+    add_test(NAME "api-equiv-gba-mode5"
+        COMMAND ${_equiv_chk} --in ${_pal_makena_in} -- --mode gba-mode5)
+    # nibnib: the web path (api.cpp branch) matches the CLI's main.cpp
+    # block. --width is explicit: without it the CLI keeps the source
+    # size and the api defaults to 320.
+    add_test(NAME "api-equiv-nibnib"
+        COMMAND ${_equiv_chk} --in ${_pal_makena_in} -- --mode nibnib --width 128)
+    add_test(NAME "api-equiv-nibnib-atkinson"
+        COMMAND ${_equiv_chk} --in ${_pal_makena_in} -- --mode nibnib --width 96 --dither atkinson)
+    add_test(NAME "api-equiv-nibnib-best"
+        COMMAND ${_equiv_chk} --in ${_pal_makena_in} -- --mode nibnib --width 96 --best)
     add_test(NAME "api-equiv-c64-multicolor"
         COMMAND ${_equiv_chk} --in ${_pal_makena_in} -- --mode c64-multicolor)
     add_test(NAME "api-equiv-c64-hires"
@@ -2182,6 +2656,119 @@ sys.exit(0 if got==expect else (print(f'expected {expect}, got {got}') or 1))"
         COMMAND ${_equiv_chk} --in ${_pal_makena_in} -- --mode c64-charset-hires)
     add_test(NAME "api-equiv-c64-charset-multicolor"
         COMMAND ${_equiv_chk} --in ${_pal_makena_in} -- --mode c64-charset-multicolor)
+    add_test(NAME "api-equiv-zx-spectrum"
+        COMMAND ${_equiv_chk} --in ${_pal_makena_in} -- --mode zx-spectrum)
+    add_test(NAME "api-equiv-stf-spectrum512"
+        COMMAND ${_equiv_chk} --in ${_pal_makena_in} -- --mode stf-spectrum512)
+    add_test(NAME "api-equiv-ste-spectrum4096"
+        COMMAND ${_equiv_chk} --in ${_pal_makena_in} -- --mode ste-spectrum4096)
+    add_test(NAME "api-equiv-msx1-screen2"
+        COMMAND ${_equiv_chk} --in ${_pal_makena_in} -- --mode msx1-screen2)
+    add_test(NAME "api-equiv-msx2-screen5"
+        COMMAND ${_equiv_chk} --in ${_pal_makena_in} -- --mode msx2-screen5)
+    add_test(NAME "api-equiv-msx2-screen6"
+        COMMAND ${_equiv_chk} --in ${_pal_makena_in} -- --mode msx2-screen6)
+    add_test(NAME "api-equiv-msx2-screen7"
+        COMMAND ${_equiv_chk} --in ${_pal_makena_in} -- --mode msx2-screen7)
+    add_test(NAME "api-equiv-msx2-screen8"
+        COMMAND ${_equiv_chk} --in ${_pal_makena_in} -- --mode msx2-screen8)
+    add_test(NAME "api-equiv-thomson-to7-320x16"
+        COMMAND ${_equiv_chk} --in ${_pal_makena_in} -- --mode thomson-to7-320x16)
+    add_test(NAME "api-equiv-thomson-to8-320x16"
+        COMMAND ${_equiv_chk} --in ${_pal_makena_in} -- --mode thomson-to8-320x16)
+    add_test(NAME "api-equiv-thomson-to8-160x16"
+        COMMAND ${_equiv_chk} --in ${_pal_makena_in} -- --mode thomson-to8-160x16)
+    add_test(NAME "api-equiv-thomson-to8-320x4"
+        COMMAND ${_equiv_chk} --in ${_pal_makena_in} -- --mode thomson-to8-320x4)
+    add_test(NAME "api-equiv-thomson-to8-640x2"
+        COMMAND ${_equiv_chk} --in ${_pal_makena_in} -- --mode thomson-to8-640x2)
+    add_test(NAME "api-equiv-ted-hires"
+        COMMAND ${_equiv_chk} --in ${_pal_makena_in} -- --mode ted-hires)
+    add_test(NAME "api-equiv-ted-multicolor"
+        COMMAND ${_equiv_chk} --in ${_pal_makena_in} -- --mode ted-multicolor)
+    foreach(_mode IN ITEMS thomson-to7-320x16 cga-text80x200 cga-text80x100
+                           cga-text80x50 cga-text80x25 cga-text40x200 cga-text40x100
+                           thomson-to8-320x16 c64-afli c64-hires ted-hires c64-petscii
+                           c64-multicolor c64-fli ted-multicolor
+                           c64-charset-hires c64-charset-multicolor)
+        add_test(NAME "api-equiv-cell-refine-${_mode}"
+            COMMAND ${_equiv_chk} --in ${_pal_makena_in} -- --mode ${_mode} --cell-refine)
+        add_test(NAME "cell-refine-replay-${_mode}"
+            COMMAND ${PNG2AMIGA_PYTHON} ${CMAKE_SOURCE_DIR}/tools/check_cell_refine_replay.py
+                --api $<TARGET_FILE:api_pipeline_smoke> --mode ${_mode}
+                --input ${CMAKE_SOURCE_DIR}/examples/maui.jpg)
+    endforeach()
+    foreach(_mode IN ITEMS c64-charset-hires c64-charset-multicolor)
+        add_test(NAME "cell-refine-budget-${_mode}"
+            COMMAND ${PNG2AMIGA_PYTHON} ${CMAKE_SOURCE_DIR}/tools/check_cell_refine_replay.py
+                --api $<TARGET_FILE:api_pipeline_smoke> --mode ${_mode}
+                --tile-budget 8 --tile-reserve 2 --input ${CMAKE_SOURCE_DIR}/examples/maui.jpg)
+    endforeach()
+    add_test(NAME "cell-refine-petscii-graphics-replay"
+        COMMAND ${PNG2AMIGA_PYTHON} ${CMAKE_SOURCE_DIR}/tools/check_cell_refine_replay.py
+            --api $<TARGET_FILE:api_pipeline_smoke> --mode c64-petscii --graphics-only
+            --input ${CMAKE_SOURCE_DIR}/examples/maui.jpg)
+    foreach(_mode IN ITEMS c64-fli c64-afli)
+        add_test(NAME "cell-refine-default-edge-${_mode}"
+            COMMAND ${PNG2AMIGA_PYTHON} ${CMAKE_SOURCE_DIR}/tools/check_cell_refine_replay.py
+                --api $<TARGET_FILE:api_pipeline_smoke> --mode ${_mode} --baseline
+                --input ${CMAKE_SOURCE_DIR}/examples/maui.jpg)
+    endforeach()
+    add_test(NAME "c64-multicolor-shared-bg-replay"
+        COMMAND ${PNG2AMIGA_PYTHON} ${CMAKE_SOURCE_DIR}/tools/check_cell_refine_replay.py
+            --api $<TARGET_FILE:api_pipeline_smoke> --mode c64-multicolor --baseline
+            --input ${CMAKE_SOURCE_DIR}/examples/maui.jpg)
+    add_test(NAME "c64-multicolor-shared-bg-replay-none"
+        COMMAND ${PNG2AMIGA_PYTHON} ${CMAKE_SOURCE_DIR}/tools/check_cell_refine_replay.py
+            --api $<TARGET_FILE:api_pipeline_smoke> --mode c64-multicolor --baseline --dither none
+            --input ${CMAKE_SOURCE_DIR}/examples/maui.jpg)
+    foreach(_mode IN ITEMS c64-hires c64-multicolor c64-fli c64-afli
+                           c64-charset-hires c64-charset-multicolor
+                           ted-hires ted-multicolor thomson-to7-320x16 thomson-to8-320x16)
+        add_test(NAME "cell-refine-ordered-replay-${_mode}"
+            COMMAND ${PNG2AMIGA_PYTHON} ${CMAKE_SOURCE_DIR}/tools/check_cell_refine_replay.py
+                --api $<TARGET_FILE:api_pipeline_smoke> --mode ${_mode} --dither opt-checker
+                --input ${CMAKE_SOURCE_DIR}/examples/maui.jpg)
+    endforeach()
+    add_test(NAME "cell-refine-ordered-pattern-contract"
+        COMMAND $<TARGET_FILE:api_pipeline_smoke> --check-ordered-refine)
+    add_test(NAME "cell-refine-best-preserves-ordinary"
+        COMMAND ${PNG2AMIGA_PYTHON} ${CMAKE_SOURCE_DIR}/tools/check_cell_refine.py
+            --cli $<TARGET_FILE:png2amiga> --mode thomson-to7-320x16
+            --input ${CMAKE_SOURCE_DIR}/examples/maui.jpg --best)
+    add_test(NAME "cell-refine-rejects-amiga"
+        COMMAND png2amiga --mode lores --cell-refine ${PNG2AMIGA_TEST_INPUT}
+                ${CMAKE_BINARY_DIR}/cell-refine-rejected.png)
+    add_test(NAME "cell-refine-rejects-mse"
+        COMMAND png2amiga --mode cga-text80x100 --cga-text-metric mse --cell-refine
+                ${PNG2AMIGA_TEST_INPUT} ${CMAKE_BINARY_DIR}/cell-refine-mse-rejected.png)
+    set_tests_properties(cell-refine-rejects-amiga cell-refine-rejects-mse
+        PROPERTIES WILL_FAIL TRUE)
+    foreach(_case IN ITEMS "thomson-to7-320x16|maui.jpg|25"
+                           "cga-text80x100|maui.jpg|5"
+                           "thomson-to7-320x16|brick.png|0")
+        string(REPLACE "|" ";" _parts "${_case}")
+        list(GET _parts 0 _mode)
+        list(GET _parts 1 _image)
+        list(GET _parts 2 _gain)
+        add_test(NAME "cell-refine-quality-${_mode}-${_image}"
+            COMMAND ${PNG2AMIGA_PYTHON} ${CMAKE_SOURCE_DIR}/tools/check_cell_refine.py
+                --cli $<TARGET_FILE:png2amiga> --mode ${_mode}
+                --input ${CMAKE_SOURCE_DIR}/examples/${_image} --min-gain ${_gain})
+    endforeach()
+
+    add_test(NAME "tandy-native-roundtrip" COMMAND api_pipeline_smoke --check-tandy)
+    foreach(_tandy IN ITEMS tandy-160 tandy-320 tandy-640)
+        add_test(NAME "api-equiv-${_tandy}"
+            COMMAND ${_equiv_chk} --in ${_pal_makena_in} -- --mode ${_tandy})
+    endforeach()
+    add_test(NAME "cga-160-pixel-art"
+        COMMAND api_pipeline_smoke --check-cga160)
+    add_test(NAME "api-equiv-cga-160x200"
+        COMMAND ${_equiv_chk} --in ${_pal_makena_in} -- --mode cga-160x200)
+    add_test(NAME "api-equiv-cga-160"
+        COMMAND ${_equiv_chk} --in ${_pal_makena_in} -- --mode cga-160)
+
     add_test(NAME "api-equiv-cga-text80x100"
         COMMAND ${_equiv_chk} --in ${_pal_makena_in} -- --mode cga-text80x100)
     # gpu_restart_quantize made deterministic in v1.66.0 (GPU argmin
@@ -2461,12 +3048,222 @@ sys.exit(0 if got==expect else (print(f'expected {expect}, got {got}') or 1))"
     _add_score_test(lores-sliced  out.iff 54.2 --mode lores --sliced)
     _add_score_test(ehb-sliced    out.iff 62.0 --mode ehb --sliced)
     _add_score_test(ham6-sliced   out.iff 73.6 --mode ham6 --sliced)
-    _add_score_test(ham6-strips   out.iff 74.4 --mode ham6 --strips)
+    _add_score_test(ham6-strips   out.iff 75.2 --mode ham6 --strips)
     _add_score_test(vga13h        out.iff 78.0 --mode vga-13h)
     _add_score_test(ega320        out.iff -4.0 --mode ega-320)
     _add_score_test(stf-low       out.pi1 25.1 --mode stf-low)
     _add_score_test(ste-low       out.pi1 36.1 --mode ste-low)
     _add_score_test(dpf           out.iff 11.0 --mode lores --dpf)
+    _add_score_test(lores-aga-d8  out.png 83.2 --mode lores --depth 8 --chipset aga)
+    # --best must never score below the plain encode of the same mode.
+    foreach(_case IN ITEMS "lores-aga-d8|83.2|--mode;lores;--depth;8;--chipset;aga"
+                           "hires|34.4|--mode;hires;--depth;4")
+        string(REPLACE "|" ";" _parts "${_case}")
+        list(GET _parts 0 _name)
+        list(GET _parts 1 _min_s2)
+        list(SUBLIST _parts 2 -1 _mode_args)
+        add_test(NAME "output-score-${_name}-best-not-below-plain"
+            COMMAND ${_score_chk}
+                --in ${_pal_makena_in}
+                --out out.png --score-min ${_min_s2} --not-below-without best
+                -- ${_mode_args} --best)
+    endforeach()
+
+    # DPF strips: dark shades expose candidate-key collisions; the ramp
+    # requires future-color preloading and guard-aware planning/refinement.
+    # Leave margin below the measured S2 for compiler/platform variation.
+    # Guard-aware ramps score 41.57 on Clang and 37.84–37.87 on GCC 15
+    # across the Linux x86 and macOS ARM release runners.
+    foreach(_case IN ITEMS "chuck31|62" "grungy|57" "ramps|37")
+        string(REPLACE "|" ";" _parts "${_case}")
+        list(GET _parts 0 _image)
+        list(GET _parts 1 _min_s2)
+        add_test(NAME "output-score-dpf-strips-${_image}"
+            COMMAND ${_score_chk}
+                --in ${CMAKE_SOURCE_DIR}/examples/${_image}.png
+                --out out.png --score-min ${_min_s2}
+                -- --mode lores --dpf --strips --width 320 --height 200)
+    endforeach()
+    foreach(_case IN ITEMS "default" "locked" "partial-reset" "early" "late" "tall" "dbs-early")
+        set(_replay_args)
+        set(_replay_options)
+        if(_case STREQUAL "locked")
+            set(_replay_args --lock-index 15 00ff00)
+        elseif(_case STREQUAL "partial-reset")
+            set(_replay_args --slice-changes 2)
+        elseif(_case STREQUAL "early")
+            set(_replay_options --slot-shift -1)
+        elseif(_case STREQUAL "late")
+            set(_replay_options --slot-shift 1)
+        elseif(_case STREQUAL "tall")
+            set(_replay_options --height 249 --slot-shift 1)
+        elseif(_case STREQUAL "dbs-early")
+            set(_replay_options --slot-shift -1)
+            set(_replay_args --dither dbs)
+        elseif(_case STREQUAL "default")
+            set(_replay_options --check-idx)
+        endif()
+        add_test(NAME "dpf-strips-replay-${_case}"
+            COMMAND ${Python3_EXECUTABLE} ${CMAKE_SOURCE_DIR}/tools/check_strips_replay.py
+                --cli $<TARGET_FILE:png2amiga>
+                --in ${CMAKE_SOURCE_DIR}/examples/chuck31.png
+                ${_replay_options}
+                -- ${_replay_args})
+    endforeach()
+
+    # Plain lores strips, 1-4 planes on the 8-px grid (Copperline-calibrated).
+    # Every case checks the black frame (COLOR00 black outside x=0..319);
+    # "-u" cases leave colour 0 unlocked (depth 1 always is).
+    foreach(_case IN ITEMS "d1" "d2" "d3" "d4" "d2-u" "d3-u" "d4-u" "budget" "budget-u"
+                           "early-u" "late-u" "tall-u" "early" "late")
+        set(_replay_args)
+        set(_replay_options --depth 3)
+        if(_case MATCHES "^d([1-4])(-u)?$")
+            set(_replay_options --depth ${CMAKE_MATCH_1})
+            if(NOT CMAKE_MATCH_2 AND NOT CMAKE_MATCH_1 STREQUAL "1")
+                list(APPEND _replay_options --expect-black-border)
+            endif()
+        elseif(_case MATCHES "^budget")
+            set(_replay_args --slice-changes 7)
+        elseif(_case MATCHES "^early")
+            list(APPEND _replay_options --slot-shift -1)
+        elseif(_case MATCHES "^late")
+            list(APPEND _replay_options --slot-shift 1)
+        elseif(_case MATCHES "^tall")
+            list(APPEND _replay_options --height 249 --slot-shift 1)
+        endif()
+        if(_case MATCHES "-u$")
+            list(APPEND _replay_args --no-lock-color0)
+        endif()
+        if(_case MATCHES "^d3")
+            list(APPEND _replay_options --check-idx)
+        endif()
+        add_test(NAME "lores-strips-replay-${_case}"
+            COMMAND ${Python3_EXECUTABLE} ${CMAKE_SOURCE_DIR}/tools/check_strips_replay.py
+                --mode lores --cli $<TARGET_FILE:png2amiga>
+                --in ${CMAKE_SOURCE_DIR}/examples/chuck31.png
+                ${_replay_options}
+                -- ${_replay_args})
+    endforeach()
+
+    # EHB must keep base/half-brite pairs consistent across copper writes.
+    foreach(_case IN ITEMS "default" "early" "late" "tall" "dbs" "reserved" "one-base" "budget")
+        set(_replay_args)
+        set(_replay_options)
+        if(_case STREQUAL "early")
+            set(_replay_options --slot-shift -1)
+        elseif(_case STREQUAL "late")
+            set(_replay_options --slot-shift 1)
+        elseif(_case STREQUAL "tall")
+            set(_replay_options --height 249 --slot-shift 1)
+        elseif(_case STREQUAL "dbs")
+            set(_replay_options --slot-shift -1)
+            set(_replay_args --dither dbs)
+        elseif(_case STREQUAL "reserved")
+            set(_replay_options --slot-shift 1)
+            set(_replay_args --reserve-range 28-31 ff00ff)
+        elseif(_case STREQUAL "one-base")
+            set(_replay_args --reserve-range 1-31 ff00ff)
+        elseif(_case STREQUAL "budget")
+            set(_replay_args --slice-changes 3)
+        elseif(_case STREQUAL "default")
+            set(_replay_options --check-idx)
+        endif()
+        add_test(NAME "ehb-strips-replay-${_case}"
+            COMMAND ${Python3_EXECUTABLE} ${CMAKE_SOURCE_DIR}/tools/check_strips_replay.py
+                --mode ehb --expect-black-border --cli $<TARGET_FILE:png2amiga>
+                --in ${CMAKE_SOURCE_DIR}/examples/grungy.png
+                ${_replay_options} -- ${_replay_args})
+    endforeach()
+    add_test(NAME "ehb-strips-replay-maui"
+        COMMAND ${Python3_EXECUTABLE} ${CMAKE_SOURCE_DIR}/tools/check_strips_replay.py
+            --mode ehb --expect-black-border --cli $<TARGET_FILE:png2amiga>
+            --in ${CMAKE_SOURCE_DIR}/examples/maui.jpg --height 160 --slot-shift -1)
+    # Guard-aware ramps score 72.04 on Clang and 67.66–67.72 on GCC 15
+    # across the Linux x86 and macOS ARM release runners.
+    # Keep a margin for the palette planner's floating-point variation.
+    foreach(_case IN ITEMS "ramps.png|67" "electrichues02.jpg|70" "ocs_4096.png|71")
+        string(REPLACE "|" ";" _parts "${_case}")
+        list(GET _parts 0 _image)
+        list(GET _parts 1 _min_s2)
+        add_test(NAME "output-score-ehb-strips-${_image}"
+            COMMAND ${_score_chk}
+                --in ${CMAKE_SOURCE_DIR}/examples/${_image}
+                --out out.png --score-min ${_min_s2}
+                -- --mode ehb --strips --width 320 --height 200)
+    endforeach()
+
+    foreach(_case IN ITEMS "default" "budget" "tall")
+        set(_ham_height 16)
+        set(_ham_args)
+        set(_ham_options)
+        if(_case STREQUAL "budget")
+            set(_ham_args --slice-changes 3)
+        elseif(_case STREQUAL "tall")
+            set(_ham_height 213)
+        else()
+            set(_ham_options --check-idx)
+        endif()
+        add_test(NAME "ham6-strips-replay-${_case}"
+            COMMAND ${Python3_EXECUTABLE} ${CMAKE_SOURCE_DIR}/tools/check_strips_replay.py
+                --mode ham6 --expect-black-border --cli $<TARGET_FILE:png2amiga>
+                --in ${CMAKE_SOURCE_DIR}/examples/maui.jpg --height ${_ham_height}
+                ${_ham_options} -- ${_ham_args})
+    endforeach()
+
+    foreach(_case IN ITEMS "ocs" "aga-hires" "lace")
+        set(_wait_options)
+        set(_wait_args --mode ehb)
+        if(_case STREQUAL "aga-hires")
+            set(_wait_args --mode hires --depth 8 --chipset aga)
+        elseif(_case STREQUAL "lace")
+            set(_wait_options --lace)
+            set(_wait_args --mode ehb-lace)
+        endif()
+        add_test(NAME "sliced-viewer-waits-${_case}"
+            COMMAND ${Python3_EXECUTABLE} ${CMAKE_SOURCE_DIR}/tools/check_sliced_viewer_waits.py
+                --cli $<TARGET_FILE:png2amiga> --in ${CMAKE_SOURCE_DIR}/examples/maui.jpg
+                ${_wait_options} -- ${_wait_args})
+    endforeach()
+
+    foreach(_case IN ITEMS "aga" "ocs" "dpf" "dpf-sliced")
+        add_test(NAME "amiga-export-replay-${_case}"
+            COMMAND ${Python3_EXECUTABLE} ${CMAKE_SOURCE_DIR}/tools/check_amiga_export_replay.py
+                --cli $<TARGET_FILE:png2amiga> --in ${CMAKE_SOURCE_DIR}/examples/maui.jpg
+                --case ${_case})
+    endforeach()
+
+    # Exact sliced planner and depth zones (--depth auto --sliced,
+    # --output-zones) on generated OCS-exact pixel art.
+    add_test(NAME "sliced-exact-depth-zones"
+        COMMAND ${Python3_EXECUTABLE} ${CMAKE_SOURCE_DIR}/tools/check_depth_zones.py
+            --cli $<TARGET_FILE:png2amiga>)
+    add_test(NAME "dither-smooth-gradient"
+        COMMAND ${PNG2AMIGA_PYTHON} ${CMAKE_SOURCE_DIR}/tools/check_smooth_dither.py
+            --cli $<TARGET_FILE:png2amiga>)
+
+    # nibnib output decodes, by the format's rules, to the preview.
+    add_test(NAME "nibnib-decode"
+        COMMAND ${PNG2AMIGA_PYTHON} ${CMAKE_SOURCE_DIR}/tools/check_nibnib.py
+            --cli $<TARGET_FILE:png2amiga>)
+    # .nibnib is only written by --mode nibnib; nibnib needs an even width
+    # and a dither that does not pick from a palette.
+    add_test(NAME "nibnib-reject-other-mode"
+        COMMAND png2amiga --mode lores ${PNG2AMIGA_TEST_INPUT}
+                ${CMAKE_BINARY_DIR}/reject.nibnib)
+    add_test(NAME "nibnib-reject-odd-width"
+        COMMAND png2amiga --mode nibnib --width 101 ${PNG2AMIGA_TEST_INPUT}
+                ${CMAKE_BINARY_DIR}/reject-odd.nibnib)
+    add_test(NAME "nibnib-reject-palette-dither"
+        COMMAND png2amiga --mode nibnib --width 64 --dither yliluoma ${PNG2AMIGA_TEST_INPUT}
+                ${CMAKE_BINARY_DIR}/reject-yl.nibnib)
+    set_tests_properties("nibnib-reject-other-mode" "nibnib-reject-odd-width"
+                         "nibnib-reject-palette-dither" PROPERTIES WILL_FAIL TRUE)
+
+    # SNES Mode 7 output decodes, by hardware rules, to the preview.
+    add_test(NAME "snes-mode7-hardware-decode"
+        COMMAND ${PNG2AMIGA_PYTHON} ${CMAKE_SOURCE_DIR}/tools/check_snes_decode.py
+            --cli $<TARGET_FILE:png2amiga>)
 
 endif() # NOT EMSCRIPTEN
 

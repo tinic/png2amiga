@@ -81,6 +81,22 @@ time_to() {
   return $rc
 }
 
+# Third-party encoders are deterministic and slow (ham_convert q7 takes
+# minutes), so their results are reused while the source image is
+# unchanged. png2amiga entries always re-encode. FORCE=1 re-runs all.
+SRC_STAMP="$(shasum "$SRC" | cut -d' ' -f1)"
+if [ "$(cat "$OUT/.source" 2>/dev/null)" != "$SRC_STAMP" ]; then
+  FORCE=1
+  echo "$SRC_STAMP" > "$OUT/.source"
+fi
+cached() {
+  if [ -z "${FORCE:-}" ] && [ -f "$OUT/$1.png" ] && [ -f "$OUT/$1.time" ]; then
+    echo "==> [cached] $1"
+    return 0
+  fi
+  return 1
+}
+
 run_png2amiga() {
   local label="$1"; shift
   echo "==> [png2amiga] $label"
@@ -104,16 +120,16 @@ run_png2amiga() {
 # fixed-slot-zero comparison unfair (see commit 0b4bc29 — that bug had
 # slot 0 drifting to #110000 / #111111 under our --best, distorting
 # results in our favour the other way).
-echo "==> [abc] ham6 + floyd"
+cached abc-ham6 || { echo "==> [abc] ham6 + floyd"
 time_to "$OUT/abc-ham6.time" \
   "$ABC2" "$TARGET" -ham -floyd -forcecolor 0 000 \
-    -preview "$OUT/abc-ham6.png" -iff "$OUT/abc-ham6.iff" >/dev/null
+    -preview "$OUT/abc-ham6.png" -iff "$OUT/abc-ham6.iff" >/dev/null; }
 
 # 2) abc SHAM6
-echo "==> [abc] sham6 + floyd"
+cached abc-sham6 || { echo "==> [abc] sham6 + floyd"
 time_to "$OUT/abc-sham6.time" \
   "$ABC2" "$TARGET" -sham -floyd -forcecolor 0 000 \
-    -preview "$OUT/abc-sham6.png" -iff "$OUT/abc-sham6.iff" >/dev/null
+    -preview "$OUT/abc-sham6.png" -iff "$OUT/abc-sham6.iff" >/dev/null; }
 
 # ham_convert is a Swing GUI app whose JVM does NOT exit after CLI work
 # completes — even with positional args, the AWT event loop keeps it
@@ -123,6 +139,7 @@ time_to "$OUT/abc-sham6.time" \
 # names don't collide.
 run_ham_convert() {
   local label="$1" mode="$2"
+  cached "$label" && return 0
   echo "==> [ham_convert] $mode + dither_fs"
   local tmp="$OUT/_hc_${label}"
   rm -rf "$tmp"; mkdir -p "$tmp"
@@ -203,8 +220,14 @@ run_png2amiga "p2a-ham6-cap"         --mode ham6 --sliced
 # 8) png2amiga HAM6 + SLICED + best
 run_png2amiga "p2a-ham6-best"        --mode ham6 --sliced --best
 
+# 8b) png2amiga HAM6 + SLICED + STRIPS (mid-line swaps of the 16 base registers)
+run_png2amiga "p2a-ham6-strips"      --mode ham6 --sliced --strips
+
 # 9) png2amiga EHB + STRIPS + best
 run_png2amiga "p2a-ehb-best"         --mode ehb --strips --best
+
+# 9b) png2amiga EHB + STRIPS (no --best)
+run_png2amiga "p2a-ehb-strips"       --mode ehb --strips
 
 # 10) png2amiga plain EHB (no copper) + best — head-to-head with hc-ehb
 run_png2amiga "p2a-ehb-plain-best"   --mode ehb --best
@@ -229,17 +252,17 @@ run_ham_convert hc-lores-d5  ocs32
 #      5 bitplanes (no AGA path), so this is the only abc indexed entry.
 #      Same -forcecolor 0 000 + -quantize as the HAM/SHAM entries above
 #      for apples-to-apples versus png2amiga's --lock-color0 default.
-echo "==> [abc] lores-d5 + floyd"
+cached abc-lores-d5 || { echo "==> [abc] lores-d5 + floyd"
 time_to "$OUT/abc-lores-d5.time" \
   "$ABC2" "$TARGET" -bpc 5 -floyd -quantize -forcecolor 0 000 \
-    -preview "$OUT/abc-lores-d5.png" -iff "$OUT/abc-lores-d5.iff" >/dev/null
+    -preview "$OUT/abc-lores-d5.png" -iff "$OUT/abc-lores-d5.iff" >/dev/null; }
 
 # 15) libimagequant via pngquant CLI: 32 colours, max quality (--speed 1),
 #     Floyd-Steinberg (the default for pngquant). pngquant outputs an
 #     indexed PNG-8 (PLTE chunk) at the input dimensions — same shape
 #     as our --mode lores --depth 5 output, so the PSNR script reads
 #     it identically. Skipped when pngquant isn't installed.
-if [ -n "$PNGQUANT" ] && [ -x "$PNGQUANT" ]; then
+if [ -n "$PNGQUANT" ] && [ -x "$PNGQUANT" ] && ! cached libimagequant-32; then
     echo "==> [pngquant] 32 colours + floyd"
     time_to "$OUT/libimagequant-32.time" \
       "$PNGQUANT" --speed 1 --strip --output "$OUT/libimagequant-32.png" \
@@ -256,7 +279,7 @@ run_png2amiga "p2a-lores-d8"         --mode lores --depth 8 --chipset aga
 run_png2amiga "p2a-lores-d8-best"    --mode lores --depth 8 --chipset aga --best
 
 # 18) libimagequant 256 colours head-to-head with d=8.
-if [ -n "$PNGQUANT" ] && [ -x "$PNGQUANT" ]; then
+if [ -n "$PNGQUANT" ] && [ -x "$PNGQUANT" ] && ! cached libimagequant-256; then
     echo "==> [pngquant] 256 colours + floyd"
     time_to "$OUT/libimagequant-256.time" \
       "$PNGQUANT" --speed 1 --strip --output "$OUT/libimagequant-256.png" \
@@ -269,6 +292,7 @@ fi
 MAGICK="${MAGICK:-$(command -v magick || true)}"
 if [ -n "$MAGICK" ] && [ -x "$MAGICK" ]; then
     for N in 32 256; do
+        cached "imagemagick-$N" && continue
         echo "==> [ImageMagick] $N colours + floyd"
         time_to "$OUT/imagemagick-$N.time" \
           "$MAGICK" "$TARGET" -dither FloydSteinberg -colors "$N" \
@@ -287,6 +311,7 @@ PNMQUANT="${PNMQUANT:-$(command -v pnmquant || true)}"
 PNMTOPNG="${PNMTOPNG:-$(command -v pnmtopng || true)}"
 if [ -n "$PNGTOPNM" ] && [ -n "$PNMQUANT" ] && [ -n "$PNMTOPNG" ]; then
     for N in 32 256; do
+        cached "netpbm-$N" && continue
         echo "==> [Netpbm] $N colours + floyd"
         time_to "$OUT/netpbm-$N.time" \
           bash -c "'$PNGTOPNM' '$TARGET' | '$PNMQUANT' -floyd $N | '$PNMTOPNG' > '$OUT/netpbm-$N.png'"
@@ -302,6 +327,7 @@ fi
 FFMPEG="${FFMPEG:-$(command -v ffmpeg || true)}"
 if [ -n "$FFMPEG" ] && [ -x "$FFMPEG" ]; then
     for N in 32 256; do
+        cached "ffmpeg-$N" && continue
         echo "==> [ffmpeg] $N colours + floyd"
         # palettegen stage isn't timed; it's preparatory.
         "$FFMPEG" -y -i "$TARGET" \
@@ -324,6 +350,7 @@ fi
 GIFSICLE="${GIFSICLE:-$(command -v gifsicle || true)}"
 if [ -n "$GIFSICLE" ] && [ -x "$GIFSICLE" ] && [ -n "$MAGICK" ]; then
     for N in 32 256; do
+        cached "gifsicle-$N" && continue
         echo "==> [gifsicle] $N colours + floyd"
         "$MAGICK" "$TARGET" "$OUT/_gs_in.gif" 2>/dev/null
         time_to "$OUT/gifsicle-$N.time" \
@@ -344,6 +371,7 @@ fi
 PNGNQ="${PNGNQ:-$(command -v pngnq || true)}"
 if [ -n "$PNGNQ" ] && [ -x "$PNGNQ" ]; then
     for N in 32 256; do
+        cached "pngnq-$N" && continue
         echo "==> [pngnq] $N colours + floyd"
         cp "$TARGET" "$OUT/_pn_in.png"
         time_to "$OUT/pngnq-$N.time" \
@@ -363,6 +391,7 @@ fi
 DIDDER="${DIDDER:-$(command -v didder || true)}"
 if [ -n "$DIDDER" ] && [ -x "$DIDDER" ]; then
     for N in 32 256; do
+        cached "didder-$N" && continue
         echo "==> [didder] $N colours + floyd"
         time_to "$OUT/didder-$N.time" \
             "$DIDDER" --palette "mmcq:$N" -i "$TARGET" \

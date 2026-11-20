@@ -96,6 +96,7 @@ struct Mode7PackResult {
 struct SlotPre {
     std::array<color_space::OKLab, 64> lab;
     std::array<color_space::OKLab, 64> blur;
+    float weight = 1.0f;  // flatness: scales the tile's error in the merge
 };
 
 // Optional per-slot prepare + cached pair score. When `prepare` is set

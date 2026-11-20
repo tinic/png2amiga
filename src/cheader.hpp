@@ -70,6 +70,11 @@ struct CHeaderOptions {
     // rebuild the diffs so each field sees transitions between the rows it
     // actually draws (row y ← row y-2) rather than the default row y-1.
     const std::vector<std::vector<Color3f>>* copper_scanline_palettes = nullptr;
+    // Depth zones (copper::DepthZone, sliced only). The bitplane data is
+    // emitted interleaved with each row holding only its zone's planes; the
+    // viewer switches BPLCON0 and the modulos at each boundary and the .h
+    // carries the zone table. `planes` stays at the deepest zone's depth.
+    std::span<const copper::DepthZone> depth_zones;
 
     // strips (Super Sliced palette): mid-line COLORxx writes at
     // fixed horizontal slot positions, anchored by a per-line WAIT.
@@ -83,6 +88,10 @@ struct CHeaderOptions {
     std::string strips_label;
     int strips_anchor_hpos = 0;
     int strips_total_planes = 0;
+    // ScapSlotTable::display_shift_px: the viewer shows the bitplanes this
+    // many lores pixels left of the standard placement (extra fetch word,
+    // BPLCON1 delay 16-shift, BPLxMOD -2, DIW H -shift). 0 = standard.
+    int strips_display_shift = 0;
 
     // Multi-frame viewer (--batch --batch-format cpp). When non-empty, the
     // viewer emits one bitplane data array per frame (including the primary

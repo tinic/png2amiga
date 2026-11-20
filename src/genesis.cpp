@@ -64,17 +64,18 @@ TileFingerprint fingerprint_tile(const Image& img, std::size_t tx0, std::size_t 
 
 // Simple k-means in OKLab with farthest-point seeding. Returns cluster
 // assignment per tile (size = n_tiles).
-std::vector<std::uint8_t> kmeans_tiles(std::span<const TileFingerprint> tiles, std::uint32_t seed) {
+std::vector<std::uint8_t> kmeans_tiles(std::span<const TileFingerprint> tiles,
+                                       std::uint32_t seed,
+                                       std::size_t K) {
 
-    constexpr std::size_t K = kPaletteCount;
     std::vector<std::uint8_t> assign(tiles.size(), 0);
-    if (tiles.empty()) return assign;
+    if (tiles.empty() || K == 0) return assign;
 
     // Farthest-point seeding (k-means++ flavour). Start with the first
     // non-empty tile, then pick each next centroid as the tile farthest
     // from any existing centroid.
-    std::array<OKLab, K> centroids{};
-    std::array<bool, K> centroid_set{};
+    std::vector<OKLab> centroids(K);
+    std::vector<bool> centroid_set(K, false);
     centroids[0] = tiles.front().centroid;
     centroid_set[0] = true;
 
@@ -134,8 +135,8 @@ std::vector<std::uint8_t> kmeans_tiles(std::span<const TileFingerprint> tiles, s
         if (!changed && iter > 0) break;
 
         // Update step.
-        std::array<OKLab, K> sums{};
-        std::array<std::size_t, K> counts{};
+        std::vector<OKLab> sums(K);
+        std::vector<std::size_t> counts(K, 0);
         for (std::size_t i = 0; i < tiles.size(); ++i) {
             if (tiles[i].pixel_count == 0) continue;
             auto k = assign[i];
@@ -227,6 +228,18 @@ void build_palette_line(const Image& image,
 
 }  // namespace
 
+std::vector<std::uint8_t> cluster_tiles(const Image& image, std::size_t palette_count) {
+    auto tiles_x = (image.width() + kTileSide - 1) / kTileSide;
+    auto tiles_y = (image.height() + kTileSide - 1) / kTileSide;
+    std::vector<TileFingerprint> fps(tiles_x * tiles_y);
+    for (std::size_t ty = 0; ty < tiles_y; ++ty) {
+        for (std::size_t tx = 0; tx < tiles_x; ++tx) {
+            fps[ty * tiles_x + tx] = fingerprint_tile(image, tx * kTileSide, ty * kTileSide);
+        }
+    }
+    return kmeans_tiles(fps, 0, palette_count);
+}
+
 GenesisResult cluster_tiles_into_palettes(const Image& image, float palette_diversity) {
 
     GenesisResult res;
@@ -242,13 +255,7 @@ GenesisResult cluster_tiles_into_palettes(const Image& image, float palette_dive
 
     // 1. Centroid k-means seeding — fast initial assignment that's "close
     //    enough" for refinement to take over.
-    std::vector<TileFingerprint> fps(n_tiles);
-    for (std::size_t ty = 0; ty < tiles_y; ++ty) {
-        for (std::size_t tx = 0; tx < tiles_x; ++tx) {
-            fps[ty * tiles_x + tx] = fingerprint_tile(image, tx * kTileSide, ty * kTileSide);
-        }
-    }
-    res.tile_palette = kmeans_tiles(fps, 0);
+    res.tile_palette = cluster_tiles(image, kPaletteCount);
 
     // 2. Build initial palette lines from the centroid-clustering.
     for (std::size_t k = 0; k < kPaletteCount; ++k) {

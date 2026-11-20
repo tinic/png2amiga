@@ -167,6 +167,36 @@ ScanlineResult encode_scanline_dp_per_strip(std::span<const Color3f> target_row,
                                             std::size_t beam_width,
                                             HamMetric metric);
 
+// Ordered-dither target for the HAM encoders: the method's threshold at
+// (x, y) biases the pixel in OKLab before op selection.
+Color3f ordered_dither_target(
+    Color3f c, dither::Method method, std::size_t x, std::size_t y, float strength);
+
+// One DP beam entry: held output colour and cumulative error. A beam
+// captured after pixel x-1 resumes the DP at pixel x exactly, because
+// pixels before x do not depend on the palettes of later strips.
+struct DpBeamEntry {
+    SRGBColor color;
+    float cumulative_error;
+};
+using DpBeam = std::vector<DpBeamEntry>;
+
+// Score-only per-strip DP from pixel x0, seeded with `seed` (the beam
+// after pixel x0-1, or {start_color, 0} for x0 = 0). Returns the same
+// total error as encode_scanline_dp_per_strip over the whole row with
+// these palettes. capture_x (ascending, each > x0) receives the beam
+// before each listed pixel in `captures` (resized to capture_x.size()).
+float score_scanline_dp_per_strip_from(std::span<const Color3f> target_row,
+                                       const DpBeam& seed,
+                                       std::size_t x0,
+                                       std::span<const HamPrecomp> pres,
+                                       std::span<const std::span<const SRGBColor>> base_srgbs,
+                                       std::span<const std::uint16_t> strip_for_x,
+                                       std::size_t beam_width,
+                                       HamMetric metric,
+                                       std::span<const std::size_t> capture_x = {},
+                                       std::vector<DpBeam>* captures = nullptr);
+
 // Per-strip palette-aware ordered-dither HAM encoder. Drives a yliluoma-
 // family picker (opt-checker / opt-line / opt-vline / opt-line-checker /
 // opt-vline-checker / yliluoma{,1,2} / knoll / tri-tone) over the per-

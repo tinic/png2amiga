@@ -1,0 +1,830 @@
+[
+  {
+    "baseline": 53.00699996948242,
+    "dither": "opt-checker",
+    "input": "examples/3macao.jpg",
+    "paired": {
+      "evaluations": 16,
+      "gain": 1.4546737670898438,
+      "s2": 54.461673736572266,
+      "seconds": 0.33129725
+    },
+    "single": {
+      "evaluations": 16,
+      "gain": 0.70037841796875,
+      "s2": 53.70737838745117,
+      "seconds": 0.323286041
+    },
+    "directory": "opt-checker-3macao"
+  },
+  {
+    "baseline": 61.732418060302734,
+    "dither": "opt-checker",
+    "input": "examples/asterix.png",
+    "paired": {
+      "evaluations": 16,
+      "gain": 0.6642951965332031,
+      "s2": 62.39671325683594,
+      "seconds": 0.341173958
+    },
+    "single": {
+      "evaluations": 16,
+      "gain": 0.4317741394042969,
+      "s2": 62.16419219970703,
+      "seconds": 0.325888167
+    },
+    "directory": "opt-checker-asterix"
+  },
+  {
+    "baseline": 69.29774475097656,
+    "dither": "opt-checker",
+    "input": "examples/brick.png",
+    "paired": {
+      "evaluations": 6,
+      "gain": 0.0,
+      "s2": 69.29774475097656,
+      "seconds": 0.127813625
+    },
+    "single": {
+      "evaluations": 3,
+      "gain": 0.0,
+      "s2": 69.29774475097656,
+      "seconds": 0.073912875
+    },
+    "directory": "opt-checker-brick"
+  },
+  {
+    "baseline": 54.916412353515625,
+    "dither": "opt-checker",
+    "input": "examples/chuck29.png",
+    "paired": {
+      "evaluations": 16,
+      "gain": 2.9551429748535156,
+      "s2": 57.87155532836914,
+      "seconds": 0.37818575
+    },
+    "single": {
+      "evaluations": 16,
+      "gain": 0.82708740234375,
+      "s2": 55.743499755859375,
+      "seconds": 0.304911292
+    },
+    "directory": "opt-checker-chuck29"
+  },
+  {
+    "baseline": 66.45043182373047,
+    "dither": "opt-checker",
+    "input": "examples/chuck30.png",
+    "paired": {
+      "evaluations": 16,
+      "gain": 2.3759613037109375,
+      "s2": 68.8263931274414,
+      "seconds": 0.311919708
+    },
+    "single": {
+      "evaluations": 16,
+      "gain": 1.0819854736328125,
+      "s2": 67.53241729736328,
+      "seconds": 0.344694375
+    },
+    "directory": "opt-checker-chuck30"
+  },
+  {
+    "baseline": 63.48649215698242,
+    "dither": "opt-checker",
+    "input": "examples/chuck31.png",
+    "paired": {
+      "evaluations": 16,
+      "gain": 1.4759559631347656,
+      "s2": 64.96244812011719,
+      "seconds": 0.300659542
+    },
+    "single": {
+      "evaluations": 16,
+      "gain": 0.8813209533691406,
+      "s2": 64.36781311035156,
+      "seconds": 0.32181425
+    },
+    "directory": "opt-checker-chuck31"
+  },
+  {
+    "baseline": 54.088260650634766,
+    "dither": "opt-checker",
+    "input": "examples/electrichues02.jpg",
+    "paired": {
+      "evaluations": 16,
+      "gain": 2.537189483642578,
+      "s2": 56.625450134277344,
+      "seconds": 0.323688791
+    },
+    "single": {
+      "evaluations": 16,
+      "gain": 1.3480567932128906,
+      "s2": 55.436317443847656,
+      "seconds": 0.316793042
+    },
+    "directory": "opt-checker-electrichues02"
+  },
+  {
+    "baseline": 54.366825103759766,
+    "dither": "opt-checker",
+    "input": "examples/fantasy.png",
+    "paired": {
+      "evaluations": 16,
+      "gain": 3.2899093627929688,
+      "s2": 57.656734466552734,
+      "seconds": 0.346206458
+    },
+    "single": {
+      "evaluations": 16,
+      "gain": 2.4680747985839844,
+      "s2": 56.83489990234375,
+      "seconds": 0.329356292
+    },
+    "directory": "opt-checker-fantasy"
+  },
+  {
+    "baseline": 53.106605529785156,
+    "dither": "opt-checker",
+    "input": "examples/fantasy1.png",
+    "paired": {
+      "evaluations": 16,
+      "gain": 2.9686355590820312,
+      "s2": 56.07524108886719,
+      "seconds": 0.345655791
+    },
+    "single": {
+      "evaluations": 16,
+      "gain": 1.9151039123535156,
+      "s2": 55.02170944213867,
+      "seconds": 0.3306575
+    },
+    "directory": "opt-checker-fantasy1"
+  },
+  {
+    "baseline": 48.72166061401367,
+    "dither": "opt-checker",
+    "input": "examples/fantasy2.png",
+    "paired": {
+      "evaluations": 16,
+      "gain": 4.303989410400391,
+      "s2": 53.02565002441406,
+      "seconds": 0.352459375
+    },
+    "single": {
+      "evaluations": 16,
+      "gain": 1.6629524230957031,
+      "s2": 50.384613037109375,
+      "seconds": 0.335151583
+    },
+    "directory": "opt-checker-fantasy2"
+  },
+  {
+    "baseline": 51.86516571044922,
+    "dither": "opt-checker",
+    "input": "examples/fromthe.png",
+    "paired": {
+      "evaluations": 16,
+      "gain": 2.4381675720214844,
+      "s2": 54.3033332824707,
+      "seconds": 0.34287725
+    },
+    "single": {
+      "evaluations": 16,
+      "gain": 1.5344619750976562,
+      "s2": 53.399627685546875,
+      "seconds": 0.332950167
+    },
+    "directory": "opt-checker-fromthe"
+  },
+  {
+    "baseline": 64.19435119628906,
+    "dither": "opt-checker",
+    "input": "examples/grungy.png",
+    "paired": {
+      "evaluations": 1,
+      "gain": 0.0,
+      "s2": 64.19435119628906,
+      "seconds": 0.037991709
+    },
+    "single": {
+      "evaluations": 1,
+      "gain": 0.21103668212890625,
+      "s2": 64.40538787841797,
+      "seconds": 0.045549041
+    },
+    "directory": "opt-checker-grungy"
+  },
+  {
+    "baseline": 69.24002838134766,
+    "dither": "opt-checker",
+    "input": "examples/jungle.webp",
+    "paired": {
+      "evaluations": 16,
+      "gain": 0.66412353515625,
+      "s2": 69.9041519165039,
+      "seconds": 0.344545833
+    },
+    "single": {
+      "evaluations": 16,
+      "gain": 0.6964569091796875,
+      "s2": 69.93648529052734,
+      "seconds": 0.337164417
+    },
+    "directory": "opt-checker-jungle"
+  },
+  {
+    "baseline": 47.2501335144043,
+    "dither": "opt-checker",
+    "input": "examples/logo.png",
+    "paired": {
+      "evaluations": 16,
+      "gain": 1.5353965759277344,
+      "s2": 48.78553009033203,
+      "seconds": 0.310279083
+    },
+    "single": {
+      "evaluations": 16,
+      "gain": 1.0343093872070312,
+      "s2": 48.28444290161133,
+      "seconds": 0.306650791
+    },
+    "directory": "opt-checker-logo"
+  },
+  {
+    "baseline": 50.68121337890625,
+    "dither": "opt-checker",
+    "input": "examples/lovers.jpg",
+    "paired": {
+      "evaluations": 16,
+      "gain": 0.47566986083984375,
+      "s2": 51.156883239746094,
+      "seconds": 0.325717917
+    },
+    "single": {
+      "evaluations": 16,
+      "gain": 1.1088752746582031,
+      "s2": 51.79008865356445,
+      "seconds": 0.334714334
+    },
+    "directory": "opt-checker-lovers"
+  },
+  {
+    "baseline": 47.02058410644531,
+    "dither": "opt-checker",
+    "input": "examples/macaw.jpg",
+    "paired": {
+      "evaluations": 16,
+      "gain": 4.1959991455078125,
+      "s2": 51.216583251953125,
+      "seconds": 0.317959667
+    },
+    "single": {
+      "evaluations": 16,
+      "gain": 3.706592559814453,
+      "s2": 50.727176666259766,
+      "seconds": 0.31486025
+    },
+    "directory": "opt-checker-macaw"
+  },
+  {
+    "baseline": 48.690574645996094,
+    "dither": "opt-checker",
+    "input": "examples/makena.jpg",
+    "paired": {
+      "evaluations": 16,
+      "gain": 1.2993850708007812,
+      "s2": 49.989959716796875,
+      "seconds": 0.317588583
+    },
+    "single": {
+      "evaluations": 16,
+      "gain": 0.8115806579589844,
+      "s2": 49.50215530395508,
+      "seconds": 0.314714459
+    },
+    "directory": "opt-checker-makena"
+  },
+  {
+    "baseline": 46.87453079223633,
+    "dither": "opt-checker",
+    "input": "examples/maui.jpg",
+    "paired": {
+      "evaluations": 16,
+      "gain": 0.5303993225097656,
+      "s2": 47.404930114746094,
+      "seconds": 0.322797458
+    },
+    "single": {
+      "evaluations": 16,
+      "gain": 1.0064620971679688,
+      "s2": 47.8809928894043,
+      "seconds": 0.316902583
+    },
+    "directory": "opt-checker-maui"
+  },
+  {
+    "baseline": 34.16593551635742,
+    "dither": "opt-checker",
+    "input": "examples/ocs_4096.png",
+    "paired": {
+      "evaluations": 16,
+      "gain": 0.695587158203125,
+      "s2": 34.86152267456055,
+      "seconds": 0.290340833
+    },
+    "single": {
+      "evaluations": 16,
+      "gain": 0.7819404602050781,
+      "s2": 34.9478759765625,
+      "seconds": 0.285220875
+    },
+    "directory": "opt-checker-ocs_4096"
+  },
+  {
+    "baseline": 41.08375549316406,
+    "dither": "opt-checker",
+    "input": "examples/photo.jpg",
+    "paired": {
+      "evaluations": 16,
+      "gain": 0.07282638549804688,
+      "s2": 41.15658187866211,
+      "seconds": 0.310215208
+    },
+    "single": {
+      "evaluations": 16,
+      "gain": 0.12811279296875,
+      "s2": 41.21186828613281,
+      "seconds": 0.303876416
+    },
+    "directory": "opt-checker-photo"
+  },
+  {
+    "baseline": 49.66581726074219,
+    "dither": "opt-checker",
+    "input": "examples/ramps.png",
+    "paired": {
+      "evaluations": 15,
+      "gain": 3.9385337829589844,
+      "s2": 53.60435104370117,
+      "seconds": 0.282147583
+    },
+    "single": {
+      "evaluations": 16,
+      "gain": 2.9710960388183594,
+      "s2": 52.63691329956055,
+      "seconds": 0.300460917
+    },
+    "directory": "opt-checker-ramps"
+  },
+  {
+    "baseline": 45.20615768432617,
+    "dither": "opt-checker",
+    "input": "examples/shooter.png",
+    "paired": {
+      "evaluations": 16,
+      "gain": 1.9246292114257812,
+      "s2": 47.13078689575195,
+      "seconds": 0.318052041
+    },
+    "single": {
+      "evaluations": 16,
+      "gain": 1.6088371276855469,
+      "s2": 46.81499481201172,
+      "seconds": 0.309436792
+    },
+    "directory": "opt-checker-shooter"
+  },
+  {
+    "baseline": 49.5988655090332,
+    "dither": "opt-checker",
+    "input": "examples/space3.png",
+    "paired": {
+      "evaluations": 16,
+      "gain": 3.256877899169922,
+      "s2": 52.855743408203125,
+      "seconds": 0.325557458
+    },
+    "single": {
+      "evaluations": 16,
+      "gain": 2.9415206909179688,
+      "s2": 52.54038619995117,
+      "seconds": 0.317236625
+    },
+    "directory": "opt-checker-space3"
+  },
+  {
+    "baseline": 56.986270904541016,
+    "dither": "floyd-steinberg",
+    "input": "examples/3macao.jpg",
+    "paired": {
+      "evaluations": 16,
+      "gain": 1.1439056396484375,
+      "s2": 58.13017654418945,
+      "seconds": 0.298306625
+    },
+    "single": {
+      "evaluations": 16,
+      "gain": 0.7506790161132812,
+      "s2": 57.7369499206543,
+      "seconds": 0.290535833
+    },
+    "directory": "floyd-steinberg-3macao"
+  },
+  {
+    "baseline": 65.60018157958984,
+    "dither": "floyd-steinberg",
+    "input": "examples/asterix.png",
+    "paired": {
+      "evaluations": 16,
+      "gain": 0.28629302978515625,
+      "s2": 65.886474609375,
+      "seconds": 0.285622917
+    },
+    "single": {
+      "evaluations": 16,
+      "gain": 0.76617431640625,
+      "s2": 66.3663558959961,
+      "seconds": 0.289541542
+    },
+    "directory": "floyd-steinberg-asterix"
+  },
+  {
+    "baseline": 75.4842529296875,
+    "dither": "floyd-steinberg",
+    "input": "examples/brick.png",
+    "paired": {
+      "evaluations": 3,
+      "gain": 0.0,
+      "s2": 75.4842529296875,
+      "seconds": 0.06292175
+    },
+    "single": {
+      "evaluations": 10,
+      "gain": 0.32302093505859375,
+      "s2": 75.8072738647461,
+      "seconds": 0.174827709
+    },
+    "directory": "floyd-steinberg-brick"
+  },
+  {
+    "baseline": 63.832733154296875,
+    "dither": "floyd-steinberg",
+    "input": "examples/chuck29.png",
+    "paired": {
+      "evaluations": 16,
+      "gain": 6.465736389160156,
+      "s2": 70.29846954345703,
+      "seconds": 0.255866959
+    },
+    "single": {
+      "evaluations": 16,
+      "gain": 4.884880065917969,
+      "s2": 68.71761322021484,
+      "seconds": 0.248331084
+    },
+    "directory": "floyd-steinberg-chuck29"
+  },
+  {
+    "baseline": 70.10465240478516,
+    "dither": "floyd-steinberg",
+    "input": "examples/chuck30.png",
+    "paired": {
+      "evaluations": 13,
+      "gain": 2.5894088745117188,
+      "s2": 72.69406127929688,
+      "seconds": 0.221755542
+    },
+    "single": {
+      "evaluations": 16,
+      "gain": 1.9171600341796875,
+      "s2": 72.02181243896484,
+      "seconds": 0.258271708
+    },
+    "directory": "floyd-steinberg-chuck30"
+  },
+  {
+    "baseline": 70.91337585449219,
+    "dither": "floyd-steinberg",
+    "input": "examples/chuck31.png",
+    "paired": {
+      "evaluations": 16,
+      "gain": 0.8464889526367188,
+      "s2": 71.7598648071289,
+      "seconds": 0.245607667
+    },
+    "single": {
+      "evaluations": 16,
+      "gain": 0.21727752685546875,
+      "s2": 71.13065338134766,
+      "seconds": 0.240882042
+    },
+    "directory": "floyd-steinberg-chuck31"
+  },
+  {
+    "baseline": 59.35917282104492,
+    "dither": "floyd-steinberg",
+    "input": "examples/electrichues02.jpg",
+    "paired": {
+      "evaluations": 16,
+      "gain": 3.0038414001464844,
+      "s2": 62.363014221191406,
+      "seconds": 0.278963041
+    },
+    "single": {
+      "evaluations": 16,
+      "gain": 2.0627708435058594,
+      "s2": 61.42194366455078,
+      "seconds": 0.284044542
+    },
+    "directory": "floyd-steinberg-electrichues02"
+  },
+  {
+    "baseline": 56.98976135253906,
+    "dither": "floyd-steinberg",
+    "input": "examples/fantasy.png",
+    "paired": {
+      "evaluations": 16,
+      "gain": 1.2755889892578125,
+      "s2": 58.265350341796875,
+      "seconds": 0.292985292
+    },
+    "single": {
+      "evaluations": 16,
+      "gain": 1.561553955078125,
+      "s2": 58.55131530761719,
+      "seconds": 0.298174792
+    },
+    "directory": "floyd-steinberg-fantasy"
+  },
+  {
+    "baseline": 54.49203872680664,
+    "dither": "floyd-steinberg",
+    "input": "examples/fantasy1.png",
+    "paired": {
+      "evaluations": 16,
+      "gain": 3.5211639404296875,
+      "s2": 58.01320266723633,
+      "seconds": 0.297550791
+    },
+    "single": {
+      "evaluations": 16,
+      "gain": 2.3929672241210938,
+      "s2": 56.885005950927734,
+      "seconds": 0.29163275
+    },
+    "directory": "floyd-steinberg-fantasy1"
+  },
+  {
+    "baseline": 51.62944793701172,
+    "dither": "floyd-steinberg",
+    "input": "examples/fantasy2.png",
+    "paired": {
+      "evaluations": 16,
+      "gain": 1.7626380920410156,
+      "s2": 53.392086029052734,
+      "seconds": 0.299362458
+    },
+    "single": {
+      "evaluations": 16,
+      "gain": 1.1028022766113281,
+      "s2": 52.73225021362305,
+      "seconds": 0.295780125
+    },
+    "directory": "floyd-steinberg-fantasy2"
+  },
+  {
+    "baseline": 55.397125244140625,
+    "dither": "floyd-steinberg",
+    "input": "examples/fromthe.png",
+    "paired": {
+      "evaluations": 16,
+      "gain": 2.1072311401367188,
+      "s2": 57.504356384277344,
+      "seconds": 0.290251166
+    },
+    "single": {
+      "evaluations": 16,
+      "gain": 2.378864288330078,
+      "s2": 57.7759895324707,
+      "seconds": 0.28687525
+    },
+    "directory": "floyd-steinberg-fromthe"
+  },
+  {
+    "baseline": 68.02685546875,
+    "dither": "floyd-steinberg",
+    "input": "examples/grungy.png",
+    "paired": {
+      "evaluations": 0,
+      "gain": 0.0,
+      "s2": 68.02685546875,
+      "seconds": 0.018569
+    },
+    "single": {
+      "evaluations": 2,
+      "gain": 0.052642822265625,
+      "s2": 68.07949829101562,
+      "seconds": 0.056866167
+    },
+    "directory": "floyd-steinberg-grungy"
+  },
+  {
+    "baseline": 73.45587921142578,
+    "dither": "floyd-steinberg",
+    "input": "examples/jungle.webp",
+    "paired": {
+      "evaluations": 16,
+      "gain": 0.379791259765625,
+      "s2": 73.8356704711914,
+      "seconds": 0.279466583
+    },
+    "single": {
+      "evaluations": 16,
+      "gain": 0.36107635498046875,
+      "s2": 73.81695556640625,
+      "seconds": 0.273345417
+    },
+    "directory": "floyd-steinberg-jungle"
+  },
+  {
+    "baseline": 50.357025146484375,
+    "dither": "floyd-steinberg",
+    "input": "examples/logo.png",
+    "paired": {
+      "evaluations": 16,
+      "gain": 1.69024658203125,
+      "s2": 52.047271728515625,
+      "seconds": 0.233608792
+    },
+    "single": {
+      "evaluations": 16,
+      "gain": 1.6917304992675781,
+      "s2": 52.04875564575195,
+      "seconds": 0.230520166
+    },
+    "directory": "floyd-steinberg-logo"
+  },
+  {
+    "baseline": 55.5570182800293,
+    "dither": "floyd-steinberg",
+    "input": "examples/lovers.jpg",
+    "paired": {
+      "evaluations": 16,
+      "gain": 1.208038330078125,
+      "s2": 56.76505661010742,
+      "seconds": 0.285618583
+    },
+    "single": {
+      "evaluations": 16,
+      "gain": 0.9923133850097656,
+      "s2": 56.54933166503906,
+      "seconds": 0.278503166
+    },
+    "directory": "floyd-steinberg-lovers"
+  },
+  {
+    "baseline": 48.782447814941406,
+    "dither": "floyd-steinberg",
+    "input": "examples/macaw.jpg",
+    "paired": {
+      "evaluations": 16,
+      "gain": 6.700626373291016,
+      "s2": 55.48307418823242,
+      "seconds": 0.269240333
+    },
+    "single": {
+      "evaluations": 16,
+      "gain": 5.754512786865234,
+      "s2": 54.53696060180664,
+      "seconds": 0.26257125
+    },
+    "directory": "floyd-steinberg-macaw"
+  },
+  {
+    "baseline": 52.535221099853516,
+    "dither": "floyd-steinberg",
+    "input": "examples/makena.jpg",
+    "paired": {
+      "evaluations": 16,
+      "gain": 1.7163352966308594,
+      "s2": 54.251556396484375,
+      "seconds": 0.27500675
+    },
+    "single": {
+      "evaluations": 16,
+      "gain": 1.2403755187988281,
+      "s2": 53.775596618652344,
+      "seconds": 0.265974
+    },
+    "directory": "floyd-steinberg-makena"
+  },
+  {
+    "baseline": 50.466129302978516,
+    "dither": "floyd-steinberg",
+    "input": "examples/maui.jpg",
+    "paired": {
+      "evaluations": 16,
+      "gain": 1.8353042602539062,
+      "s2": 52.30143356323242,
+      "seconds": 0.287894583
+    },
+    "single": {
+      "evaluations": 16,
+      "gain": 1.1111106872558594,
+      "s2": 51.577239990234375,
+      "seconds": 0.270009792
+    },
+    "directory": "floyd-steinberg-maui"
+  },
+  {
+    "baseline": 35.66893768310547,
+    "dither": "floyd-steinberg",
+    "input": "examples/ocs_4096.png",
+    "paired": {
+      "evaluations": 16,
+      "gain": 2.214935302734375,
+      "s2": 37.883872985839844,
+      "seconds": 0.239910042
+    },
+    "single": {
+      "evaluations": 16,
+      "gain": 0.8153495788574219,
+      "s2": 36.48428726196289,
+      "seconds": 0.242013042
+    },
+    "directory": "floyd-steinberg-ocs_4096"
+  },
+  {
+    "baseline": 56.47388458251953,
+    "dither": "floyd-steinberg",
+    "input": "examples/photo.jpg",
+    "paired": {
+      "evaluations": 16,
+      "gain": 0.17451095581054688,
+      "s2": 56.64839553833008,
+      "seconds": 0.243296916
+    },
+    "single": {
+      "evaluations": 16,
+      "gain": 0.22954177856445312,
+      "s2": 56.703426361083984,
+      "seconds": 0.249571917
+    },
+    "directory": "floyd-steinberg-photo"
+  },
+  {
+    "baseline": 58.244651794433594,
+    "dither": "floyd-steinberg",
+    "input": "examples/ramps.png",
+    "paired": {
+      "evaluations": 14,
+      "gain": 0.8147926330566406,
+      "s2": 59.059444427490234,
+      "seconds": 0.195373875
+    },
+    "single": {
+      "evaluations": 16,
+      "gain": 0.5950241088867188,
+      "s2": 58.83967590332031,
+      "seconds": 0.225334667
+    },
+    "directory": "floyd-steinberg-ramps"
+  },
+  {
+    "baseline": 57.30571746826172,
+    "dither": "floyd-steinberg",
+    "input": "examples/shooter.png",
+    "paired": {
+      "evaluations": 16,
+      "gain": 2.4120330810546875,
+      "s2": 59.717750549316406,
+      "seconds": 0.262779792
+    },
+    "single": {
+      "evaluations": 16,
+      "gain": 1.78375244140625,
+      "s2": 59.08946990966797,
+      "seconds": 0.259592958
+    },
+    "directory": "floyd-steinberg-shooter"
+  },
+  {
+    "baseline": 50.419368743896484,
+    "dither": "floyd-steinberg",
+    "input": "examples/space3.png",
+    "paired": {
+      "evaluations": 16,
+      "gain": 2.976093292236328,
+      "s2": 53.39546203613281,
+      "seconds": 0.262966791
+    },
+    "single": {
+      "evaluations": 16,
+      "gain": 1.9425048828125,
+      "s2": 52.361873626708984,
+      "seconds": 0.260335333
+    },
+    "directory": "floyd-steinberg-space3"
+  }
+]

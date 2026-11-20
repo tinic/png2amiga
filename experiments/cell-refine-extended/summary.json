@@ -1,0 +1,172 @@
+[
+  {
+    "mode": "thomson-to7-320x16",
+    "count": 23,
+    "before": -55.88391304347826,
+    "after": -40.294347826086955,
+    "delta": 15.589565217391304,
+    "wins": 18,
+    "ties": 5,
+    "losses": 0
+  },
+  {
+    "mode": "cga-text80x200",
+    "count": 23,
+    "before": -27.98695652173913,
+    "after": -6.894782608695651,
+    "delta": 21.09217391304348,
+    "wins": 23,
+    "ties": 0,
+    "losses": 0
+  },
+  {
+    "mode": "cga-text80x100",
+    "count": 23,
+    "before": -25.727826086956522,
+    "after": -18.815652173913044,
+    "delta": 6.912173913043478,
+    "wins": 23,
+    "ties": 0,
+    "losses": 0
+  },
+  {
+    "mode": "cga-text80x50",
+    "count": 23,
+    "before": -39.83608695652174,
+    "after": -38.778260869565216,
+    "delta": 1.0578260869565241,
+    "wins": 13,
+    "ties": 10,
+    "losses": 0
+  },
+  {
+    "mode": "cga-text80x25",
+    "count": 23,
+    "before": -54.8195652173913,
+    "after": -54.70695652173913,
+    "delta": 0.11260869565217035,
+    "wins": 2,
+    "ties": 21,
+    "losses": 0
+  },
+  {
+    "mode": "cga-text40x200",
+    "count": 23,
+    "before": -27.49913043478261,
+    "after": -4.522608695652174,
+    "delta": 22.976521739130437,
+    "wins": 23,
+    "ties": 0,
+    "losses": 0
+  },
+  {
+    "mode": "cga-text40x100",
+    "count": 23,
+    "before": -25.215652173913046,
+    "after": -17.893478260869564,
+    "delta": 7.322173913043482,
+    "wins": 22,
+    "ties": 1,
+    "losses": 0
+  },
+  {
+    "mode": "thomson-to8-320x16",
+    "count": 23,
+    "before": -24.479130434782608,
+    "after": -0.8286956521739125,
+    "delta": 23.650434782608695,
+    "wins": 22,
+    "ties": 1,
+    "losses": 0
+  },
+  {
+    "mode": "c64-afli",
+    "count": 23,
+    "before": -58.17739130434782,
+    "after": -57.01478260869565,
+    "delta": 1.1626086956521746,
+    "wins": 18,
+    "ties": 5,
+    "losses": 0
+  },
+  {
+    "mode": "c64-hires",
+    "count": 23,
+    "before": -35.966521739130435,
+    "after": -35.36826086956522,
+    "delta": 0.5982608695652161,
+    "wins": 5,
+    "ties": 18,
+    "losses": 0
+  },
+  {
+    "mode": "ted-hires",
+    "count": 23,
+    "before": -2.8795652173913044,
+    "after": 0.18565217391304353,
+    "delta": 3.065217391304348,
+    "wins": 10,
+    "ties": 13,
+    "losses": 0
+  },
+  {
+    "mode": "c64-petscii",
+    "count": 23,
+    "before": -57.67260869565217,
+    "after": -56.76739130434783,
+    "delta": 0.9052173913043404,
+    "wins": 6,
+    "ties": 17,
+    "losses": 0
+  },
+  {
+    "mode": "c64-multicolor",
+    "count": 23,
+    "before": -11.22391304347826,
+    "after": -3.9830434782608695,
+    "delta": 7.240869565217391,
+    "wins": 16,
+    "ties": 7,
+    "losses": 0
+  },
+  {
+    "mode": "c64-fli",
+    "count": 23,
+    "before": -53.41304347826087,
+    "after": -52.75043478260869,
+    "delta": 0.6626086956521746,
+    "wins": 15,
+    "ties": 8,
+    "losses": 0
+  },
+  {
+    "mode": "ted-multicolor",
+    "count": 23,
+    "before": 21.651739130434784,
+    "after": 24.029999999999998,
+    "delta": 2.3782608695652137,
+    "wins": 17,
+    "ties": 6,
+    "losses": 0
+  },
+  {
+    "mode": "c64-charset-hires",
+    "count": 23,
+    "before": -60.95695652173913,
+    "after": -59.9395652173913,
+    "delta": 1.0173913043478322,
+    "wins": 15,
+    "ties": 8,
+    "losses": 0
+  },
+  {
+    "mode": "c64-charset-multicolor",
+    "count": 23,
+    "before": -52.05434782608695,
+    "after": -46.272608695652174,
+    "delta": 5.781739130434779,
+    "wins": 17,
+    "ties": 6,
+    "losses": 0
+  }
+]

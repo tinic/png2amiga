@@ -71,6 +71,42 @@ void PipelineResult::finalize_psnr(const Image& src, float total_error) {
         src.pixels(), rendered.pixels(), src.width(), src.height());
     ssimulacra2_score = ssimulacra2::compute(
         src.pixels(), rendered.pixels(), src.width(), src.height());
+    pixel_deviation = compute_pixel_deviation(src, rendered, transparency_mask);
+}
+
+std::vector<std::uint8_t> compute_pixel_deviation(const Image& src,
+                                                  const Image& rendered,
+                                                  const std::vector<bool>& transparency_mask) {
+    const std::size_t n = src.pixels().size();
+    if (rendered.pixels().size() != n) return {};
+    std::vector<std::uint8_t> dev(n, 0);
+    auto byte = [](float v) { return static_cast<int>(std::lround(v * 255.0f)); };
+    for (std::size_t i = 0; i < n; ++i) {
+        if (i < transparency_mask.size() && transparency_mask[i]) continue;
+        auto a = color_space::linear_to_srgb(src.pixels()[i]).clamped();
+        auto b = color_space::linear_to_srgb(rendered.pixels()[i]).clamped();
+        int d = std::max({std::abs(byte(a.r) - byte(b.r)),
+                          std::abs(byte(a.g) - byte(b.g)),
+                          std::abs(byte(a.b) - byte(b.b))});
+        dev[i] = static_cast<std::uint8_t>(d);
+    }
+    return dev;
+}
+
+std::vector<std::uint32_t> count_row_mismatch(std::span<const std::uint8_t> pixel_deviation,
+                                              std::size_t width,
+                                              std::size_t height,
+                                              bool aga) {
+    // Rendered OCS channels sit on the 17-step nibble grid, so a rendered
+    // byte equals the source snapped to that grid exactly when the two are
+    // at most 8 apart. AGA renders full bytes: only an exact match counts.
+    const std::uint8_t tolerance = aga ? 0 : 8;
+    std::vector<std::uint32_t> rows(height, 0);
+    if (pixel_deviation.size() != width * height) return {};
+    for (std::size_t y = 0; y < height; ++y)
+        for (std::size_t x = 0; x < width; ++x)
+            if (pixel_deviation[y * width + x] > tolerance) ++rows[y];
+    return rows;
 }
 
 float compute_avg_palette_used_per_line(

@@ -1,0 +1,30 @@
+[
+  {
+    "dither": "opt-checker",
+    "cell_refine": false,
+    "count": 6,
+    "mean_best_gain": 2.9550309578577676,
+    "mean_seconds": 0.37232715283333334
+  },
+  {
+    "dither": "opt-checker",
+    "cell_refine": true,
+    "count": 6,
+    "mean_best_gain": 2.0341475009918213,
+    "mean_seconds": 19.023889187666665
+  },
+  {
+    "dither": "floyd-steinberg",
+    "cell_refine": false,
+    "count": 6,
+    "mean_best_gain": 4.458212335904439,
+    "mean_seconds": 0.39704288200000004
+  },
+  {
+    "dither": "floyd-steinberg",
+    "cell_refine": true,
+    "count": 6,
+    "mean_best_gain": 3.343316078186035,
+    "mean_seconds": 8.452310721833333
+  }
+]

@@ -15,6 +15,7 @@
 #include "types.hpp"
 
 #include <algorithm>
+#include <cmath>
 #include <cstdint>
 
 namespace png2amiga::console_color {
@@ -117,10 +118,35 @@ inline Color3f rgb443_quantize(Color3f linear) noexcept {
 }
 
 // SNES Mode 7 Direct Color: pixel byte is BBGGGRRR (3+3+2 bits = 256
-// effective colors). Mode 7 tilemap has no per-cell palette field, so
-// the `ppp` low-bit boost is unavailable — the gamut really is 256.
-inline Color3f rgb332_quantize(Color3f linear) noexcept {
-    return quantise_per_channel(linear, 3, 3, 2);
+// effective colors). The bits are the TOP of each 5-bit channel: R = rrr00,
+// G = ggg00, B = bb000. Modes 3/4 fill the low bits from the palette
+// number; the Mode 7 tilemap has no palette field, so they stay 0 and full
+// intensity is 28/31 (red, green) and 24/31 (blue). Checked against Mesen2.
+inline float direct_color_level(int c5) noexcept {
+    return static_cast<float>((c5 << 3) | (c5 >> 2)) / 255.0f;  // 5 -> 8 bit, as BGR555
+}
+
+inline Color3f direct_color_linear(std::uint8_t byte) noexcept {
+    return color_space::srgb_to_linear(Color3f{
+        direct_color_level((byte & 0x07) << 2),
+        direct_color_level(((byte >> 3) & 0x07) << 2),
+        direct_color_level(((byte >> 6) & 0x03) << 3),
+    });
+}
+
+// Nearest Direct Color byte to a linear colour, per channel in sRGB.
+inline std::uint8_t direct_color_byte(Color3f linear) noexcept {
+    auto srgb = color_space::linear_to_srgb(linear);
+    auto nearest = [](float v, int levels, int shift) {
+        int best = 0;
+        for (int i = 1; i < levels; ++i)
+            if (std::abs(direct_color_level(i << shift) - v) <
+                std::abs(direct_color_level(best << shift) - v))
+                best = i;
+        return best;
+    };
+    return static_cast<std::uint8_t>((nearest(srgb.b, 4, 3) << 6) | (nearest(srgb.g, 8, 2) << 3) |
+                                     nearest(srgb.r, 8, 2));
 }
 
 inline std::uint16_t to_bgr555_word(Color3f linear) noexcept {

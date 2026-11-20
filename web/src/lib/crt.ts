@@ -16,11 +16,11 @@
 //   * Moderate horizontal sharpness (hardPix = -3): 1084S has higher
 //     bandwidth than a TV but isn't infinitely sharp.
 //   * Subtle bloom on bright pixels (halation that real phosphors exhibit).
-//   * Gentle barrel warp (warp 1/96 / 1/72): 1084S tubes are fairly flat
-//     compared to e.g. a 70s console TV; just enough curvature to read.
-//   * Gamma 2.4 CRT response after sRGB-linear processing — gives the
-//     deep-blacks / saturated-highlights look real CRTs have when fed
-//     sRGB-encoded video signals.
+//   * No geometric warp — pixel positions are preserved so the preview
+//     stays usable as a reference (curvature removed per user request).
+//   * Matched 2.2 decode/encode gamma so flat colors round-trip to the
+//     source values exactly; an asymmetric 2.2/2.4 pair shifts every
+//     color to c^0.917 (brighter + desaturated).
 //
 // Single-pass fragment shader. No bloom downsample chain; the bloom is
 // approximated via a wider 5-tap horizontal & 5-line vertical Gaussian
@@ -46,7 +46,6 @@ void main() {
 // maskDark = 0.5, maskLight = 1.5  → 50%/150% modulation either side of 1.0
 //                                    so total brightness is preserved
 // shape    = 2.0   → Gaussian (could be 1.5 for triangular fall-off)
-// warp     = (1/96, 1/72)  → 1.04% horizontal, 1.39% vertical barrel
 // bloomStrength = 0.18      → subtle halation, not glow-around-everything
 const FRAG = `#version 100
 precision mediump float;
@@ -59,8 +58,6 @@ uniform float u_hardScan;
 uniform float u_hardPix;
 uniform float u_maskDark;
 uniform float u_maskLight;
-uniform float u_warpX;
-uniform float u_warpY;
 uniform float u_bloom;
 uniform float u_brightness;    // post-mask brightness boost
 uniform float u_maskPeriod;    // device pixels per RGB triad (≈0.42mm × DPR × 96/25.4)
@@ -82,11 +79,14 @@ uniform float u_phosphorPersist;
 uniform float u_time;
 
 // sRGB ↔ linear (gamma 2.2 approximation, ample for the simulation).
+// Decode and encode exponents must match — an asymmetric pair (e.g.
+// encode at 1/2.4) maps every flat color to c^(2.2/2.4), a visible
+// brightness lift + desaturation relative to the source.
 vec3 toLinear(vec3 c) {
   return pow(max(c, vec3(0.0)), vec3(2.2));
 }
 vec3 toSrgb(vec3 c) {
-  return pow(max(c, vec3(0.0)), vec3(1.0 / 2.4));
+  return pow(max(c, vec3(0.0)), vec3(1.0 / 2.2));
 }
 
 // Gaussian weight. scale < 0; the more negative, the tighter.
@@ -283,39 +283,8 @@ vec3 mask(vec2 pos) {
   return mix(vec3(u_maskDark), vec3(u_maskLight), raw);
 }
 
-// Geometric residual warp — what's left of the tube's deflection
-// distortion after the chassis pincushion-correction circuit kicks
-// in. Lottes form: only off-axis points bow, so center-axis lines
-// (the central crosshair) stay straight — matches what a real, well-
-// adjusted 1084S looks like under a service-manual cross-hatch test
-// pattern. kx > ky reflects the 90° tube's larger horizontal
-// deflection angle (≈38.7° H vs ≈31° V on 4:3); horizontal bow is
-// always ≥ vertical bow on a real 1084S. See the warpX/warpY uniform
-// assignments for the numeric derivation.
-//
-// Inverse mapping: warp() takes the output uv and returns the source
-// uv to sample. Positive kx, ky push source-corner samples outside
-// [0,1] → output corners go to the bezel; the visible image bulges
-// at the screen-edge midpoints (a horizontal line near the top of the
-// source appears highest in the middle, lower at its ends). That's
-// the "outward bow" residual a real 1084S exhibits — slight over-
-// correction of the deflection pincushion. Flipping the signs would
-// invert it into the under-corrected (inward bow) regime.
-vec2 warp(vec2 uv) {
-  uv = uv * 2.0 - 1.0;
-  uv *= vec2(1.0 + (uv.y * uv.y) * u_warpX,
-             1.0 + (uv.x * uv.x) * u_warpY);
-  return uv * 0.5 + 0.5;
-}
-
 void main() {
-  vec2 uv = warp(v_uv);
-  // Discard pixels that warped outside the source image — keeps the
-  // black "bezel" around a curved-tube look.
-  if (any(lessThan(uv, vec2(0.0))) || any(greaterThan(uv, vec2(1.0)))) {
-    gl_FragColor = vec4(0.0, 0.0, 0.0, 1.0);
-    return;
-  }
+  vec2 uv = v_uv;
   vec3 col = tri(uv);
   // Add bloom on top — only the parts brighter than a threshold halate.
   col += u_bloom * bloom(uv);
@@ -438,8 +407,6 @@ export function createCrtRenderer(canvas: HTMLCanvasElement): CrtRenderer {
     hardPix:    gl.getUniformLocation(program, 'u_hardPix'),
     maskDark:   gl.getUniformLocation(program, 'u_maskDark'),
     maskLight:  gl.getUniformLocation(program, 'u_maskLight'),
-    warpX:      gl.getUniformLocation(program, 'u_warpX'),
-    warpY:      gl.getUniformLocation(program, 'u_warpY'),
     bloom:      gl.getUniformLocation(program, 'u_bloom'),
     brightness: gl.getUniformLocation(program, 'u_brightness'),
     palMode:    gl.getUniformLocation(program, 'u_palMode'),
@@ -571,23 +538,6 @@ export function createCrtRenderer(canvas: HTMLCanvasElement): CrtRenderer {
     gl.uniform1f(u.hardPix,    hardPix)
     gl.uniform1f(u.maskDark,   0.5)
     gl.uniform1f(u.maskLight,  1.5)
-    // Pincushion residual for a well-adjusted 1084S. The Philips CM8833-
-    // family tube has a 90° deflection angle with a 4:3 aspect ratio,
-    // giving horizontal half-angle ≈38.7° and vertical half-angle ≈31°.
-    // Raw deflection geometry (corner = D·tan(θx)/cos(θy)) yields ~17 %
-    // horizontal and ~10 % vertical corner over-excursion before tube
-    // curvature + the chassis pincushion correction coil knock the
-    // residual down. Service-manual tolerances on the 1084S target
-    // ≤3 % corner displacement, so we pick the high end of "well-tuned":
-    //   kx (horizontal corner bow) = 0.030  →  3.0 % H excursion
-    //   ky (vertical corner bow)   = 0.022  →  2.2 % V excursion
-    // The 0.030/0.022 ratio mirrors the tan(38.7°)/tan(31°) ≈ 1.33
-    // asymmetry of the deflection angles — horizontal bows ~30 % more
-    // than vertical, as the real geometry does. For "aged / drifted
-    // consumer set" looks bump both by ~50 %; flip signs for over-
-    // corrected barrel.
-    gl.uniform1f(u.warpX,      0.03)
-    gl.uniform1f(u.warpY,      0.022)
     gl.uniform1f(u.bloom,      bloom)
     gl.uniform1f(u.brightness, brightness)
     gl.uniform1f(u.palMode,    palMode)
