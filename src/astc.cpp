@@ -150,9 +150,9 @@ constexpr std::uint8_t kQuant24Scramble[kWeightLevels24] = {
 // so the 4x4-specific 2-partition + RGBA code paths compile unchanged.
 template <int N>
 struct SampleT {
-    std::uint8_t rgba8[N][4];
-    color_space::OKLab lab[N];
-    std::uint8_t alpha[N];
+    std::uint8_t rgba8[std::size_t(N)][4];
+    color_space::OKLab lab[std::size_t(N)];
+    std::uint8_t alpha[std::size_t(N)];
 };
 using Sample16 = SampleT<16>;
 using Sample20 = SampleT<20>;
@@ -290,10 +290,10 @@ template <block_compress::BlockMetric M, int WL, int N>
 float pick_weights(const SampleT<N>& s,
                    const std::uint8_t e0[3],
                    const std::uint8_t e1[3],
-                   std::uint8_t out_w[N],
-                   std::uint8_t decoded[N][4]) {
+                   std::uint8_t out_w[std::size_t(N)],
+                   std::uint8_t decoded[std::size_t(N)][4]) {
     constexpr const int* ramp = weight_ramp<WL>();
-    std::uint8_t paint[WL][3];
+    std::uint8_t paint[std::size_t(WL)][3];
     for (int w_i = 0; w_i < WL; ++w_i) {
         int w = ramp[w_i];
         int inv = 64 - w;
@@ -302,7 +302,7 @@ float pick_weights(const SampleT<N>& s,
                 std::uint8_t((inv * int(e0[ch]) + w * int(e1[ch]) + 32) >> 6);
         }
     }
-    alignas(16) float paint_L[WL], paint_A[WL], paint_B[WL];
+    alignas(16) float paint_L[std::size_t(WL)], paint_A[std::size_t(WL)], paint_B[std::size_t(WL)];
     if constexpr (M == block_compress::BlockMetric::oklab2) {
         int g = 0;
         for (; g + 4 <= WL; g += 4) {
@@ -365,12 +365,12 @@ float pick_weights(const SampleT<N>& s,
 // LSQ refit endpoints given fixed weights — 2×2 normal-eq per channel.
 template <int WL, int N>
 bool refit_endpoints(const SampleT<N>& s,
-                     const std::uint8_t w[N],
+                     const std::uint8_t w[std::size_t(N)],
                      std::uint8_t e0[3],
                      std::uint8_t e1[3]) {
     constexpr const int* ramp = weight_ramp<WL>();
-    int n[WL] = {};
-    int sum[WL][3] = {};
+    int n[std::size_t(WL)] = {};
+    int sum[std::size_t(WL)][3] = {};
     for (int p = 0; p < N; ++p) {
         int k = w[p];
         ++n[k];
@@ -462,7 +462,7 @@ struct EPQuantOps;
 // bit budget supports them for any grid where weight_bits + 17 + 48 ≤ 128.
 template <int N, std::uint32_t BlockMode, int WL, int EPQuant = 256>
 void pack_block(const std::uint8_t e0[3], const std::uint8_t e1[3],
-                const std::uint8_t weights[N], Block& out) {
+                const std::uint8_t weights[std::size_t(N)], Block& out) {
     std::uint8_t pcb[16] = {};
 
     // Weight buffer: N values, LSB-first, then per-byte bit-reversed
@@ -470,7 +470,7 @@ void pack_block(const std::uint8_t e0[3], const std::uint8_t e1[3],
     // with a per-level scramble table for non-identity store orders.
     std::uint8_t weightbuf[16] = {};
     if constexpr (WL == 3 || WL == 6 || WL == 12 || WL == 24) {
-        std::uint8_t scrambled[N];
+        std::uint8_t scrambled[std::size_t(N)];
         for (int i = 0; i < N; ++i) {
             if constexpr (WL == 6)        scrambled[i] = kQuant6Scramble[weights[i]];
             else if constexpr (WL == 12)  scrambled[i] = kQuant12Scramble[weights[i]];
@@ -480,7 +480,7 @@ void pack_block(const std::uint8_t e0[3], const std::uint8_t e1[3],
         constexpr int trit_bits = (WL == 3) ? 0 : (WL == 6) ? 1 : (WL == 12) ? 2 : 3;
         encode_ise_trit<trit_bits>(scrambled, N, weightbuf, 0);
     } else if constexpr (WL == 5 || WL == 10 || WL == 20) {
-        std::uint8_t scrambled[N];
+        std::uint8_t scrambled[std::size_t(N)];
         for (int i = 0; i < N; ++i) {
             if constexpr (WL == 10)       scrambled[i] = kQuant10Scramble[weights[i]];
             else if constexpr (WL == 20)  scrambled[i] = kQuant20Scramble[weights[i]];
@@ -529,10 +529,10 @@ void pack_block(const std::uint8_t e0[3], const std::uint8_t e1[3],
 // 16-byte intermediate, then bit-reverses each byte and reverses the
 // byte order so the result lives at the top of `out` per ASTC §16.7.
 template <int N, int WL>
-void pack_weights_msb(const std::uint8_t weights[N], std::uint8_t out[16]) {
+void pack_weights_msb(const std::uint8_t weights[std::size_t(N)], std::uint8_t out[16]) {
     std::uint8_t weightbuf[16] = {};
     if constexpr (WL == 3 || WL == 6 || WL == 12 || WL == 24) {
-        std::uint8_t scrambled[N];
+        std::uint8_t scrambled[std::size_t(N)];
         for (int i = 0; i < N; ++i) {
             if constexpr (WL == 6)        scrambled[i] = kQuant6Scramble[weights[i]];
             else if constexpr (WL == 12)  scrambled[i] = kQuant12Scramble[weights[i]];
@@ -542,7 +542,7 @@ void pack_weights_msb(const std::uint8_t weights[N], std::uint8_t out[16]) {
         constexpr int trit_bits = (WL == 3) ? 0 : (WL == 6) ? 1 : (WL == 12) ? 2 : 3;
         encode_ise_trit<trit_bits>(scrambled, N, weightbuf, 0);
     } else if constexpr (WL == 5 || WL == 10 || WL == 20) {
-        std::uint8_t scrambled[N];
+        std::uint8_t scrambled[std::size_t(N)];
         for (int i = 0; i < N; ++i) {
             if constexpr (WL == 10)       scrambled[i] = kQuant10Scramble[weights[i]];
             else if constexpr (WL == 20)  scrambled[i] = kQuant20Scramble[weights[i]];
@@ -569,7 +569,7 @@ void pack_weights_msb(const std::uint8_t weights[N], std::uint8_t out[16]) {
 // caller use a finer weight grid; wins on grayscale-dominant content.
 template <int N, std::uint32_t BlockMode, int WL>
 void pack_block_cem0(std::uint8_t Y0, std::uint8_t Y1,
-                     const std::uint8_t weights[N], Block& out) {
+                     const std::uint8_t weights[std::size_t(N)], Block& out) {
     std::uint8_t pcb[16] = {};
     pack_weights_msb<N, WL>(weights, pcb);
     write_bits(BlockMode, 11, 0, pcb);
@@ -586,7 +586,7 @@ void pack_block_cem0(std::uint8_t Y0, std::uint8_t Y1,
 // pre-encoded stored values from try_quant_lum_delta.
 template <int N, std::uint32_t BlockMode, int WL>
 void pack_block_cem1(std::uint8_t stored0, std::uint8_t stored1,
-                     const std::uint8_t weights[N], Block& out) {
+                     const std::uint8_t weights[std::size_t(N)], Block& out) {
     std::uint8_t pcb[16] = {};
     pack_weights_msb<N, WL>(weights, pcb);
     write_bits(BlockMode, 11, 0, pcb);
@@ -605,7 +605,7 @@ void pack_block_cem1(std::uint8_t stored0, std::uint8_t stored1,
 // a line through origin (shadow→highlight on a saturated colour).
 template <int N, std::uint32_t BlockMode, int WL>
 void pack_block_cem6(const std::uint8_t base[3], std::uint8_t scale,
-                     const std::uint8_t weights[N], Block& out) {
+                     const std::uint8_t weights[std::size_t(N)], Block& out) {
     std::uint8_t pcb[16] = {};
     pack_weights_msb<N, WL>(weights, pcb);
     write_bits(BlockMode, 11, 0, pcb);
@@ -1313,10 +1313,7 @@ Candidate encode_block_rgba_dual(const Sample16& s) {
         std::uint8_t ne[4] = {ne0[0], ne0[1], ne0[2], ne0_a};
         std::uint8_t ne_hi[4] = {ne1[0], ne1[1], ne1[2], ne1_a};
         float new_err_rgb = pick_weights<M, 4>(s, ne, ne_hi, new_w_rgb, new_dec_rgb);
-        float new_err_a   = pick_weights_q4_alpha(s, ne_hi[3], ne[3] == ne_hi[3] ? ne_hi[3] : ne_hi[3],
-                                                  new_w_a, new_dec_a);
-        // Use the simpler call without that swap (typo above):
-        new_err_a = pick_weights_q4_alpha(s, ne0_a, ne1_a, new_w_a, new_dec_a);
+        float new_err_a = pick_weights_q4_alpha(s, ne0_a, ne1_a, new_w_a, new_dec_a);
         if (new_err_rgb + new_err_a >= err_rgb + err_a - 1e-7f) break;
         err_rgb = new_err_rgb;
         err_a   = new_err_a;
@@ -1375,15 +1372,15 @@ Candidate encode_block_rgb(const SampleT<W * H>& s) {
     std::uint8_t e0[3], e1[3];
     pca_seed_rgb(s, e0, e1);
 
-    std::uint8_t weights[N];
+    std::uint8_t weights[std::size_t(N)];
     float err = pick_weights<M, WL>(s, e0, e1, weights, out.decoded);
 
     // 4-iter LSQ-refit + re-pick loop mirrors BC7 Mode 6.
     for (int it = 0; it < 4; ++it) {
         std::uint8_t ne0[3], ne1[3];
         if (!refit_endpoints<WL>(s, weights, ne0, ne1)) break;
-        std::uint8_t new_w[N];
-        std::uint8_t new_dec[N][4];
+        std::uint8_t new_w[std::size_t(N)];
+        std::uint8_t new_dec[std::size_t(N)][4];
         float new_err = pick_weights<M, WL>(s, ne0, ne1, new_w, new_dec);
         if (new_err >= err - 1e-7f) break;
         err = new_err;
@@ -1455,7 +1452,7 @@ struct BilinearMap {
         std::uint8_t grid[4];   // qweight indices into the GridW × GridH array
         std::uint8_t weight[4]; // 0..16 each; sum = 16
     };
-    TexelContrib texels[TexW * TexH];
+    TexelContrib texels[std::size_t(TexW * TexH)];
 
     constexpr BilinearMap() : texels{} {
         constexpr int sx = (TexW > 1) ? ((1024 + TexW / 2) / (TexW - 1)) : 0;
@@ -1520,7 +1517,7 @@ Candidate encode_block_rgb_decim(const SampleT<TexW * TexH>& s) {
     //   c. Refit endpoints given the quantized grid weights
     // Three iterations is enough for natural images (most movement happens
     // in pass 1; passes 2-3 polish endpoints once grid weights stabilise).
-    std::uint8_t grid_weights[GN] = {};
+    std::uint8_t grid_weights[std::size_t(GN)] = {};
     for (int iter = 0; iter < 3; ++iter) {
         // 2. Ideal continuous weight per texel — sRGB-axis projection.
         //    (Tested an OKLab-axis variant: regressed by ~0.2 S2 mean.
@@ -1532,7 +1529,7 @@ Candidate encode_block_rgb_decim(const SampleT<TexW * TexH>& s) {
         float db = float(e1[2]) - float(e0[2]);
         float ramp_sq = dr * dr + dg * dg + db * db;
         float inv_ramp_sq = (ramp_sq > 1e-9f) ? (1.f / ramp_sq) : 0.f;
-        float w_ideal[TN];
+        float w_ideal[std::size_t(TN)];
         for (int j = 0; j < TN; ++j) {
             float pr = float(s.rgba8[j][0]) - float(e0[0]);
             float pg = float(s.rgba8[j][1]) - float(e0[1]);
@@ -1546,8 +1543,8 @@ Candidate encode_block_rgb_decim(const SampleT<TexW * TexH>& s) {
         //   Closed-form via normal equations A^T A v = A^T T, solved by
         //   Gauss-Jordan (GN ≤ 36, ~50k flops/iter — negligible).
         //   Small Tikhonov ridge regularises uncovered grid points.
-        float ata[GN][GN] = {};
-        float atb[GN] = {};
+        float ata[std::size_t(GN)][std::size_t(GN)] = {};
+        float atb[std::size_t(GN)] = {};
         for (int j = 0; j < TN; ++j) {
             const auto& t = bm.texels[j];
             float T_j = w_ideal[j] * 64.f;
@@ -1811,11 +1808,11 @@ Candidate encode_block_rgb_cem0(const SampleT<TexW * TexH>& s) {
         if (y > Y1) Y1 = y;
     }
 
-    std::uint8_t grid_weights[GN] = {};
+    std::uint8_t grid_weights[std::size_t(GN)] = {};
     for (int iter = 0; iter < 3; ++iter) {
         // Per-texel ideal weight: project the texel's channel mean onto
         // the (Y0..Y1) luminance ramp.
-        float w_ideal[TN];
+        float w_ideal[std::size_t(TN)];
         float denom = float(Y1 - Y0);
         if (std::abs(denom) < 1.f) denom = (denom < 0) ? -1.f : 1.f;
         float inv_denom = 1.f / denom;
@@ -1827,8 +1824,8 @@ Candidate encode_block_rgb_cem0(const SampleT<TexW * TexH>& s) {
 
         // LSQ on bilinear contribution system — identical to the
         // CEM-8 decim path's step 3. Same atb/ata math.
-        float ata[GN][GN] = {};
-        float atb[GN] = {};
+        float ata[std::size_t(GN)][std::size_t(GN)] = {};
+        float atb[std::size_t(GN)] = {};
         for (int j = 0; j < TN; ++j) {
             const auto& t = bm.texels[j];
             float T_j = w_ideal[j] * 64.f;
@@ -2022,7 +2019,7 @@ Candidate encode_block_rgb_cem1(const SampleT<TexW * TexH>& s) {
     // same (CEM-1 unpacks to the same (Y0, Y1) we encoded), so err is
     // unchanged from c0.err.
     constexpr int GN = GridW * GridH;
-    std::uint8_t grid_weights[GN];
+    std::uint8_t grid_weights[std::size_t(GN)];
     std::memset(grid_weights, 0, GN);
     // The CEM-0 path baked grid_weights into c0.block; we'd need to
     // re-extract them, but the simpler path is: since the decoded
@@ -2112,7 +2109,7 @@ Candidate encode_block_rgb_cem6(const SampleT<TexW * TexH>& s) {
         e0[2] = std::uint8_t((int(base[2]) * scale_i) >> 8);
     };
 
-    std::uint8_t grid_weights[GN] = {};
+    std::uint8_t grid_weights[std::size_t(GN)] = {};
     std::uint8_t e0[3], e1[3];
     endpoints_from_base(e0, e1);
 
@@ -2126,7 +2123,7 @@ Candidate encode_block_rgb_cem6(const SampleT<TexW * TexH>& s) {
         float db = float(e1[2]) - float(e0[2]);
         float ramp_sq = dr * dr + dg * dg + db * db;
         float inv_ramp_sq = (ramp_sq > 1e-9f) ? (1.f / ramp_sq) : 0.f;
-        float w_ideal[TN];
+        float w_ideal[std::size_t(TN)];
         for (int j = 0; j < TN; ++j) {
             float pr = float(s.rgba8[j][0]) - float(e0[0]);
             float pg = float(s.rgba8[j][1]) - float(e0[1]);
@@ -2136,8 +2133,8 @@ Candidate encode_block_rgb_cem6(const SampleT<TexW * TexH>& s) {
         }
 
         // LSQ on bilinear contribution.
-        float ata[GN][GN] = {};
-        float atb[GN] = {};
+        float ata[std::size_t(GN)][std::size_t(GN)] = {};
+        float atb[std::size_t(GN)] = {};
         for (int j = 0; j < TN; ++j) {
             const auto& t = bm.texels[j];
             float T_j = w_ideal[j] * 64.f;
@@ -2194,7 +2191,7 @@ Candidate encode_block_rgb_cem6(const SampleT<TexW * TexH>& s) {
         for (int sub = 0; sub < 2; ++sub) {
             // Per-texel "effective ramp position" given current
             // quantised grid weights.
-            float f[TN];
+            float f[std::size_t(TN)];
             float f_sq = 0.f;
             float bsum[3] = {};
             for (int j = 0; j < TN; ++j) {
@@ -2438,11 +2435,11 @@ void pca_seed_rgb_subset(const Sample16& s, const std::uint8_t mask[16],
 template <int N, block_compress::BlockMetric M>
 float pick_weights_np_q4(const Sample16& s,
                          const std::uint8_t assign[16],
-                         const std::uint8_t e0[N][3],
-                         const std::uint8_t e1[N][3],
+                         const std::uint8_t e0[std::size_t(N)][3],
+                         const std::uint8_t e1[std::size_t(N)][3],
                          std::uint8_t out_w[16],
                          std::uint8_t decoded[16][4]) {
-    std::uint8_t paint[N][kWeightLevels4][3];
+    std::uint8_t paint[std::size_t(N)][kWeightLevels4][3];
     for (int k = 0; k < N; ++k) {
         for (int w_i = 0; w_i < kWeightLevels4; ++w_i) {
             int w = kWeightToInterp4[w_i];
@@ -2453,9 +2450,9 @@ float pick_weights_np_q4(const Sample16& s,
             }
         }
     }
-    alignas(16) float paint_L[N][kWeightLevels4],
-                      paint_A[N][kWeightLevels4],
-                      paint_B[N][kWeightLevels4];
+    alignas(16) float paint_L[std::size_t(N)][kWeightLevels4],
+                      paint_A[std::size_t(N)][kWeightLevels4],
+                      paint_B[std::size_t(N)][kWeightLevels4];
     if constexpr (M == block_compress::BlockMetric::oklab2) {
         for (int k = 0; k < N; ++k) {
             std::uint8_t rgb4[4][3];
@@ -2516,9 +2513,9 @@ float pick_weights_np_q4(const Sample16& s,
 template <int N>
 bool refit_endpoints_np(const Sample16& s, const std::uint8_t assign[16],
                         const std::uint8_t w[16],
-                        std::uint8_t e0[N][3], std::uint8_t e1[N][3]) {
-    int n[N][kWeightLevels4] = {};
-    int sum[N][kWeightLevels4][3] = {};
+                        std::uint8_t e0[std::size_t(N)][3], std::uint8_t e1[std::size_t(N)][3]) {
+    int n[std::size_t(N)][kWeightLevels4] = {};
+    int sum[std::size_t(N)][kWeightLevels4][3] = {};
     for (int p = 0; p < 16; ++p) {
         int k = assign[p], q = w[p];
         ++n[k][q];
@@ -2700,7 +2697,7 @@ Candidate encode_block_rgb_2p(const Sample16& s) {
 // texel_count < 32 (per spec); larger footprints use the regular hash.
 template <int N, int TexW, int TexH>
 struct PartTab {
-    std::uint8_t assign[1024][TexW * TexH];
+    std::uint8_t assign[1024][std::size_t(TexW * TexH)];
 };
 template <int N, int TexW, int TexH>
 const PartTab<N, TexW, TexH>& partition_table_np() {
@@ -2723,7 +2720,7 @@ const PartTab<N, TexW, TexH>& partition_table_np() {
 // PCA seed over a texel subset (mask = 1 for "include"). Generalised
 // from the 4x4-specific pca_seed_rgb_subset for arbitrary texel count.
 template <int TN>
-void pca_seed_rgb_subset_n(const SampleT<TN>& s, const std::uint8_t mask[TN],
+void pca_seed_rgb_subset_n(const SampleT<TN>& s, const std::uint8_t mask[std::size_t(TN)],
                            std::uint8_t e0[3], std::uint8_t e1[3]) {
     int n = 0;
     float mL = 0, mA = 0, mB = 0;
@@ -3001,7 +2998,7 @@ bool try_quant_rgb_delta(const std::uint8_t e0[3], const std::uint8_t e1[3],
 template <int GN, std::uint32_t BlockMode, int WL, int EPQuant>
 void pack_block_2p_decim(int partition_index,
                          const std::uint8_t e0[2][3], const std::uint8_t e1[2][3],
-                         const std::uint8_t weights[GN], Block& out) {
+                         const std::uint8_t weights[std::size_t(GN)], Block& out) {
     std::uint8_t pcb[16] = {};
 
     // Weight buffer (power-of-2 weight quants for now: Q2/Q4/Q8/Q16/Q32).
@@ -3043,7 +3040,7 @@ template <int GN, std::uint32_t BlockMode, int WL, int EPQuant>
 void pack_block_2p_decim_cem9(int partition_index,
                               const std::uint8_t stored0[2][3],
                               const std::uint8_t stored1[2][3],
-                              const std::uint8_t weights[GN], Block& out) {
+                              const std::uint8_t weights[std::size_t(GN)], Block& out) {
     std::uint8_t pcb[16] = {};
 
     std::uint8_t weightbuf[16] = {};
@@ -3085,11 +3082,11 @@ void pack_block_2p_decim_cem9(int partition_index,
 template <int TexW, int TexH, int GridW, int GridH, int WL,
           block_compress::BlockMetric M>
 float pick_weights_2p_decim(const SampleT<TexW * TexH>& s,
-                            const std::uint8_t assign[TexW * TexH],
-                            const std::uint8_t grid_weights[GridW * GridH],
+                            const std::uint8_t assign[std::size_t(TexW * TexH)],
+                            const std::uint8_t grid_weights[std::size_t(GridW * GridH)],
                             const BilinearMap<TexW, TexH, GridW, GridH>& bm,
                             const std::uint8_t e0[2][3], const std::uint8_t e1[2][3],
-                            std::uint8_t decoded[TexW * TexH][4]) {
+                            std::uint8_t decoded[std::size_t(TexW * TexH)][4]) {
     constexpr const int* ramp = weight_ramp<WL>();
     float tot = 0.f;
     for (int j = 0; j < TexW * TexH; ++j) {
@@ -3142,12 +3139,12 @@ constexpr int kTop2pPartitions = 32;
 // the whole 2p candidate sweep. Fills out[0..K) with the K lowest-err
 // partition indices, ascending.
 template <int TexW, int TexH, int K>
-void find_best_2p_partitions(const SampleT<TexW * TexH>& s, int out[K]) {
+void find_best_2p_partitions(const SampleT<TexW * TexH>& s, int out[std::size_t(K)]) {
     constexpr int TN = TexW * TexH;
     const auto& table = partition_table_np<2, TexW, TexH>();
-    std::uint8_t mask[2][TN];
+    std::uint8_t mask[2][std::size_t(TN)];
     std::uint8_t e0_seed[2][3], e1_seed[2][3];
-    float bestErr[K];
+    float bestErr[std::size_t(K)];
     for (int i = 0; i < K; ++i) {
         bestErr[i] = std::numeric_limits<float>::infinity();
         out[i] = 0;
@@ -3209,7 +3206,7 @@ Candidate encode_block_rgb_2p_decim(const SampleT<TexW * TexH>& s, int best_pi) 
     Candidate out{};
     out.err = std::numeric_limits<float>::infinity();
 
-    std::uint8_t mask[2][TN];
+    std::uint8_t mask[2][std::size_t(TN)];
 
     // --- Phase 2: full LSQ + coord descent for the winning pi.
     const std::uint8_t* assign = table.assign[best_pi];
@@ -3221,9 +3218,9 @@ Candidate encode_block_rgb_2p_decim(const SampleT<TexW * TexH>& s, int best_pi) 
         pca_seed_rgb_subset_n<TN>(s, mask[k], e0[k], e1[k]);
 
     // Alternate: per-texel ideal_w → LSQ grid weights → refit endpoints.
-    std::uint8_t grid_weights[GN] = {};
+    std::uint8_t grid_weights[std::size_t(GN)] = {};
     for (int iter = 0; iter < 3; ++iter) {
-        float w_ideal[TN];
+        float w_ideal[std::size_t(TN)];
         for (int j = 0; j < TN; ++j) {
             int k = assign[j];
             float dr = float(e1[k][0]) - float(e0[k][0]);
@@ -3238,8 +3235,8 @@ Candidate encode_block_rgb_2p_decim(const SampleT<TexW * TexH>& s, int best_pi) 
         }
 
         // LSQ on the sparse bilinear contribution system (same as 1p).
-        float ata[GN][GN] = {};
-        float atb[GN] = {};
+        float ata[std::size_t(GN)][std::size_t(GN)] = {};
+        float atb[std::size_t(GN)] = {};
         for (int j = 0; j < TN; ++j) {
             const auto& t = bm.texels[j];
             float T_j = w_ideal[j] * 64.f;
@@ -3345,8 +3342,8 @@ Candidate encode_block_rgb_2p_decim(const SampleT<TexW * TexH>& s, int best_pi) 
         int sb = int(e1d[k][0]) + int(e1d[k][1]) + int(e1d[k][2]);
         if (sa > sb) {
             for (int ch = 0; ch < 3; ++ch) std::swap(e0d[k][ch], e1d[k][ch]);
-            int touched[GN] = {};
-            int by_part[GN] = {};
+            int touched[std::size_t(GN)] = {};
+            int by_part[std::size_t(GN)] = {};
             for (int j = 0; j < TN; ++j) {
                 const auto& t = bm.texels[j];
                 int kj = assign[j];
@@ -3364,7 +3361,7 @@ Candidate encode_block_rgb_2p_decim(const SampleT<TexW * TexH>& s, int best_pi) 
     }
 
     // Final decode + err using the quantised endpoints + grid weights.
-    std::uint8_t final_dec[TN][4];
+    std::uint8_t final_dec[std::size_t(TN)][4];
     float final_err = pick_weights_2p_decim<TexW, TexH, GridW, GridH, WL, M>(
         s, assign, grid_weights, bm, e0d, e1d, final_dec);
 
@@ -3387,7 +3384,7 @@ Candidate encode_block_rgb_2p_decim(const SampleT<TexW * TexH>& s, int best_pi) 
     }
     if (cem9_ok) {
         // Re-pick weights against the CEM-9-rendered endpoints.
-        std::uint8_t cem9_dec[TN][4];
+        std::uint8_t cem9_dec[std::size_t(TN)][4];
         float cem9_err = pick_weights_2p_decim<TexW, TexH, GridW, GridH, WL, M>(
             s, assign, grid_weights, bm, cem9_rd0, cem9_rd1, cem9_dec);
         if (cem9_err < final_err) {

@@ -682,7 +682,7 @@ inline void pack_block(RGB565 c0, RGB565 c1,
     write_u16le(out, 2, raw1);
     std::uint32_t s = 0;
     for (int i = 0; i < 16; ++i) {
-        s |= std::uint32_t(sel[i] & 0x3u) << (i * 2);
+        s |= (sel[i] & 0x3u) << (i * 2);
     }
     write_selectors(out, s);
 }

@@ -1338,12 +1338,12 @@ void cluster_k2_oklab(const Sample16& s, std::uint8_t c0[3], std::uint8_t c1[3])
         }
         if (n0 == 0) { n0 = 1; sum0[0] = s.srgb8[i0][0]; sum0[1] = s.srgb8[i0][1]; sum0[2] = s.srgb8[i0][2]; }
         if (n1 == 0) { n1 = 1; sum1[0] = s.srgb8[i1][0]; sum1[1] = s.srgb8[i1][1]; sum1[2] = s.srgb8[i1][2]; }
-        std::uint8_t a0[3] = {std::uint8_t(int(sum0[0] / n0)),
-                              std::uint8_t(int(sum0[1] / n0)),
-                              std::uint8_t(int(sum0[2] / n0))};
-        std::uint8_t a1[3] = {std::uint8_t(int(sum1[0] / n1)),
-                              std::uint8_t(int(sum1[1] / n1)),
-                              std::uint8_t(int(sum1[2] / n1))};
+        std::uint8_t a0[3] = {std::uint8_t(int(sum0[0] / float(n0))),
+                              std::uint8_t(int(sum0[1] / float(n0))),
+                              std::uint8_t(int(sum0[2] / float(n0)))};
+        std::uint8_t a1[3] = {std::uint8_t(int(sum1[0] / float(n1))),
+                              std::uint8_t(int(sum1[1] / float(n1))),
+                              std::uint8_t(int(sum1[2] / float(n1)))};
         m0 = color_space::srgb8_to_oklab(a0[0], a0[1], a0[2]);
         m1 = color_space::srgb8_to_oklab(a1[0], a1[1], a1[2]);
         c0[0] = a0[0]; c0[1] = a0[1]; c0[2] = a0[2];

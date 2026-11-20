@@ -84,9 +84,9 @@ public:
 template<int W, int H>
 struct BlockSample {
     static constexpr int npx = W * H;
-    color_space::OKLab lab[npx]{};
-    Color3f linear[npx]{};       // unused today, kept for future encoders
-    std::uint8_t srgb8[npx][3]{};
+    color_space::OKLab lab[std::size_t(npx)]{};
+    Color3f linear[std::size_t(npx)]{};       // unused today, kept for future encoders
+    std::uint8_t srgb8[std::size_t(npx)][3]{};
 };
 
 // Extract one block of source pixels. Replicate-pad at image edges so
@@ -132,7 +132,7 @@ enum class BlockMetric : std::uint8_t {
 };
 
 template<BlockMetric M, int W, int H>
-inline float score_block(const BlockSample<W, H>& src, const std::uint8_t (&dec_srgb8)[W * H][3]) {
+inline float score_block(const BlockSample<W, H>& src, const std::uint8_t (&dec_srgb8)[std::size_t(W * H)][3]) {
     constexpr int N = W * H;
     if constexpr (M == BlockMetric::srgb_mse) {
         int acc = 0;

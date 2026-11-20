@@ -969,10 +969,10 @@ inline bool refit_endpoints_subset(const Sample16& s,
                                    const std::uint8_t pixel_idx[16],
                                    int n_pixels,
                                    const std::uint8_t sel[16],
-                                   const int weight_lut[NLevels],
-                                   std::uint8_t e0[C], std::uint8_t e1[C]) {
-    int n[NLevels] = {};
-    int sum[NLevels][C] = {};
+                                   const int weight_lut[std::size_t(NLevels)],
+                                   std::uint8_t e0[std::size_t(C)], std::uint8_t e1[std::size_t(C)]) {
+    int n[std::size_t(NLevels)] = {};
+    int sum[std::size_t(NLevels)][std::size_t(C)] = {};
     for (int i = 0; i < n_pixels; ++i) {
         int p = pixel_idx[i];
         int k = sel[p];
@@ -980,8 +980,8 @@ inline bool refit_endpoints_subset(const Sample16& s,
         for (int ch = 0; ch < C; ++ch) sum[k][ch] += int(s.rgba8[p][ch]);
     }
     float A00 = 0.f, A11 = 0.f, A01 = 0.f;
-    float B[C] = {0.f};
-    float Bb[C] = {0.f};
+    float B[std::size_t(C)] = {0.f};
+    float Bb[std::size_t(C)] = {0.f};
     for (int k = 0; k < NLevels; ++k) {
         if (n[k] == 0) continue;
         float w1 = float(weight_lut[k]) * (1.f / 64.f);
