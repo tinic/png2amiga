@@ -43,9 +43,9 @@ const BUDGETS = [
   // parallel sliced-planner trials bring the SIMD release build to 3.05 MB.
   // 3.50 MB up from 3.25 MB — the HAM-aware HAM6 strips planner with
   // resumable DP scoring brings the SIMD release build to 3.27 MB.
-  // 4.10 MB up from 3.50 MB — the etc2-encoder branch adds the BC1/BC7/
-  // ETC2/ASTC texture encoders (~0.6 MB of templated block kernels).
-  { match: /^png2amiga-.*\.wasm$/,  max:   4.1 * 1024 * 1024, label: 'wasm binary' },
+  // 4.25 MB up from 3.50 MB — the etc2-encoder branch adds the BC1/BC7/
+  // ETC2/ASTC texture encoders; the SIMD release build is 4.09 MB.
+  { match: /^png2amiga-.*\.wasm$/,  max:   4.25 * 1024 * 1024, label: 'wasm binary' },
   { match: /^wasm\.worker-.*\.js$/, max:  20 * 1024, label: 'worker'     },
   { match: /^crt-.*\.js$/,          max:  30 * 1024, label: 'crt module' },
   { match: /^index-.*\.css$/,       max: 500 * 1024, label: 'css'        },

@@ -814,7 +814,7 @@ export function isGenesisMode(mode: string): boolean {
 // The --dither method IS honoured but only as the block-grid ED kernel
 // (see src/etc2.cpp's encode_image + Options::block_ed.method).
 export function isEtc2Mode(mode: string): boolean {
-  return mode === 'etc2' || mode === 'etc2-rgb' || mode === 'etc2-rgb8'
+  return ['etc2', 'etc2-rgb', 'etc2-rgb8'].includes(mode)
 }
 export function isGbaMode(mode: string): boolean {
   return mode.startsWith('gba-')
