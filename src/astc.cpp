@@ -4413,7 +4413,7 @@ template <int NP>
 struct ConfigNp {
     int qi = -1;
     bool mixed = false;
-    EpEnc enc[NP];
+    EpEnc enc[std::size_t(NP)];
     float q = std::numeric_limits<float>::infinity();
 };
 
@@ -4440,7 +4440,7 @@ template <int NP>
 ConfigNp<NP> choose_config_np(int wb, const float e0[][3], const float e1[][3], const Gram G[],
                               int qi_floor) {
     ConfigNp<NP> best;
-    auto consider = [&](int qi, bool mixed, std::span<const EpFamily> const fams[NP]) {
+    auto consider = [&](int qi, bool mixed, std::span<const EpFamily> const fams[std::size_t(NP)]) {
         ConfigNp<NP> c;
         c.qi = qi; c.mixed = mixed; c.q = 0.f;
         for (int p = 0; p < NP; ++p) {
@@ -4453,7 +4453,7 @@ ConfigNp<NP> choose_config_np(int wb, const float e0[][3], const float e1[][3], 
     // Same CEM in every partition (no extra CEM bits).
     const int q_rgb = endpoint_quant_for(6 * NP, np_color_bits<NP>(wb, false));
     const int q_scale = endpoint_quant_for(4 * NP, np_color_bits<NP>(wb, false));
-    std::span<const EpFamily> fam[NP];
+    std::span<const EpFamily> fam[std::size_t(NP)];
     if (q_rgb >= qi_floor) {
         for (auto& f : fam) f = kRgb8;
         consider(q_rgb, false, fam);
@@ -4540,15 +4540,15 @@ void try_mode_np(const SampleT<TexW * TexH>& s, const ModeRT& md, int pi, const 
     constexpr int TN = TexW * TexH;
     const GridMapRT& gm = *md.map;
     const WeightQuantRT& wq = weight_quant(md.wqi);
-    float e0[NP][3], e1[NP][3];
+    float e0[std::size_t(NP)][3], e1[std::size_t(NP)][3];
     std::memcpy(e0, seed0, sizeof(e0));
     std::memcpy(e1, seed1, sizeof(e1));
-    Gram G[NP];
+    Gram G[std::size_t(NP)];
     WeightState<TN> st;
     fit_weights_lsq<TN, NP>(s, gm, wq, assign, e0, e1, G, st);
     ConfigNp<NP> cfg = choose_config_np<NP>(md.wb, e0, e1, G, qi_floor);
     if (cfg.qi < 0) return;
-    Palette pal[NP];
+    Palette pal[std::size_t(NP)];
     const Palette* tp[std::size_t(TN)];
     for (int j = 0; j < TN; ++j) tp[j] = &pal[assign[j]];
     for (int round = 0; round < 2; ++round) {
@@ -4590,12 +4590,12 @@ void find_best_np_partitions(const SampleT<TexW * TexH>& s, int out[std::size_t(
     for (int i = 0; i < K; ++i) { bestErr[i] = std::numeric_limits<float>::infinity(); out[i] = 0; }
     for (int pi = 0; pi < 1024; ++pi) {
         const std::uint8_t* assign = table.assign[pi];
-        int counts[NP] = {};
+        int counts[std::size_t(NP)] = {};
         for (int j = 0; j < TN; ++j) ++counts[assign[j]];
         bool empty = false;
         for (int p = 0; p < NP; ++p) empty = empty || counts[p] == 0;
         if (empty) continue;
-        std::uint8_t e0[NP][3], e1[NP][3];
+        std::uint8_t e0[std::size_t(NP)][3], e1[std::size_t(NP)][3];
         for (int p = 0; p < NP; ++p) {
             std::uint8_t mask[std::size_t(TN)];
             for (int j = 0; j < TN; ++j) mask[j] = assign[j] == p ? 1 : 0;
@@ -4659,7 +4659,7 @@ void estimate_grids(const SampleT<TN>& s, const std::vector<GridMapRT>& maps,
             v[i] = std::clamp(a, 0.f, 64.f);
         }
         float u[std::size_t(TN)];
-        float a00[NP] = {}, a01[NP] = {}, a11[NP] = {}, b0[NP][3] = {}, b1[NP][3] = {};
+        float a00[std::size_t(NP)] = {}, a01[std::size_t(NP)] = {}, a11[std::size_t(NP)] = {}, b0[std::size_t(NP)][3] = {}, b1[std::size_t(NP)][3] = {};
         for (int j = 0; j < TN; ++j) {
             float w = 0.f;
             for (int k = 0; k < 4; ++k) w += float(gm.tc[j][k]) * v[gm.tg[j][k]];
@@ -4672,7 +4672,7 @@ void estimate_grids(const SampleT<TN>& s, const std::vector<GridMapRT>& maps,
                 b1[p][ch] += u[j] * float(s.rgba8[j][ch]);
             }
         }
-        float ea[NP][3], eb[NP][3];
+        float ea[std::size_t(NP)][3], eb[std::size_t(NP)][3];
         for (int p = 0; p < NP; ++p) {
             const float det = a00[p] * a11[p] - a01[p] * a01[p];
             for (int ch = 0; ch < 3; ++ch) {
@@ -4722,9 +4722,9 @@ Candidate encode_block_generic_np(const SampleT<TexW * TexH>& s, const int* pis,
     best.err = std::numeric_limits<float>::infinity();
     constexpr int kTopN = kGenericNpTop<NP>;
     struct Est { float e; int k; int m; };
-    Est top[kTopN];
+    Est top[std::size_t(kTopN)];
     int ntop = 0;
-    float seed0[kTop2pPartitions][NP][3], seed1[kTop2pPartitions][NP][3];
+    float seed0[std::size_t(kTop2pPartitions)][std::size_t(NP)][3], seed1[std::size_t(kTop2pPartitions)][std::size_t(NP)][3];
     float R[12 * 12], S[12 * 12];  // per weight grid (<= 11 x 11 maps)
     for (int k = 0; k < npis; ++k) {
         const std::uint8_t* assign = table.assign[pis[k]];
