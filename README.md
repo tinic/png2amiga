@@ -1117,6 +1117,8 @@ ETC2 / BC1-7 / ASTC (--mode etc2|bc1|bc2|bc3|bc7|astc-NxM → .ktx2):
   --etc2-effort <0-3>             Search depth (default: 2)
   --etc2-jitter <0-15>            Endpoint search width (default: 1)
   --etc2-metric <oklab2|srgb-mse> Block scoring metric (default: oklab2)
+  --rdo <0-100>                   Smaller zstd output for lower quality, ASTC
+                                  only (default: 0 = off, maximum quality)
 
 HAM:
   --ham-beam <1-256>              DP search beam (default: 48)

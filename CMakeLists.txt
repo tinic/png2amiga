@@ -96,6 +96,7 @@ set(PNG2AMIGA_CORE_SOURCES
     src/bc3.cpp
     src/bc2.cpp
     src/astc.cpp
+    src/astc_rdo.cpp
     src/ktx2.cpp
     src/dds.cpp
     src/api.cpp
@@ -1235,6 +1236,26 @@ sys.exit(0 if got==expect else (print(f'expected {expect}, got {got}') or 1))"
     set_tests_properties("smoke-astc-alpha-decode-png"
         PROPERTIES DEPENDS "smoke-astc-alpha-decode"
                    PASS_REGULAR_EXPRESSION "cem12=[1-9].* dual_plane=[1-9].* dp_a=[1-9]")
+    # ASTC --rdo (tools/check_astc_rdo.py, key=value output): --rdo 0 is
+    # byte-identical to no option; with --rdo on the predicted decode still
+    # equals the astcenc decode and the file decodes; and the zstd level
+    # data is smaller than with --rdo off. The 4x4 case covers dual-plane
+    # donors, the alpha case the blocks the pass must leave alone.
+    foreach(check off-identical decode smaller)
+        add_test(NAME "astc-rdo-${check}"
+            COMMAND ${PNG2AMIGA_PYTHON} ${CMAKE_SOURCE_DIR}/tools/check_astc_rdo.py
+                --cli $<TARGET_FILE:png2amiga> --ktx2-to-png $<TARGET_FILE:ktx2_to_png>
+                --input ${PNG2AMIGA_TEST_INPUT} --check ${check})
+    endforeach()
+    add_test(NAME "astc-rdo-decode-4x4"
+        COMMAND ${PNG2AMIGA_PYTHON} ${CMAKE_SOURCE_DIR}/tools/check_astc_rdo.py
+            --cli $<TARGET_FILE:png2amiga> --ktx2-to-png $<TARGET_FILE:ktx2_to_png>
+            --input ${PNG2AMIGA_TEST_INPUT} --check decode --mode astc-4x4 --width 128)
+    add_test(NAME "astc-rdo-decode-alpha"
+        COMMAND ${PNG2AMIGA_PYTHON} ${CMAKE_SOURCE_DIR}/tools/check_astc_rdo.py
+            --cli $<TARGET_FILE:png2amiga> --ktx2-to-png $<TARGET_FILE:ktx2_to_png>
+            --input ${CMAKE_SOURCE_DIR}/examples/logo.png --check decode --mode astc-4x4
+            --width 256 --rdo 100)
     # Plain lores + STRIPS (1-4 planes, 8-px slot grid): the .h carries the
     # strips_lores_ocs copper list, one 40-slot chain per row.
     add_test(
