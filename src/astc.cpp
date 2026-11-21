@@ -18,6 +18,7 @@
 // 64 stored bits).
 
 #include "astc.hpp"
+#include "astc_rdo.hpp"
 
 #include "color_space.hpp"
 #include "dither.hpp"
@@ -5308,6 +5309,7 @@ EncodeResult encode_image_impl(std::span<const std::uint8_t> rgba_srgb8,
                                int image_w,
                                int image_h,
                                const Options& options,
+                               rdo::Side* side,
                                EncodeBlockFn encode_block_fn) {
     constexpr int N = W * H;
     EncodeResult res;
@@ -5334,6 +5336,12 @@ EncodeResult encode_image_impl(std::span<const std::uint8_t> rgba_srgb8,
             padded[d * 4u + 2u] = rgba_srgb8[s * 4u + 2u];
             padded[d * 4u + 3u] = rgba_srgb8[s * 4u + 3u];
         }
+    }
+
+    if (side != nullptr) {
+        side->pad_w = pad_w;
+        side->pad_h = pad_h;
+        side->target.assign(pw * static_cast<std::size_t>(pad_h), {0.f, 0.f, 0.f});
     }
 
     const bool use_block_ed = options.block_ed.strength > 0.0f;
@@ -5399,6 +5407,14 @@ EncodeResult encode_image_impl(std::span<const std::uint8_t> rgba_srgb8,
                             s.lab[i].b += e.b;
                         }
                     }
+                }
+
+                // RDO scores its candidates against the same targets.
+                if (side != nullptr) {
+                    for (int dy = 0; dy < H; ++dy)
+                        for (int dx = 0; dx < W; ++dx)
+                            side->target[std::size_t(by * H + dy) * pw +
+                                         std::size_t(bx * W + dx)] = s.lab[dy * W + dx];
                 }
 
                 Candidate c = encode_block_fn(s);
@@ -5484,8 +5500,9 @@ namespace {
 // stay on the RGBA paths.
 template <block_compress::BlockMetric M, int W, int H, typename EncodeBlockFn>
 EncodeResult encode_image_gen(std::span<const std::uint8_t> rgba_srgb8, int image_w, int image_h,
-                              const Options& options, EncodeBlockFn fn) {
-    return encode_image_impl<W, H>(rgba_srgb8, image_w, image_h, options,
+                              const Options& options, rdo::Side* side,
+                              EncodeBlockFn fn) {
+    return encode_image_impl<W, H>(rgba_srgb8, image_w, image_h, options, side,
         [fn](const SampleT<W * H>& s) {
             Candidate a = fn(s);
             if constexpr (W == 4 && H == 4) {
@@ -5861,10 +5878,12 @@ EncodeResult encode_image(std::span<const std::uint8_t> rgba_srgb8,
                           const Options& options) {
     const int W = options.block_w;
     const int H = options.block_h;
+    rdo::Side rdo_side;
+    rdo::Side* const sp = options.rdo > 0 ? &rdo_side : nullptr;
 
     auto run = [&]<block_compress::BlockMetric M>() -> EncodeResult {
         if (W == 4 && H == 4)
-            return encode_image_gen<M, 4, 4>(rgba_srgb8, image_w, image_h, options,
+            return encode_image_gen<M, 4, 4>(rgba_srgb8, image_w, image_h, options, sp,
                                            make_encode_fn_4x4_exhaustive<M>());
         // Non-4x4 dispatch: per-footprint exhaustive search over every
         // valid 2D block_mode whose (grid, weight_quant) fits 6-endpoint
@@ -5875,7 +5894,7 @@ EncodeResult encode_image(std::span<const std::uint8_t> rgba_srgb8,
         // tools/enum_astc_modes.py for the regen script. 2-partition
         // candidate lists come from tools/astc_enum_2p.py.
         if (W == 5 && H == 4)
-            return encode_image_gen<M, 5, 4>(rgba_srgb8, image_w, image_h, options,
+            return encode_image_gen<M, 5, 4>(rgba_srgb8, image_w, image_h, options, sp,
                 combine_encode_fns<5, 4>(
                 make_encode_fn_2p_pack<5, 4, M,
                     DecimCfg2p{2,3,0x32E,16,64},
@@ -5913,7 +5932,7 @@ EncodeResult encode_image(std::span<const std::uint8_t> rgba_srgb8,
                     DecimCfg{5,3,0x2B3,32, 8, 64},  DecimCfg{5,4,0x2C1,10, 8, 160},
                     DecimCfg{5,4,0x2D1,12, 8, 80},  DecimCfg{5,4,0x2C2,16, 8, 32}>()));
         if (W == 5 && H == 5)
-            return encode_image_gen<M, 5, 5>(rgba_srgb8, image_w, image_h, options,
+            return encode_image_gen<M, 5, 5>(rgba_srgb8, image_w, image_h, options, sp,
                 combine_encode_fns<5, 5>(
                 make_encode_fn_2p_pack<5, 5, M,
                     DecimCfg2p{2,3,0x32E,16,64},
@@ -5971,7 +5990,7 @@ EncodeResult encode_image(std::span<const std::uint8_t> rgba_srgb8,
                     DecimCfg{5,5,0x0E3,6, 8, 192},
                     DecimCfg{5,5,0x0F3,8, 8, 64}>()));
         if (W == 6 && H == 5)
-            return encode_image_gen<M, 6, 5>(rgba_srgb8, image_w, image_h, options,
+            return encode_image_gen<M, 6, 5>(rgba_srgb8, image_w, image_h, options, sp,
                 combine_encode_fns<6, 5>(
                 make_encode_fn_2p_pack<6, 5, M,
                     DecimCfg2p{2,3,0x32E,16,64},
@@ -6044,7 +6063,7 @@ EncodeResult encode_image(std::span<const std::uint8_t> rgba_srgb8,
                     DecimCfg{6,5,0x172,5, 8, 96},
                     DecimCfg{6,5,0x163,6, 8, 40}>()));
         if (W == 6 && H == 6)
-            return encode_image_gen<M, 6, 6>(rgba_srgb8, image_w, image_h, options,
+            return encode_image_gen<M, 6, 6>(rgba_srgb8, image_w, image_h, options, sp,
                 combine_encode_fns<6, 6>(
                 make_encode_fn_2p_pack<6, 6, M,
                     DecimCfg2p{2,3,0x32E,16,64},
@@ -6134,7 +6153,7 @@ EncodeResult encode_image(std::span<const std::uint8_t> rgba_srgb8,
                     DecimCfg{6,5,0x163,6, 8, 40},
                     DecimCfg{6,6,0x108,4, 8, 80}>()));
         if (W == 8 && H == 5)
-            return encode_image_gen<M, 8, 5>(rgba_srgb8, image_w, image_h, options,
+            return encode_image_gen<M, 8, 5>(rgba_srgb8, image_w, image_h, options, sp,
                 combine_encode_fns<8, 5>(
                 make_encode_fn_2p_pack<8, 5, M,
                     DecimCfg2p{2,3,0x32E,16,64},
@@ -6226,7 +6245,7 @@ EncodeResult encode_image(std::span<const std::uint8_t> rgba_srgb8,
                     DecimCfg{8,4,0x056,5, 8, 64},
                     DecimCfg{8,5,0x075,3, 8, 192}>()));
         if (W == 8 && H == 6)
-            return encode_image_gen<M, 8, 6>(rgba_srgb8, image_w, image_h, options,
+            return encode_image_gen<M, 8, 6>(rgba_srgb8, image_w, image_h, options, sp,
                 combine_encode_fns<8, 6>(
                 make_encode_fn_2p_pack<8, 6, M,
                     DecimCfg2p{2,3,0x32E,16,64},
@@ -6334,7 +6353,7 @@ EncodeResult encode_image(std::span<const std::uint8_t> rgba_srgb8,
                     DecimCfg{8,4,0x056,5, 8, 64},
                     DecimCfg{8,5,0x075,3, 8, 192}>()));
         if (W == 8 && H == 8)
-            return encode_image_gen<M, 8, 8>(rgba_srgb8, image_w, image_h, options,
+            return encode_image_gen<M, 8, 8>(rgba_srgb8, image_w, image_h, options, sp,
                 combine_encode_fns<8, 8>(
                 make_encode_fn_2p_pack<8, 8, M,
                     DecimCfg2p{2,3,0x32E,16,64},
@@ -6474,7 +6493,7 @@ EncodeResult encode_image(std::span<const std::uint8_t> rgba_srgb8,
                     DecimCfg{8,5,0x075,3, 8, 192},
                     DecimCfg{8,8,0x544,2, 8, 192}>()));
         if (W == 10 && H == 5)
-            return encode_image_gen<M, 10, 5>(rgba_srgb8, image_w, image_h, options,
+            return encode_image_gen<M, 10, 5>(rgba_srgb8, image_w, image_h, options, sp,
                 combine_encode_fns<10, 5>(
                 make_encode_fn_2p_pack<10, 5, M,
                     DecimCfg2p{2,3,0x32E,16,64},
@@ -6604,7 +6623,7 @@ EncodeResult encode_image(std::span<const std::uint8_t> rgba_srgb8,
                     DecimCfg{10,4,0x146,4, 8, 32},
                     DecimCfg{10,5,0x175,3, 8, 32}>()));
         if (W == 10 && H == 6)
-            return encode_image_gen<M, 10, 6>(rgba_srgb8, image_w, image_h, options,
+            return encode_image_gen<M, 10, 6>(rgba_srgb8, image_w, image_h, options, sp,
                 combine_encode_fns<10, 6>(
                 make_encode_fn_2p_pack<10, 6, M,
                     DecimCfg2p{2,3,0x32E,16,64},
@@ -6756,7 +6775,7 @@ EncodeResult encode_image(std::span<const std::uint8_t> rgba_srgb8,
                     DecimCfg{10,4,0x146,4, 8, 32},
                     DecimCfg{10,5,0x175,3, 8, 32}>()));
         if (W == 10 && H == 8)
-            return encode_image_gen<M, 10, 8>(rgba_srgb8, image_w, image_h, options,
+            return encode_image_gen<M, 10, 8>(rgba_srgb8, image_w, image_h, options, sp,
                 combine_encode_fns<10, 8>(
                 make_encode_fn_2p_pack<10, 8, M,
                     DecimCfg2p{2,3,0x32E,16,64},
@@ -6947,7 +6966,7 @@ EncodeResult encode_image(std::span<const std::uint8_t> rgba_srgb8,
                     DecimCfg{10,4,0x146,4, 8, 32},
                     DecimCfg{10,5,0x175,3, 8, 32}>()));
         if (W == 10 && H == 10)
-            return encode_image_gen<M, 10, 10>(rgba_srgb8, image_w, image_h, options,
+            return encode_image_gen<M, 10, 10>(rgba_srgb8, image_w, image_h, options, sp,
                 combine_encode_fns<10, 10>(
                 make_encode_fn_2p_pack<10, 10, M,
                     DecimCfg2p{2,3,0x32E,16,64},
@@ -7166,7 +7185,7 @@ EncodeResult encode_image(std::span<const std::uint8_t> rgba_srgb8,
                     DecimCfg{10,4,0x146,4, 8, 32},
                     DecimCfg{10,5,0x175,3, 8, 32}>()));
         if (W == 12 && H == 10)
-            return encode_image_gen<M, 12, 10>(rgba_srgb8, image_w, image_h, options,
+            return encode_image_gen<M, 12, 10>(rgba_srgb8, image_w, image_h, options, sp,
                 combine_encode_fns<12, 10>(
                 make_encode_fn_2p_pack<12, 10, M,
                     DecimCfg2p{2,3,0x32E,16,64},
@@ -7402,7 +7421,7 @@ EncodeResult encode_image(std::span<const std::uint8_t> rgba_srgb8,
                     DecimCfg{12,3,0x028,4, 8, 80},
                     DecimCfg{12,4,0x054,3, 8, 48}>()));
         if (W == 12 && H == 12)
-            return encode_image_gen<M, 12, 12>(rgba_srgb8, image_w, image_h, options,
+            return encode_image_gen<M, 12, 12>(rgba_srgb8, image_w, image_h, options, sp,
                 combine_encode_fns<12, 12>(
                 make_encode_fn_2p_pack<12, 12, M,
                     DecimCfg2p{2,3,0x32E,16,64},
@@ -7664,9 +7683,12 @@ EncodeResult encode_image(std::span<const std::uint8_t> rgba_srgb8,
         return EncodeResult{};  // unsupported footprint
     };
 
-    if (options.metric == block_compress::BlockMetric::srgb_mse)
-        return run.template operator()<block_compress::BlockMetric::srgb_mse>();
-    return run.template operator()<block_compress::BlockMetric::oklab2>();
+    EncodeResult res = options.metric == block_compress::BlockMetric::srgb_mse
+        ? run.template operator()<block_compress::BlockMetric::srgb_mse>()
+        : run.template operator()<block_compress::BlockMetric::oklab2>();
+    if (sp != nullptr && !res.blocks.empty())
+        rdo::optimize(res, rdo_side, rgba_srgb8, image_w, image_h, W, H, options.rdo);
+    return res;
 }
 
 std::vector<std::uint8_t> decode_image(std::span<const Block> blocks,

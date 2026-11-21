@@ -38,6 +38,10 @@ struct Options {
     // gradient blocks) where the mean shift smears the boundary error;
     // loses on fine footprints. Set per-footprint by the caller.
     bool pixel_ed = false;
+    // Rate-distortion optimisation strength (--rdo). 0 = off: the output
+    // is the maximum-quality block of every candidate set. > 0 trades
+    // perceptual error for a smaller zstd-compressed block stream.
+    int rdo = 0;
 };
 
 struct EncodeResult {

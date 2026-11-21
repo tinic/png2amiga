@@ -1009,6 +1009,10 @@ struct Config {
     int etc2_jitter = 1;
     bool etc2_jitter_explicit = false;  // user --etc2-jitter overrides --best auto-bump
 
+    // Texture rate-distortion optimisation strength (--rdo). 0 = off
+    // (maximum quality). ASTC only for now; see astc::Options::rdo.
+    int rdo = 0;
+
     // KTX2 supercompression (zstd, scheme=2). Default on — lossless
     // 30-50% size shrink on natural images, no quality cost. Set
     // --no-ktx2-zstd for raw byte output (bench harness comparisons).
@@ -1398,6 +1402,8 @@ void print_usage() {
         "  --etc2-effort <0-3>             Search depth (default: 2)\n"
         "  --etc2-jitter <0-15>            Endpoint search width (default: 1)\n"
         "  --etc2-metric <oklab2|srgb-mse> Block scoring metric (default: oklab2)\n"
+        "  --rdo <0-100>                   Smaller zstd output for lower quality, ASTC\n"
+        "                                  only (default: 0 = off, maximum quality)\n"
         "\n"
         "HAM:\n"
         "  --ham-beam <1-256>              DP search beam (default: 48)\n"
@@ -2475,6 +2481,8 @@ Result<Config> parse_args(int argc, char* argv[]) {
                                                              "'srgb-mse' or 'oklab2' (default)",
                                                              config.etc2_metric)}};
                 }
+            } else if (arg == "--rdo") {
+                config.rdo = std::clamp(std::atoi(std::string(val).c_str()), 0, 100);
             } else if (arg == "--palette-diversity") {
                 config.palette_diversity = std::atoi(std::string(val).c_str());
                 if (config.palette_diversity < 0) config.palette_diversity = 0;
@@ -7221,6 +7229,8 @@ int run_astc(Config cfg) {
                       cfg.mode == amiga::Mode::astc_10x6 ||
                       cfg.mode == amiga::Mode::astc_10x8 ||
                       cfg.mode == amiga::Mode::astc_6x6);
+
+    aopts.rdo = cfg.rdo;
 
     auto enc = astc::encode_image(rgba_srgb8, W, H, aopts);
     if (enc.blocks.empty()) {
