@@ -1192,15 +1192,20 @@ sys.exit(0 if got==expect else (print(f'expected {expect}, got {got}') or 1))"
     set_tests_properties("smoke-bc7-thirdparty-decode-png"
         PROPERTIES DEPENDS "smoke-bc7-thirdparty-decode")
 
-    # ASTC 6x6 round-trip through astcenc's decoder. The block histogram
-    # ktx2_to_png prints must show CEM 6 (RGB base+scale) blocks: the
-    # encoder chooses among CEM 6/8/9 per block, and natural images take
-    # CEM 6 for a large share of blocks at 6x6.
+    # ASTC 6x6 round-trip through astcenc's decoder. png2amiga compares
+    # the reference decode of every block with the paint the encoder
+    # predicted for it and prints astc_predict_mismatch=<texels>; a block
+    # packed wrongly (endpoints, weight planes, second-plane selector)
+    # decodes to something else and fails the first test. The block
+    # histogram ktx2_to_png prints must show CEM 6 (RGB base+scale) and
+    # dual-plane blocks, so both are in the compared set.
     add_test(
         NAME "smoke-astc-thirdparty-decode"
         COMMAND png2amiga --mode astc-6x6 --width 96 ${PNG2AMIGA_TEST_INPUT}
                 ${CMAKE_BINARY_DIR}/astc_thirdparty.ktx2
     )
+    set_tests_properties("smoke-astc-thirdparty-decode"
+        PROPERTIES PASS_REGULAR_EXPRESSION "astc_predict_mismatch=0[^0-9]")
     add_test(
         NAME "smoke-astc-thirdparty-decode-png"
         COMMAND ktx2_to_png
@@ -1209,7 +1214,27 @@ sys.exit(0 if got==expect else (print(f'expected {expect}, got {got}') or 1))"
     )
     set_tests_properties("smoke-astc-thirdparty-decode-png"
         PROPERTIES DEPENDS "smoke-astc-thirdparty-decode"
-                   PASS_REGULAR_EXPRESSION "astc_blocks=[1-9][0-9]* .*cem6=[1-9]")
+                   PASS_REGULAR_EXPRESSION
+                   "astc_blocks=[1-9][0-9]* .*cem6=[1-9].* dual_plane=[1-9].* dp_p1=[1-9]")
+    # ASTC 4x4 with alpha: CEM 12 blocks, single plane and dual plane with
+    # alpha on the second plane. Same decode check.
+    add_test(
+        NAME "smoke-astc-alpha-decode"
+        COMMAND png2amiga --mode astc-4x4 --width 128
+                ${CMAKE_SOURCE_DIR}/examples/logo.png
+                ${CMAKE_BINARY_DIR}/astc_alpha.ktx2
+    )
+    set_tests_properties("smoke-astc-alpha-decode"
+        PROPERTIES PASS_REGULAR_EXPRESSION "astc_predict_mismatch=0[^0-9]")
+    add_test(
+        NAME "smoke-astc-alpha-decode-png"
+        COMMAND ktx2_to_png
+                ${CMAKE_BINARY_DIR}/astc_alpha.ktx2
+                ${CMAKE_BINARY_DIR}/astc_alpha.png
+    )
+    set_tests_properties("smoke-astc-alpha-decode-png"
+        PROPERTIES DEPENDS "smoke-astc-alpha-decode"
+                   PASS_REGULAR_EXPRESSION "cem12=[1-9].* dual_plane=[1-9].* dp_a=[1-9]")
     # Plain lores + STRIPS (1-4 planes, 8-px slot grid): the .h carries the
     # strips_lores_ocs copper list, one 40-slot chain per row.
     add_test(

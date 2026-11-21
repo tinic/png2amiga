@@ -680,6 +680,14 @@ struct Candidate {
 // RGBA path (CEM 12): 4-level weights × 4 channels.
 // ---------------------------------------------------------------------------
 
+// Decoder alpha for an 8-bit decode in the sRGB profile. RGB endpoints
+// expand to 16 bits as (c << 8) | 0x80, which makes the usual 8-bit
+// (x + 32) >> 6 exact; alpha expands by replication (c * 257) and the
+// result is the top byte, so alpha must be computed in 16 bits.
+inline std::uint8_t alpha_paint(int a0, int a1, int w) {
+    return std::uint8_t((((64 - w) * a0 + w * a1) * 257 + 32) >> 14);
+}
+
 template <block_compress::BlockMetric M>
 float pick_weights_q4_rgba(const Sample16& s,
                            const std::uint8_t e0[4],
@@ -690,10 +698,11 @@ float pick_weights_q4_rgba(const Sample16& s,
     for (int w_i = 0; w_i < kWeightLevels4; ++w_i) {
         int w = kWeightToInterp4[w_i];
         int inv = 64 - w;
-        for (int ch = 0; ch < 4; ++ch) {
+        for (int ch = 0; ch < 3; ++ch) {
             paint[w_i][ch] =
                 std::uint8_t((inv * int(e0[ch]) + w * int(e1[ch]) + 32) >> 6);
         }
+        paint[w_i][3] = alpha_paint(int(e0[3]), int(e1[3]), w);
     }
     alignas(16) float paint_L[kWeightLevels4], paint_A[kWeightLevels4], paint_B[kWeightLevels4];
     if constexpr (M == block_compress::BlockMetric::oklab2) {
@@ -1176,8 +1185,9 @@ inline void encode_ise_q40(const std::uint8_t* input_data,
 //   - block_mode 0x442 (4x4 QUANT_4 weights + dual-plane bit set)
 //   - plane2_component = 3 (alpha)
 //   - 16 plane-1 weights drive RGB; 16 plane-2 weights drive alpha
-//   - QUANT_40 endpoints (BISE quint, 43 bits for 8 values — same quint
-//     pack the 2-partition path uses)
+//   - QUANT_48 endpoints: 8 values in the 45 colour bits the mode leaves
+//     (128 - 17 header - 64 weight - 2 selector); the decoder derives
+//     the quant from that budget
 // Decoupling alpha from the RGB ramp helps when alpha is poorly
 // correlated with colour (e.g., a particle texture with a soft mask).
 // ---------------------------------------------------------------------------
@@ -1191,9 +1201,7 @@ float pick_weights_q4_alpha(const Sample16& s,
                             std::uint8_t decoded_a[16]) {
     std::uint8_t paint[kWeightLevels4];
     for (int w_i = 0; w_i < kWeightLevels4; ++w_i) {
-        int w = kWeightToInterp4[w_i];
-        int inv = 64 - w;
-        paint[w_i] = std::uint8_t((inv * int(e0_a) + w * int(e1_a) + 32) >> 6);
+        paint[w_i] = alpha_paint(int(e0_a), int(e1_a), kWeightToInterp4[w_i]);
     }
     float tot = 0.f;
     for (int p = 0; p < 16; ++p) {
@@ -1238,7 +1246,7 @@ void pack_block_rgba_dual(const std::uint8_t e0[4], const std::uint8_t e1[4],
     // Plane-2 component selector at (128 - 64 - 2) = bit 62.
     write_bits(3, 2, 62, pcb);                 // 3 = alpha
 
-    // 8 endpoint values × QUANT_40 BISE (43 bits) at bit 17.
+    // 8 endpoint values × QUANT_48 BISE (45 bits) at bit 17.
     // Order: r0, r1, g0, g1, b0, b1, a0, a1.
     std::uint8_t ep_packed[8];
     ep_packed[0] = quant48_pack(e0[0]); ep_packed[1] = quant48_pack(e1[0]);
@@ -1329,22 +1337,21 @@ Candidate encode_block_rgba_dual(const Sample16& s) {
         std::memcpy(dec_a,   new_dec_a,   sizeof(new_dec_a));
     }
 
-    // Blue-contract on RGB (alpha is independent so left untouched).
-    int sum0 = int(e0[0]) + int(e0[1]) + int(e0[2]);
-    int sum1 = int(e1[0]) + int(e1[1]) + int(e1[2]);
-    if (sum0 > sum1) {
-        std::swap(e0[0], e1[0]);
-        std::swap(e0[1], e1[1]);
-        std::swap(e0[2], e1[2]);
-        for (int i = 0; i < 16; ++i) w_rgb[i] = std::uint8_t(3 - int(w_rgb[i]));
-    }
-
-    // Quantize endpoints to QUANT_40 then re-pick weights against the
-    // decoded paint ramps so reported err matches reconstruction.
+    // Quantize endpoints to QUANT_48 (the quant the block packs and the
+    // decoder derives), then re-pick weights against the decoded paint
+    // ramps so reported err matches reconstruction.
     std::uint8_t e0d[4], e1d[4];
     for (int ch = 0; ch < 4; ++ch) {
-        e0d[ch] = kQuant40Unpack[quant40_pack(e0[ch])];
-        e1d[ch] = kQuant40Unpack[quant40_pack(e1[ch])];
+        e0d[ch] = kQuant48Unpack[quant48_pack(e0[ch])];
+        e1d[ch] = kQuant48Unpack[quant48_pack(e1[ch])];
+    }
+    // The decoder applies blue contraction and swaps the endpoints (alpha
+    // included) when the quantised RGB sum of endpoint 0 is the larger.
+    // Keep the order: swap RGB here; the alpha plane is independent.
+    if (int(e0d[0]) + int(e0d[1]) + int(e0d[2]) > int(e1d[0]) + int(e1d[1]) + int(e1d[2])) {
+        std::swap(e0d[0], e1d[0]);
+        std::swap(e0d[1], e1d[1]);
+        std::swap(e0d[2], e1d[2]);
     }
     std::uint8_t final_w_rgb[16], final_w_a[16];
     std::uint8_t final_dec_rgb[16][4], final_dec_a[16];
@@ -2953,15 +2960,14 @@ bool try_quant_rgb_delta(const std::uint8_t e0[3], const std::uint8_t e1[3],
     // check that the sum of (transferred) delta values stays ≥ 0 (else
     // the decoder would trigger blue-contract, which produces different
     // output than what the encoder targeted).
+    // ep0 = base (v0 >> 1 with bit 7 from v1), ep1 = signed 6-bit offset
+    // from v1[6:1].
     int ep0[3], ep1[3];
     for (int ch = 0; ch < 3; ++ch) {
-        ep0[ch] = color0be_unq[ch];
-        ep1[ch] = color1de_unq[ch];
-        int new_ep1 = (ep1[ch] >> 1) | (ep0[ch] & 0x80);
-        int new_ep0 = (ep0[ch] >> 1) & 0x3F;
-        if (new_ep0 & 0x20) new_ep0 -= 0x40;
-        ep0[ch] = new_ep0;
-        ep1[ch] = new_ep1;
+        const int v0 = color0be_unq[ch], v1 = color1de_unq[ch];
+        ep0[ch] = (v0 >> 1) | (v1 & 0x80);
+        ep1[ch] = (v1 >> 1) & 0x3F;
+        if (ep1[ch] & 0x20) ep1[ch] -= 0x40;
     }
     int rgb_sum = ep1[0] + ep1[1] + ep1[2];
     if (rgb_sum < 0) return false;
@@ -3730,18 +3736,19 @@ GridMapRT build_grid_map(int tw, int th, int gw, int gh) {
     return m;
 }
 
-// One non-dual-plane block mode with its colour budgets.
+// One block mode (single or dual weight plane) with its weight bits.
 struct ModeRT {
     int gw = 0, gh = 0;
     std::uint32_t bm = 0;
     int wqi = 0;
-    int wb = 0;          // weight bits
+    int wb = 0;          // weight bits (both planes for a dual-plane mode)
     const GridMapRT* map = nullptr;
 };
 
 // Port of astcenc decode_block_mode_2d (format spec, not encoder policy).
-// Returns false for reserved / dual-plane / out-of-range modes.
-bool decode_block_mode(std::uint32_t bm, int& xw, int& yw, int& wqi, int& wb) {
+// Returns false for reserved / out-of-range modes. dual = the D bit; a
+// dual-plane mode stores two weights per grid point.
+bool decode_block_mode(std::uint32_t bm, int& xw, int& yw, int& wqi, int& wb, bool& dual) {
     int base_q = int((bm >> 4) & 1);
     int H = int((bm >> 9) & 1);
     int D = int((bm >> 10) & 1);
@@ -3776,10 +3783,10 @@ bool decode_block_mode(std::uint32_t bm, int& xw, int& yw, int& wqi, int& wb) {
             }
         }
     }
-    if (D) return false;
+    dual = D != 0;
     wqi = (base_q - 2) + 6 * H;
     if (wqi < 0 || wqi > 11) return false;
-    const int count = xw * yw;
+    const int count = xw * yw * (dual ? 2 : 1);
     if (count > 64) return false;
     wb = ise_bit_count(count, wqi);
     return wb >= 24 && wb <= 96;
@@ -3788,22 +3795,24 @@ bool decode_block_mode(std::uint32_t bm, int& xw, int& yw, int& wqi, int& wb) {
 template <int TexW, int TexH>
 struct GenericCtx {
     std::vector<GridMapRT> maps;  // index (gw-2)*(TexH-1) + (gh-2)
-    std::vector<ModeRT> modes;    // one per (grid, weight quant)
+    std::vector<ModeRT> modes;    // one per (grid, weight quant), single plane
+    std::vector<ModeRT> dp_modes; // one per (grid, weight quant), dual plane
     GenericCtx() {
         maps.reserve(std::size_t((TexW - 1) * (TexH - 1)));
         for (int gw = 2; gw <= TexW; ++gw)
             for (int gh = 2; gh <= TexH; ++gh)
                 maps.push_back(build_grid_map(TexW, TexH, gw, gh));
-        bool seen[13][13][12] = {};
+        bool seen[2][13][13][12] = {};
         for (std::uint32_t bm = 0; bm < 2048; ++bm) {
             int xw = 0, yw = 0, wqi = 0, wb = 0;
-            if (!decode_block_mode(bm, xw, yw, wqi, wb)) continue;
-            if (xw > TexW || yw > TexH || seen[xw][yw][wqi]) continue;
-            seen[xw][yw][wqi] = true;
+            bool dual = false;
+            if (!decode_block_mode(bm, xw, yw, wqi, wb, dual)) continue;
+            if (xw > TexW || yw > TexH || seen[dual ? 1 : 0][xw][yw][wqi]) continue;
+            seen[dual ? 1 : 0][xw][yw][wqi] = true;
             ModeRT m;
             m.gw = xw; m.gh = yw; m.bm = bm; m.wqi = wqi; m.wb = wb;
             m.map = &maps[std::size_t((xw - 2) * (TexH - 1) + (yw - 2))];
-            modes.push_back(m);
+            (dual ? dp_modes : modes).push_back(m);
         }
     }
 };
@@ -3866,6 +3875,19 @@ struct Gram {
     Gram swapped() const { return {g11, g01, g00}; }
 };
 
+// Per-channel Gram matrices. One weight plane: the same Gram on every
+// channel. Dual plane: the second-plane component has its own.
+struct GramCh {
+    Gram g[3];
+    GramCh() = default;
+    GramCh(const Gram& a) : g{a, a, a} {}  // NOLINT(google-explicit-constructor)
+    GramCh swapped() const {
+        GramCh r;
+        for (int ch = 0; ch < 3; ++ch) r.g[ch] = g[ch].swapped();
+        return r;
+    }
+};
+
 // One endpoint-pair encoding: CEM, lattice values in spec order and the
 // orientation. flip = the decoder's endpoint 0 is the caller's endpoint 1
 // (caller complements the weights).
@@ -3921,8 +3943,8 @@ int delta_channel(const ColorLattice& L, float bt, float et, Eval eval,
 
 // Encode the endpoint pair (A, B) (float LSQ optimum, caller orientation)
 // in one family at endpoint quant qi.
-EpEnc encode_endpoints_any(EpFamily fam, int qi, const float A[3], const float B[3], const Gram& G,
-                           bool allow_flip) {
+EpEnc encode_endpoints_any(EpFamily fam, int qi, const float A[3], const float B[3],
+                           const GramCh& G, bool allow_flip) {
     EpEnc r;
     const ColorLattice& L = color_lattice(qi);
     auto cl = [](int x) { return std::clamp(x, 0, 255); };
@@ -3936,7 +3958,7 @@ EpEnc encode_endpoints_any(EpFamily fam, int qi, const float A[3], const float B
             float be = std::numeric_limits<float>::infinity();
             for (int i = 0; i < na; ++i)
                 for (int k = 0; k < nb; ++k) {
-                    const float e = G.q(float(ca[i]) - A[ch], float(cb[k]) - B[ch]);
+                    const float e = G.g[ch].q(float(ca[i]) - A[ch], float(cb[k]) - B[ch]);
                     if (e < be) { be = e; va[ch] = ca[i]; vb[ch] = cb[k]; }
                 }
             tot += be;
@@ -3960,7 +3982,7 @@ EpEnc encode_endpoints_any(EpFamily fam, int qi, const float A[3], const float B
         for (int i = 0; i < nb0; ++i)
             for (int k = 0; k < nb1; ++k) {
                 const int b0 = cb0[i], b1 = cb1[k];
-                float tot = G.q(float(b0) - A[2], float(b1) - B[2]);
+                float tot = G.g[2].q(float(b0) - A[2], float(b1) - B[2]);
                 int va[3] = {0, 0, b1}, vb[3] = {0, 0, b0};
                 for (int ch = 0; ch < 2; ++ch) {
                     int cx[2], cy[2];
@@ -3969,7 +3991,7 @@ EpEnc encode_endpoints_any(EpFamily fam, int qi, const float A[3], const float B
                     float be = std::numeric_limits<float>::infinity();
                     for (int x = 0; x < nx; ++x)
                         for (int y = 0; y < ny; ++y) {
-                            const float e = G.q(float((cx[x] + b0) >> 1) - A[ch],
+                            const float e = G.g[ch].q(float((cx[x] + b0) >> 1) - A[ch],
                                                 float((cy[y] + b1) >> 1) - B[ch]);
                             if (e < be) { be = e; vb[ch] = cx[x]; va[ch] = cy[y]; }
                         }
@@ -4002,7 +4024,7 @@ EpEnc encode_endpoints_any(EpFamily fam, int qi, const float A[3], const float B
             // Decoder endpoint 0 / 1 targets for this orientation.
             const float* T0 = orient ? B : A;
             const float* T1 = orient ? A : B;
-            const Gram g = orient ? G.swapped() : G;
+            const GramCh g = orient ? G.swapped() : G;
             DeltaPick pick[3];
             float tot = 0.f;
             bool ok = true;
@@ -4010,7 +4032,7 @@ EpEnc encode_endpoints_any(EpFamily fam, int qi, const float A[3], const float B
                 // e0 = base, e1 = base + d.
                 for (int ch = 0; ch < 3 && ok; ++ch) {
                     auto ev = [&](int base, int d) {
-                        return g.q(float(base) - T0[ch], float(cl(base + d)) - T1[ch]);
+                        return g.g[ch].q(float(base) - T0[ch], float(cl(base + d)) - T1[ch]);
                     };
                     DeltaPick p[1];
                     if (delta_channel(L, T0[ch], T1[ch], ev, p, 1) == 0) ok = false;
@@ -4020,7 +4042,7 @@ EpEnc encode_endpoints_any(EpFamily fam, int qi, const float A[3], const float B
             } else {
                 // e0 = unc(base + d), e1 = unc(base): base ~ contract(T1).
                 auto evb = [&](int base, int d) {
-                    return g.q(float(cl(base + d)) - T0[2], float(base) - T1[2]);
+                    return g.g[2].q(float(cl(base + d)) - T0[2], float(base) - T1[2]);
                 };
                 DeltaPick pb[2];
                 const int npb = delta_channel(L, T1[2], T0[2], evb, pb, 2);
@@ -4032,7 +4054,7 @@ EpEnc encode_endpoints_any(EpFamily fam, int qi, const float A[3], const float B
                     bool okc = true;
                     for (int ch = 0; ch < 2 && okc; ++ch) {
                         auto ev = [&](int base, int d) {
-                            return g.q(float(cl((base + d + bb + bd) >> 1)) - T0[ch],
+                            return g.g[ch].q(float(cl((base + d + bb + bd) >> 1)) - T0[ch],
                                        float((base + bb) >> 1) - T1[ch]);
                         };
                         DeltaPick p[1];
@@ -4061,13 +4083,14 @@ EpEnc encode_endpoints_any(EpFamily fam, int qi, const float A[3], const float B
         const bool flip = A[0] + A[1] + A[2] > B[0] + B[1] + B[2];
         const float* Ts = flip ? B : A;   // scaled-endpoint target
         const float* Tb = flip ? A : B;   // base target
-        const Gram g = flip ? G.swapped() : G;
+        const GramCh gc = flip ? G.swapped() : G;
         int bbest[3] = {};
         auto eval_scale = [&](int sv, int bout[3]) {
             const float sg = float(sv) * (1.f / 256.f);
-            const float den = sg * sg * g.g00 + 2.f * sg * g.g01 + g.g11;
             float tot = 0.f;
             for (int ch = 0; ch < 3; ++ch) {
+                const Gram& g = gc.g[ch];
+                const float den = sg * sg * g.g00 + 2.f * sg * g.g01 + g.g11;
                 const float bs = den > 1e-9f
                     ? (sg * (g.g00 * Ts[ch] + g.g01 * Tb[ch]) + (g.g01 * Ts[ch] + g.g11 * Tb[ch])) / den
                     : Tb[ch];
@@ -4105,8 +4128,8 @@ EpEnc encode_endpoints_any(EpFamily fam, int qi, const float A[3], const float B
     return r;
 }
 
-EpEnc encode_endpoints(EpFamily fam, int qi, const float A[3], const float B[3], const Gram& G,
-                       bool allow_flip = true) {
+EpEnc encode_endpoints(EpFamily fam, int qi, const float A[3], const float B[3],
+                       const GramCh& G, bool allow_flip = true) {
     EpEnc r = encode_endpoints_any(fam, qi, A, B, G, allow_flip);
     if (r.flip && !allow_flip) r.ok = false;
     return r;
@@ -4234,10 +4257,11 @@ float refine_weights(const SampleT<TN>& s, const GridMapRT& gm, const WeightQuan
 }
 
 // Unconstrained endpoint LSQ for the texels of partition `part`
-// (assign == nullptr: all texels) given per-texel infill sums.
+// (assign == nullptr: all texels) given per-texel infill sums. Only the
+// channels in `chmask` are written (dual plane: one call per plane).
 template <int TN>
 bool lsq_endpoints(const SampleT<TN>& s, const int* wsum, const std::uint8_t* assign, int part,
-                   float e0[3], float e1[3], Gram& G) {
+                   float e0[3], float e1[3], Gram& G, unsigned chmask = 7u) {
     float a00 = 0.f, a01 = 0.f, a11 = 0.f, b0[3] = {}, b1[3] = {};
     for (int j = 0; j < TN; ++j) {
         if (assign && assign[j] != part) continue;
@@ -4254,6 +4278,7 @@ bool lsq_endpoints(const SampleT<TN>& s, const int* wsum, const std::uint8_t* as
     if (std::abs(det) < 1e-6f) return false;
     const float inv = 1.f / det;
     for (int ch = 0; ch < 3; ++ch) {
+        if (!((chmask >> ch) & 1u)) continue;
         e0[ch] = std::clamp((a11 * b0[ch] - a01 * b1[ch]) * inv, 0.f, 255.f);
         e1[ch] = std::clamp((-a01 * b0[ch] + a00 * b1[ch]) * inv, 0.f, 255.f);
     }
@@ -4419,7 +4444,7 @@ struct ConfigNp {
 
 // Best no-flip encoding of one partition among the given families.
 inline EpEnc best_of(std::span<const EpFamily> fams, int qi, const float A[3],
-                     const float B[3], const Gram& G) {
+                     const float B[3], const GramCh& G) {
     EpEnc best;
     for (EpFamily f : fams) {
         EpEnc e = encode_endpoints(f, qi, A, B, G, false);
@@ -4436,9 +4461,11 @@ constexpr int np_color_bits(int wb, bool mixed) {
 }
 
 // Choose the configuration with the lowest predicted sRGB error.
-template <int NP>
-ConfigNp<NP> choose_config_np(int wb, const float e0[][3], const float e1[][3], const Gram G[],
-                              int qi_floor) {
+// bits_same / bits_mixed = colour bits with one shared CEM / with the
+// per-partition CEM encoding.
+template <int NP, typename GramT>
+ConfigNp<NP> choose_config_np(int bits_same, int bits_mixed, const float e0[][3],
+                              const float e1[][3], const GramT G[], int qi_floor) {
     ConfigNp<NP> best;
     auto consider = [&](int qi, bool mixed, std::span<const EpFamily> const fams[std::size_t(NP)]) {
         ConfigNp<NP> c;
@@ -4451,8 +4478,8 @@ ConfigNp<NP> choose_config_np(int wb, const float e0[][3], const float e1[][3], 
         if (c.q < best.q) best = c;
     };
     // Same CEM in every partition (no extra CEM bits).
-    const int q_rgb = endpoint_quant_for(6 * NP, np_color_bits<NP>(wb, false));
-    const int q_scale = endpoint_quant_for(4 * NP, np_color_bits<NP>(wb, false));
+    const int q_rgb = endpoint_quant_for(6 * NP, bits_same);
+    const int q_scale = endpoint_quant_for(4 * NP, bits_same);
     std::span<const EpFamily> fam[std::size_t(NP)];
     if (q_rgb >= qi_floor) {
         for (auto& f : fam) f = kRgb8;
@@ -4465,7 +4492,8 @@ ConfigNp<NP> choose_config_np(int wb, const float e0[][3], const float e1[][3], 
         consider(q_scale, false, fam);
     }
     // Mixed: every subset of partitions on CEM 6, the rest on any RGB CEM.
-    const int mbits = np_color_bits<NP>(wb, true);
+    if (NP == 1) return best;
+    const int mbits = bits_mixed;
     for (int mask = 0; mask < (1 << NP) - 1; ++mask) {
         int n6 = 0;
         for (int p = 0; p < NP; ++p) {
@@ -4480,9 +4508,9 @@ ConfigNp<NP> choose_config_np(int wb, const float e0[][3], const float e1[][3], 
 }
 
 // Re-encode every partition in the CEM + quant of an existing config.
-template <int NP>
+template <int NP, typename GramT>
 ConfigNp<NP> reencode_config_np(const ConfigNp<NP>& c, const float e0[][3], const float e1[][3],
-                                const Gram G[]) {
+                                const GramT G[]) {
     ConfigNp<NP> r = c;
     r.q = 0.f;
     for (int p = 0; p < NP; ++p) {
@@ -4546,7 +4574,8 @@ void try_mode_np(const SampleT<TexW * TexH>& s, const ModeRT& md, int pi, const 
     Gram G[std::size_t(NP)];
     WeightState<TN> st;
     fit_weights_lsq<TN, NP>(s, gm, wq, assign, e0, e1, G, st);
-    ConfigNp<NP> cfg = choose_config_np<NP>(md.wb, e0, e1, G, qi_floor);
+    ConfigNp<NP> cfg = choose_config_np<NP>(np_color_bits<NP>(md.wb, false),
+                                            np_color_bits<NP>(md.wb, true), e0, e1, G, qi_floor);
     if (cfg.qi < 0) return;
     Palette pal[std::size_t(NP)];
     const Palette* tp[std::size_t(TN)];
@@ -4764,6 +4793,488 @@ Candidate encode_block_generic_np(const SampleT<TexW * TexH>& s, const int* pis,
     return best;
 }
 
+// ---------------------------------------------------------------------------
+// Dual-plane path (1, 2 or 3 partitions; the format forbids 4). One colour
+// component (R, G or B) takes its weights from a second plane, the other
+// two share the first. Both planes use the same grid and weight quant and
+// are stored interleaved, so a mode needs 2 * grid weights <= 64 values in
+// 24..96 bits. The second-plane selector takes two more bits below the
+// weights (below the extra CEM bits of a mixed-CEM block).
+//
+// Endpoints use the same CEM 6 / 8 / 9 families and the same derived
+// endpoint quant as the paths above; the per-channel Gram matrices carry
+// the plane of each channel into the endpoint quantiser. A plane cannot
+// be complemented per partition, so every encoding keeps the decoder's
+// endpoint order (no flips); with one partition each plane is oriented on
+// its own first.
+// ---------------------------------------------------------------------------
+
+constexpr std::uint8_t kAssignZero[kMaxTexels] = {};
+
+// Colour bits of a dual-plane block.
+template <int NP>
+constexpr int dp_color_bits(int wb, bool mixed) {
+    return (NP == 1 ? 109 : 97) - wb - (mixed ? 3 * NP - 4 : 0);
+}
+
+inline unsigned dp_plane_mask(int comp, int plane) {
+    return plane ? 1u << comp : 7u & ~(1u << comp);
+}
+
+// Seed of one partition: principal axis of the two first-plane channels
+// (lower sum first), min / max of the second-plane component.
+template <int TN>
+void dp_seed(const SampleT<TN>& s, const std::uint8_t* assign, int part, int comp, float e0[3],
+             float e1[3]) {
+    const int ca = comp == 0 ? 1 : 0, cb = comp == 2 ? 1 : 2;
+    float ma = 0.f, mb = 0.f;
+    int n = 0, lo = 255, hi = 0;
+    for (int j = 0; j < TN; ++j) {
+        if (assign[j] != part) continue;
+        ma += float(s.rgba8[j][ca]);
+        mb += float(s.rgba8[j][cb]);
+        lo = std::min(lo, int(s.rgba8[j][comp]));
+        hi = std::max(hi, int(s.rgba8[j][comp]));
+        ++n;
+    }
+    if (n == 0) {
+        for (int ch = 0; ch < 3; ++ch) e0[ch] = e1[ch] = 0.f;
+        return;
+    }
+    ma /= float(n); mb /= float(n);
+    float caa = 0.f, cab = 0.f, cbb = 0.f;
+    for (int j = 0; j < TN; ++j) {
+        if (assign[j] != part) continue;
+        const float da = float(s.rgba8[j][ca]) - ma, db = float(s.rgba8[j][cb]) - mb;
+        caa += da * da; cab += da * db; cbb += db * db;
+    }
+    const float df = caa - cbb;
+    const float lam = 0.5f * (caa + cbb + std::sqrt(df * df + 4.f * cab * cab));
+    float vx = lam - cbb, vy = cab;
+    if (std::abs(vx) + std::abs(vy) < 1e-6f) { vx = cab; vy = lam - caa; }
+    const float len = std::sqrt(vx * vx + vy * vy);
+    if (len < 1e-6f) { vx = 1.f; vy = 0.f; } else { vx /= len; vy /= len; }
+    if (vx + vy < 0.f) { vx = -vx; vy = -vy; }
+    float tmin = 0.f, tmax = 0.f;
+    for (int j = 0; j < TN; ++j) {
+        if (assign[j] != part) continue;
+        const float t = (float(s.rgba8[j][ca]) - ma) * vx + (float(s.rgba8[j][cb]) - mb) * vy;
+        tmin = std::min(tmin, t); tmax = std::max(tmax, t);
+    }
+    e0[ca] = std::clamp(ma + tmin * vx, 0.f, 255.f);
+    e0[cb] = std::clamp(mb + tmin * vy, 0.f, 255.f);
+    e1[ca] = std::clamp(ma + tmax * vx, 0.f, 255.f);
+    e1[cb] = std::clamp(mb + tmax * vy, 0.f, 255.f);
+    e0[comp] = float(lo);
+    e1[comp] = float(hi);
+}
+
+// Per-texel target weight (0..64) of one plane: projection on the
+// partition's endpoint axis restricted to the plane's channels.
+template <int TN>
+void dp_plane_targets(const SampleT<TN>& s, const std::uint8_t* assign, unsigned chmask,
+                      const float e0[][3], const float e1[][3], float T[std::size_t(TN)]) {
+    for (int j = 0; j < TN; ++j) {
+        const int p = assign[j];
+        float dot = 0.f, rsq = 0.f;
+        for (int ch = 0; ch < 3; ++ch) {
+            if (!((chmask >> ch) & 1u)) continue;
+            const float d = e1[p][ch] - e0[p][ch];
+            dot += (float(s.rgba8[j][ch]) - e0[p][ch]) * d;
+            rsq += d * d;
+        }
+        T[j] = rsq > 1e-9f ? std::clamp(dot / rsq, 0.f, 1.f) * 64.f : 0.f;
+    }
+}
+
+// Per-plane endpoint LSQ of every partition; G takes each channel's Gram.
+template <int TN, int NP>
+void dp_lsq(const SampleT<TN>& s, const std::uint8_t* assign, int comp,
+            const WeightState<TN> st[2], float e0[][3], float e1[][3], GramCh G[]) {
+    for (int p = 0; p < NP; ++p)
+        for (int pl = 0; pl < 2; ++pl) {
+            const unsigned mask = dp_plane_mask(comp, pl);
+            Gram g;
+            lsq_endpoints(s, st[pl].wsum, assign, p, e0[p], e1[p], g, mask);
+            for (int ch = 0; ch < 3; ++ch)
+                if ((mask >> ch) & 1u) G[p].g[ch] = g;
+        }
+}
+
+// Initial fit of both planes (see fit_weights_lsq).
+template <int TN, int NP>
+void fit_weights_lsq_dp(const SampleT<TN>& s, const GridMapRT& gm, const WeightQuantRT& wq,
+                        const std::uint8_t* assign, int comp, float e0[][3], float e1[][3],
+                        GramCh G[], WeightState<TN> st[2]) {
+    for (int it = 0; it < 3; ++it) {
+        for (int pl = 0; pl < 2; ++pl) {
+            float T[std::size_t(TN)];
+            dp_plane_targets<TN>(s, assign, dp_plane_mask(comp, pl), e0, e1, T);
+            for (int g = 0; g < gm.gn; ++g) {
+                const float* row = &gm.pinv[std::size_t(g) * std::size_t(TN)];
+                float v = 0.f;
+                for (int j = 0; j < TN; ++j) v += row[j] * T[j];
+                st[pl].w[g] = wq.nearest[std::clamp(int(v + 0.5f), 0, 64)];
+            }
+            recompute_wsum(gm, wq.ramp, st[pl]);
+        }
+        dp_lsq<TN, NP>(s, assign, comp, st, e0, e1, G);
+    }
+}
+
+// Decoder paint of one endpoint pair per channel and infill weight.
+struct PaintCh {
+    std::uint8_t v[3][65];
+};
+
+template <block_compress::BlockMetric M, int TN>
+inline float rgb_err(const SampleT<TN>& s, int j, std::uint8_t r, std::uint8_t g, std::uint8_t b) {
+    if constexpr (M == block_compress::BlockMetric::oklab2) {
+        const auto l = color_space::srgb8_to_oklab(r, g, b);
+        const float dL = s.lab[j].L - l.L, dA = s.lab[j].a - l.a, dB = s.lab[j].b - l.b;
+        return dL * dL + dA * dA + dB * dB;
+    } else {
+        const int dr = int(s.rgba8[j][0]) - int(r);
+        const int dg = int(s.rgba8[j][1]) - int(g);
+        const int db = int(s.rgba8[j][2]) - int(b);
+        return float(dr * dr + dg * dg + db * db) * (1.f / 65536.f);
+    }
+}
+
+// Coordinate descent on both planes against the exact decoder paint
+// (see refine_weights). st[0].terr holds the texel errors. Returns the
+// block error.
+template <block_compress::BlockMetric M, int TN>
+float refine_weights_dp(const SampleT<TN>& s, const GridMapRT& gm, const WeightQuantRT& wq,
+                        const std::uint8_t* assign, int comp, const PaintCh* paint,
+                        WeightState<TN> st[2]) {
+    const int* ramp = wq.ramp;
+    const int c0 = comp == 0 ? 1 : 0, c1 = comp == 2 ? 1 : 2;
+    // Texel error for first-plane infill weight wa and second-plane wb.
+    auto eval = [&](int j, int wa, int wb) {
+        const PaintCh& pc = paint[assign[j]];
+        std::uint8_t c[3];
+        c[c0] = pc.v[c0][wa];
+        c[c1] = pc.v[c1][wa];
+        c[comp] = pc.v[comp][wb];
+        return rgb_err<M, TN>(s, j, c[0], c[1], c[2]);
+    };
+    float* terr = st[0].terr;
+    if (gm.identity) {
+        float tot = 0.f;
+        for (int j = 0; j < TN; ++j) {
+            const int g = gm.tg[j][0];
+            int k[2] = {st[0].w[g], st[1].w[g]};
+            float be = eval(j, ramp[k[0]], ramp[k[1]]);
+            for (int pass = 0; pass < 3; ++pass) {
+                bool changed = false;
+                for (int pl = 0; pl < 2; ++pl)
+                    for (int q = 0; q < wq.wl; ++q) {
+                        const float e = pl ? eval(j, ramp[k[0]], ramp[q]) : eval(j, ramp[q], ramp[k[1]]);
+                        if (e < be) { be = e; k[pl] = q; changed = true; }
+                    }
+                if (!changed) break;
+            }
+            for (int pl = 0; pl < 2; ++pl) {
+                st[pl].w[g] = std::uint8_t(k[pl]);
+                st[pl].wsum[j] = 16 * ramp[k[pl]];
+            }
+            terr[j] = be;
+            tot += be;
+        }
+        return tot;
+    }
+    recompute_wsum(gm, ramp, st[0]);
+    recompute_wsum(gm, ramp, st[1]);
+    for (int j = 0; j < TN; ++j)
+        terr[j] = eval(j, infill_weight(st[0].wsum[j]), infill_weight(st[1].wsum[j]));
+    for (int sweep = 0; sweep < 8; ++sweep) {
+        bool improved = false;
+        for (int pl = 0; pl < 2; ++pl) {
+            WeightState<TN>& me = st[pl];
+            const int* other = st[1 - pl].wsum;
+            for (int g = 0; g < gm.gn; ++g) {
+                const int cur = me.w[g];
+                const auto lo = gm.goff[std::size_t(g)], hi = gm.goff[std::size_t(g) + 1];
+                float best_d = -1e-9f;
+                int best_k = -1;
+                for (int k = cur - 1; k <= cur + 1; k += 2) {
+                    if (k < 0 || k >= wq.wl) continue;
+                    const int dr = ramp[k] - ramp[cur];
+                    float delta = 0.f;
+                    for (auto i = lo; i < hi; ++i) {
+                        const int j = gm.gtex[i];
+                        const int wn = infill_weight(me.wsum[j] + int(gm.gcoef[i]) * dr);
+                        const int wo = infill_weight(other[j]);
+                        delta += (pl ? eval(j, wo, wn) : eval(j, wn, wo)) - terr[j];
+                    }
+                    if (delta < best_d) { best_d = delta; best_k = k; }
+                }
+                if (best_k < 0) continue;
+                const int dr = ramp[best_k] - ramp[cur];
+                for (auto i = lo; i < hi; ++i) {
+                    const int j = gm.gtex[i];
+                    me.wsum[j] += int(gm.gcoef[i]) * dr;
+                    const int wn = infill_weight(me.wsum[j]);
+                    const int wo = infill_weight(other[j]);
+                    terr[j] = pl ? eval(j, wo, wn) : eval(j, wn, wo);
+                }
+                me.w[g] = std::uint8_t(best_k);
+                improved = true;
+            }
+        }
+        if (!improved) break;
+    }
+    float tot = 0.f;
+    for (int j = 0; j < TN; ++j) tot += terr[j];
+    return tot;
+}
+
+// Pack a dual-plane block: w0 / w1 = first / second plane grid weights.
+template <int NP>
+void pack_generic_dp(const ModeRT& md, const WeightQuantRT& wq, int pi, int comp,
+                     const ConfigNp<NP>& c, const std::uint8_t* w0, const std::uint8_t* w1,
+                     Block& out) {
+    (void)pi;  // one partition has no partition index
+    std::uint8_t pcb[16] = {};
+    std::uint8_t ws[64], wbuf[16] = {};
+    const int gn = md.gw * md.gh;
+    for (int i = 0; i < gn; ++i) {
+        ws[2 * i] = wq.scramble ? wq.scramble[w0[i]] : w0[i];
+        ws[2 * i + 1] = wq.scramble ? wq.scramble[w1[i]] : w1[i];
+    }
+    ise_encode_rt(ws, 2 * gn, md.wqi, wbuf, 0);
+    for (int i = 0; i < 16; ++i) pcb[i] = bitrev8(wbuf[15 - i]);
+    write_bits(md.bm, 11, 0, pcb);
+    write_bits(std::uint32_t(NP - 1), 2, 11, pcb);
+    int below = 128 - md.wb;
+    if constexpr (NP == 1) {
+        write_bits(std::uint32_t(c.enc[0].cem), 4, 13, pcb);
+    } else {
+        write_bits(std::uint32_t(pi), 10, 13, pcb);
+        if (!c.mixed) {
+            write_bits(std::uint32_t(c.enc[0].cem << 2), 6, 23, pcb);
+        } else {
+            int base = 3;
+            for (int p = 0; p < NP; ++p) base = std::min(base, c.enc[p].cem >> 2);
+            int enc = base + 1;
+            for (int p = 0; p < NP; ++p) {
+                enc |= ((c.enc[p].cem >> 2) - base) << (2 + p);
+                enc |= (c.enc[p].cem & 3) << (2 + NP + 2 * p);
+            }
+            constexpr int kHigh = 3 * NP - 4;
+            below -= kHigh;
+            write_bits(std::uint32_t(enc & 0x3F), 6, 23, pcb);
+            write_bits(std::uint32_t(enc >> 6), kHigh, below, pcb);
+        }
+    }
+    write_bits(std::uint32_t(comp), 2, below - 2, pcb);
+    const ColorLattice& L = color_lattice(c.qi);
+    std::uint8_t st[18];
+    int n = 0;
+    for (int p = 0; p < NP; ++p)
+        for (int i = 0; i < c.enc[p].nvals; ++i) st[n++] = L.stored_of[c.enc[p].unq[i]];
+    ise_encode_rt(st, n, c.qi, pcb, NP == 1 ? 17 : 29);
+    for (std::size_t i = 0; i < kBlockBytes; ++i) out[i] = pcb[i];
+}
+
+template <int TexW, int TexH, int NP, block_compress::BlockMetric M>
+void try_mode_dp(const SampleT<TexW * TexH>& s, const ModeRT& md, int pi,
+                 const std::uint8_t* assign, int comp, const float seed0[][3],
+                 const float seed1[][3], int qi_floor, Candidate& best) {
+    constexpr int TN = TexW * TexH;
+    const GridMapRT& gm = *md.map;
+    const WeightQuantRT& wq = weight_quant(md.wqi);
+    float e0[std::size_t(NP)][3], e1[std::size_t(NP)][3];
+    std::memcpy(e0, seed0, sizeof(e0));
+    std::memcpy(e1, seed1, sizeof(e1));
+    GramCh G[std::size_t(NP)];
+    WeightState<TN> st[2];
+    fit_weights_lsq_dp<TN, NP>(s, gm, wq, assign, comp, e0, e1, G, st);
+    if constexpr (NP == 1) {
+        // Orient each plane so that endpoint 0 is the lower one.
+        for (int pl = 0; pl < 2; ++pl) {
+            const unsigned mask = dp_plane_mask(comp, pl);
+            float d = 0.f;
+            for (int ch = 0; ch < 3; ++ch)
+                if ((mask >> ch) & 1u) d += e1[0][ch] - e0[0][ch];
+            if (d >= 0.f) continue;
+            for (int ch = 0; ch < 3; ++ch) {
+                if (!((mask >> ch) & 1u)) continue;
+                std::swap(e0[0][ch], e1[0][ch]);
+                G[0].g[ch] = G[0].g[ch].swapped();
+            }
+            for (int g = 0; g < gm.gn; ++g) st[pl].w[g] = std::uint8_t(wq.wl - 1 - st[pl].w[g]);
+        }
+    }
+    ConfigNp<NP> cfg = choose_config_np<NP>(dp_color_bits<NP>(md.wb, false),
+                                            dp_color_bits<NP>(md.wb, true), e0, e1, G, qi_floor);
+    if (cfg.qi < 0) return;
+    PaintCh paint[std::size_t(NP)];
+    for (int round = 0; round < 2; ++round) {
+        for (int p = 0; p < NP; ++p) {
+            std::uint8_t d0[3], d1[3];
+            decode_rgb_endpoints(cfg.enc[p].cem, cfg.enc[p].unq, d0, d1);
+            for (int ch = 0; ch < 3; ++ch)
+                for (int w = 0; w <= 64; ++w)
+                    paint[p].v[ch][w] =
+                        std::uint8_t(((64 - w) * int(d0[ch]) + w * int(d1[ch]) + 32) >> 6);
+        }
+        const float err = refine_weights_dp<M, TN>(s, gm, wq, assign, comp, paint, st);
+        if (err < best.err) {
+            best.err = err;
+            for (int j = 0; j < TN; ++j) {
+                const int wi[2] = {infill_weight(st[0].wsum[j]), infill_weight(st[1].wsum[j])};
+                for (int ch = 0; ch < 3; ++ch)
+                    best.decoded[j][ch] = paint[assign[j]].v[ch][wi[ch == comp ? 1 : 0]];
+                best.decoded[j][3] = 255;
+            }
+            pack_generic_dp<NP>(md, wq, pi, comp, cfg, st[0].w, st[1].w, best.block);
+        }
+        if (round == 1) return;
+        dp_lsq<TN, NP>(s, assign, comp, st, e0, e1, G);
+        cfg = reencode_config_np<NP>(cfg, e0, e1, G);
+        if (cfg.qi < 0) return;
+    }
+}
+
+// Dual-plane variant of estimate_grids: each plane's continuous weights
+// are decimated on their own, then every channel takes an endpoint LSQ
+// on its plane. Grids over 32 points cannot hold two planes (R = inf).
+template <int TN, int NP>
+void estimate_grids_dp(const SampleT<TN>& s, const std::vector<GridMapRT>& maps,
+                       const std::uint8_t* assign, int comp, const float e0[][3],
+                       const float e1[][3], float* R, float* S) {
+    float T[2][std::size_t(TN)];
+    for (int pl = 0; pl < 2; ++pl)
+        dp_plane_targets<TN>(s, assign, dp_plane_mask(comp, pl), e0, e1, T[pl]);
+    for (std::size_t g = 0; g < maps.size(); ++g) {
+        const GridMapRT& gm = maps[g];
+        if (gm.gn > 32) {
+            R[g] = std::numeric_limits<float>::infinity();
+            S[g] = 0.f;
+            continue;
+        }
+        float u[2][std::size_t(TN)];
+        float a00[2][std::size_t(NP)] = {}, a01[2][std::size_t(NP)] = {}, a11[2][std::size_t(NP)] = {};
+        float b0[std::size_t(NP)][3] = {}, b1[std::size_t(NP)][3] = {};
+        for (int pl = 0; pl < 2; ++pl) {
+            float v[32];
+            for (int i = 0; i < gm.gn; ++i) {
+                const float* row = &gm.pinv[std::size_t(i) * std::size_t(TN)];
+                float a = 0.f;
+                for (int j = 0; j < TN; ++j) a += row[j] * T[pl][j];
+                v[i] = std::clamp(a, 0.f, 64.f);
+            }
+            for (int j = 0; j < TN; ++j) {
+                float w = 0.f;
+                for (int k = 0; k < 4; ++k) w += float(gm.tc[j][k]) * v[gm.tg[j][k]];
+                const float u1 = w * (1.f / 1024.f), u0 = 1.f - u1;
+                u[pl][j] = u1;
+                const int p = assign[j];
+                a00[pl][p] += u0 * u0; a01[pl][p] += u0 * u1; a11[pl][p] += u1 * u1;
+            }
+        }
+        for (int j = 0; j < TN; ++j) {
+            const int p = assign[j];
+            for (int ch = 0; ch < 3; ++ch) {
+                const float u1 = u[ch == comp ? 1 : 0][j];
+                b0[p][ch] += (1.f - u1) * float(s.rgba8[j][ch]);
+                b1[p][ch] += u1 * float(s.rgba8[j][ch]);
+            }
+        }
+        float ea[std::size_t(NP)][3], eb[std::size_t(NP)][3];
+        for (int p = 0; p < NP; ++p)
+            for (int ch = 0; ch < 3; ++ch) {
+                const int pl = ch == comp ? 1 : 0;
+                const float det = a00[pl][p] * a11[pl][p] - a01[pl][p] * a01[pl][p];
+                if (std::abs(det) < 1e-6f) { ea[p][ch] = e0[p][ch]; eb[p][ch] = e1[p][ch]; continue; }
+                ea[p][ch] = std::clamp((a11[pl][p] * b0[p][ch] - a01[pl][p] * b1[p][ch]) / det, 0.f, 255.f);
+                eb[p][ch] = std::clamp((a00[pl][p] * b1[p][ch] - a01[pl][p] * b0[p][ch]) / det, 0.f, 255.f);
+            }
+        float r = 0.f, sp = 0.f;
+        for (int j = 0; j < TN; ++j) {
+            const int p = assign[j];
+            for (int ch = 0; ch < 3; ++ch) {
+                const float d = eb[p][ch] - ea[p][ch];
+                const float e = float(s.rgba8[j][ch]) - ea[p][ch] - u[ch == comp ? 1 : 0][j] * d;
+                r += e * e;
+                sp += d * d;
+            }
+        }
+        R[g] = r;
+        S[g] = sp;
+    }
+}
+
+// Number of (partition, second-plane component, mode) triples the
+// dual-plane path fully encodes, chosen by estimate_mode over every
+// top-K partition x component x dual-plane block mode. Kodak dev subset
+// (9 images) at 6x6, mean S2 gain over no dual plane: 1p 48 -> +0.108,
+// 1p 160 -> +0.120; 2p 32 + 3p 12 on top of 1p 48 -> +0.117.
+template <int NP>
+constexpr int kGenericDpTop = NP == 1 ? 128 : NP == 2 ? 32 : 12;
+
+// All NP-partition dual-plane candidates for one block. NP == 1 ignores
+// pis / npis.
+template <int TexW, int TexH, int NP, block_compress::BlockMetric M>
+Candidate encode_block_generic_dp(const SampleT<TexW * TexH>& s, const int* pis, int npis) {
+    constexpr int TN = TexW * TexH;
+    const auto& ctx = generic_ctx<TexW, TexH>();
+    Candidate best{};
+    best.err = std::numeric_limits<float>::infinity();
+    constexpr int kTopN = kGenericDpTop<NP>;
+    constexpr int kMaxPi = NP == 1 ? 1 : kTop2pPartitions;
+    if constexpr (NP == 1) npis = 1;
+    auto assign_of = [&](int k) -> const std::uint8_t* {
+        if constexpr (NP == 1) {
+            (void)k;
+            return kAssignZero;
+        } else {
+            return partition_table_np<NP, TexW, TexH>().assign[pis[k]];
+        }
+    };
+    struct Est { float e; int k; int comp; int m; };
+    Est top[std::size_t(kTopN)];
+    int ntop = 0;
+    float seed0[std::size_t(kMaxPi)][3][std::size_t(NP)][3];
+    float seed1[std::size_t(kMaxPi)][3][std::size_t(NP)][3];
+    float R[12 * 12], S[12 * 12];  // per weight grid (<= 11 x 11 maps)
+    for (int k = 0; k < npis; ++k) {
+        const std::uint8_t* assign = assign_of(k);
+        for (int comp = 0; comp < 3; ++comp) {
+            for (int p = 0; p < NP; ++p)
+                dp_seed<TN>(s, assign, p, comp, seed0[k][comp][p], seed1[k][comp][p]);
+            estimate_grids_dp<TN, NP>(s, ctx.maps, assign, comp, seed0[k][comp], seed1[k][comp],
+                                      R, S);
+            for (std::size_t m = 0; m < ctx.dp_modes.size(); ++m) {
+                const ModeRT& md = ctx.dp_modes[m];
+                const int bits = dp_color_bits<NP>(md.wb, false);
+                const int q_scale = endpoint_quant_for(4 * NP, bits);
+                if (q_scale < kGenericNpFloor) continue;
+                const auto g = std::size_t(md.map - ctx.maps.data());
+                const int q_rgb = endpoint_quant_for(6 * NP, bits);
+                const int qi = q_rgb >= kGenericNpFloor ? q_rgb : q_scale;
+                const Est e{estimate_mode(R[g], S[g], kQuantDesc[md.wqi].levels, qi, TN), k, comp,
+                            int(m)};
+                int pos = std::min(ntop, kTopN);
+                while (pos > 0 && e.e < top[pos - 1].e) {
+                    if (pos < kTopN) top[pos] = top[pos - 1];
+                    --pos;
+                }
+                if (pos < kTopN) { top[pos] = e; if (ntop < kTopN) ++ntop; }
+            }
+        }
+    }
+    for (int t = 0; t < ntop; ++t) {
+        const Est& e = top[t];
+        try_mode_dp<TexW, TexH, NP, M>(s, ctx.dp_modes[std::size_t(e.m)], NP == 1 ? 0 : pis[e.k],
+                                       assign_of(e.k), e.comp, seed0[e.k][e.comp],
+                                       seed1[e.k][e.comp], kGenericNpFloor, best);
+    }
+    return best;
+}
+
 // Per-block dispatch: alpha blocks → CEM-12 (1-partition); RGB blocks
 // try 1p (CEM-8 QUANT_8 weights + QUANT_256 endpoints) and 2p (CEM-8
 // QUANT_4 weights + QUANT_40 endpoints), pick lower-OKLab².
@@ -4805,6 +5316,7 @@ EncodeResult encode_image_impl(std::span<const std::uint8_t> rgba_srgb8,
     res.block_rows = (image_h + H - 1) / H;
     const auto bcols = static_cast<std::size_t>(res.block_cols);
     res.blocks.assign(bcols * static_cast<std::size_t>(res.block_rows), Block{});
+    res.predicted_rgba.assign(std::size_t(image_w) * std::size_t(image_h) * 4u, 0);
 
     int pad_w = res.block_cols * W;
     int pad_h = res.block_rows * H;
@@ -4940,6 +5452,13 @@ EncodeResult encode_image_impl(std::span<const std::uint8_t> rgba_srgb8,
                 std::size_t bidx = static_cast<std::size_t>(by) * bcols +
                                    static_cast<std::size_t>(bx);
                 res.blocks[bidx] = c.block;
+                for (int dy = 0; dy < H && by * H + dy < image_h; ++dy)
+                    for (int dx = 0; dx < W && bx * W + dx < image_w; ++dx) {
+                        const std::size_t o =
+                            (std::size_t(by * H + dy) * iw + std::size_t(bx * W + dx)) * 4u;
+                        for (std::size_t ch = 0; ch < 4; ++ch)
+                            res.predicted_rgba[o + ch] = c.decoded[dy * W + dx][ch];
+                    }
                 strip_err += c.err;
             }
         }
@@ -4979,9 +5498,17 @@ EncodeResult encode_image_gen(std::span<const std::uint8_t> rgba_srgb8, int imag
             find_best_2p_partitions<W, H, kTop2pPartitions>(s, pis);
             Candidate c = encode_block_generic_np<W, H, 2, M>(s, pis, kTop2pPartitions);
             if (c.err < a.err) a = c;
-            find_best_np_partitions<W, H, 3, kTop2pPartitions>(s, pis);
-            Candidate d = encode_block_generic_np<W, H, 3, M>(s, pis, kTop2pPartitions);
+            int pis3[kTop2pPartitions];
+            find_best_np_partitions<W, H, 3, kTop2pPartitions>(s, pis3);
+            Candidate d = encode_block_generic_np<W, H, 3, M>(s, pis3, kTop2pPartitions);
             if (d.err < a.err) a = d;
+            // Dual plane: 1, 2 and 3 partitions, any second-plane component.
+            Candidate e = encode_block_generic_dp<W, H, 1, M>(s, nullptr, 1);
+            if (e.err < a.err) a = e;
+            e = encode_block_generic_dp<W, H, 2, M>(s, pis, kTop2pPartitions);
+            if (e.err < a.err) a = e;
+            e = encode_block_generic_dp<W, H, 3, M>(s, pis3, kTop2pPartitions);
+            if (e.err < a.err) a = e;
             return a;
         });
 }

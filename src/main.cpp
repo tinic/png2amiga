@@ -7229,6 +7229,15 @@ int run_astc(Config cfg) {
     }
 
     auto decoded_rgba = astc::decode_image(enc.blocks, W, H, fp.w, fp.h);
+    // Texels where the reference decode differs from the encoder's
+    // prediction (alpha only counts when the source has alpha).
+    std::size_t predict_mismatch = 0;
+    for (std::size_t i = 0; i < std::size_t(W) * std::size_t(H); ++i) {
+        const std::uint8_t* a = &enc.predicted_rgba[i * 4u];
+        const std::uint8_t* b = &decoded_rgba[i * 4u];
+        if (a[0] != b[0] || a[1] != b[1] || a[2] != b[2] || (has_alpha && a[3] != b[3]))
+            ++predict_mismatch;
+    }
     std::vector<Color3f> decoded_lin(std::size_t(W) * std::size_t(H));
     for (std::size_t i = 0; i < decoded_lin.size(); ++i) {
         decoded_lin[i] = color_space::srgb_to_linear(Color3f{
@@ -7273,6 +7282,7 @@ int run_astc(Config cfg) {
         cfg.output_path,
         double(enc.total_oklab2_error),
         psnr, s2);
+    cli_status("astc_predict_mismatch={}", predict_mismatch);
 
     if (cfg.preview) {
         Image preview(std::size_t(W), std::size_t(H), decoded_lin);

@@ -45,6 +45,10 @@ struct EncodeResult {
     int block_cols{};
     int block_rows{};
     float total_oklab2_error{};
+    // The encoder's own prediction of the decoded image (RGBA8, image_w x
+    // image_h). Must equal decode_image() of `blocks`; a difference means
+    // the encoder packed a block that decodes to something else.
+    std::vector<std::uint8_t> predicted_rgba;
 };
 
 EncodeResult encode_image(std::span<const std::uint8_t> rgba_srgb8,

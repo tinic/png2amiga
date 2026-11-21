@@ -248,7 +248,9 @@ int main(int argc, char* argv[]) {
         // the astc-cem ctest.
         int cem_count[16] = {};
         int part_count[5] = {};
-        int void_extent = 0, mixed = 0;
+        int void_extent = 0, mixed = 0, dual_plane = 0;
+        int dp_parts[5] = {};
+        int dp_comp[4] = {};
         for (std::size_t b = 0; b + 16 <= blocks_len; b += 16) {
             const std::uint8_t* p = blocks_ptr + b;
             auto bits = [p](int off, int n) {
@@ -260,6 +262,50 @@ int main(int argc, char* argv[]) {
             if (bits(0, 9) == 0x1FC) { ++void_extent; continue; }
             const int parts = bits(11, 2) + 1;
             ++part_count[parts];
+            // Dual plane: the D bit (bit 10), except in the block-mode
+            // layout where bits 9..10 hold a grid dimension.
+            const int bm = bits(0, 11);
+            const bool wide = (bm & 3) == 0 && ((bm >> 7) & 3) == 2;
+            if (((bm >> 10) & 1) && !wide) {
+                ++dual_plane;
+                ++dp_parts[parts];
+                // Second-plane component: two bits below the weights
+                // and below the extra CEM bits of a mixed-CEM block.
+                int gw = 0, gh = 0, r = (bm >> 4) & 1;
+                const int a = (bm >> 5) & 3;
+                if ((bm & 3) != 0) {
+                    r |= (bm & 3) << 1;
+                    int bb = (bm >> 7) & 3;
+                    switch ((bm >> 2) & 3) {
+                        case 0: gw = bb + 4; gh = a + 2; break;
+                        case 1: gw = bb + 8; gh = a + 2; break;
+                        case 2: gw = a + 2; gh = bb + 8; break;
+                        default:
+                            bb &= 1;
+                            if (bm & 0x100) { gw = bb + 2; gh = a + 2; }
+                            else { gw = a + 2; gh = bb + 6; }
+                            break;
+                    }
+                } else {
+                    r |= ((bm >> 2) & 3) << 1;
+                    switch ((bm >> 7) & 3) {
+                        case 0: gw = 12; gh = a + 2; break;
+                        case 1: gw = a + 2; gh = 12; break;
+                        default: gw = a == 0 ? 6 : 10; gh = a == 0 ? 10 : 6; break;
+                    }
+                }
+                static const int kBits[12] = {1, 0, 2, 0, 1, 3, 1, 2, 4, 2, 3, 5};
+                static const int kTrits[12] = {0, 1, 0, 0, 1, 0, 0, 1, 0, 0, 1, 0};
+                static const int kQuints[12] = {0, 0, 0, 1, 0, 0, 1, 0, 0, 1, 0, 0};
+                const int q = (r - 2) + 6 * ((bm >> 9) & 1);
+                const int n = 2 * gw * gh;
+                int wb = n * kBits[q];
+                if (kTrits[q]) wb += (n * 8 + 4) / 5;
+                if (kQuints[q]) wb += (n * 7 + 2) / 3;
+                int below = 128 - wb;
+                if (parts > 1 && (bits(23, 2) != 0)) below -= 3 * parts - 4;
+                ++dp_comp[bits(below - 2, 2)];
+            }
             if (parts == 1) { ++cem_count[bits(13, 4)]; continue; }
             const int field = bits(23, 6);
             if ((field & 3) == 0) cem_count[field >> 2] += parts;
@@ -267,10 +313,13 @@ int main(int argc, char* argv[]) {
         }
         std::fprintf(stderr,
                      "astc_blocks=%zu void_extent=%d p1=%d p2=%d p3=%d p4=%d mixed=%d "
-                     "cem0=%d cem6=%d cem8=%d cem9=%d\n",
+                     "cem0=%d cem6=%d cem8=%d cem9=%d cem12=%d "
+                     "dual_plane=%d dp_p1=%d dp_p2=%d dp_p3=%d dp_r=%d dp_g=%d dp_b=%d dp_a=%d\n",
                      blocks_len / 16, void_extent, part_count[1], part_count[2],
                      part_count[3], part_count[4], mixed, cem_count[0], cem_count[6],
-                     cem_count[8], cem_count[9]);
+                     cem_count[8], cem_count[9], cem_count[12],
+                     dual_plane, dp_parts[1], dp_parts[2], dp_parts[3],
+                     dp_comp[0], dp_comp[1], dp_comp[2], dp_comp[3]);
         return 0;
     }
 
