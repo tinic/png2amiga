@@ -3921,7 +3921,8 @@ int delta_channel(const ColorLattice& L, float bt, float et, Eval eval,
 
 // Encode the endpoint pair (A, B) (float LSQ optimum, caller orientation)
 // in one family at endpoint quant qi.
-EpEnc encode_endpoints(EpFamily fam, int qi, const float A[3], const float B[3], const Gram& G) {
+EpEnc encode_endpoints_any(EpFamily fam, int qi, const float A[3], const float B[3], const Gram& G,
+                           bool allow_flip) {
     EpEnc r;
     const ColorLattice& L = color_lattice(qi);
     auto cl = [](int x) { return std::clamp(x, 0, 255); };
@@ -3997,7 +3998,7 @@ EpEnc encode_endpoints(EpFamily fam, int qi, const float A[3], const float B[3],
     case EpFamily::delta_contract: {
         const bool bc = fam == EpFamily::delta_contract;
         EpEnc best;
-        for (int orient = 0; orient < 2; ++orient) {
+        for (int orient = 0; orient < (allow_flip ? 2 : 1); ++orient) {
             // Decoder endpoint 0 / 1 targets for this orientation.
             const float* T0 = orient ? B : A;
             const float* T1 = orient ? A : B;
@@ -4101,6 +4102,13 @@ EpEnc encode_endpoints(EpFamily fam, int qi, const float A[3], const float B[3],
         return r;
     }
     }
+    return r;
+}
+
+EpEnc encode_endpoints(EpFamily fam, int qi, const float A[3], const float B[3], const Gram& G,
+                       bool allow_flip = true) {
+    EpEnc r = encode_endpoints_any(fam, qi, A, B, G, allow_flip);
+    if (r.flip && !allow_flip) r.ok = false;
     return r;
 }
 
@@ -4380,19 +4388,390 @@ Candidate encode_block_generic_1p(const SampleT<TexW * TexH>& s) {
     return best;
 }
 
+// ---------------------------------------------------------------------------
+// Generic multi-partition path (2 or 3 partitions): shared weight grid,
+// per-partition CEM from {6, 8, 9} (incl. the mixed-CEM class encoding),
+// endpoint quant derived from the bits the mode leaves. Partitions share
+// grid weights, so a partition cannot complement its weights on its own:
+// each partition's seed is oriented with sum(e0) <= sum(e1) and only
+// encodings that keep that orientation are used.
+// ---------------------------------------------------------------------------
+
+constexpr EpFamily kRgb8[] = {EpFamily::direct, EpFamily::contract};
+constexpr EpFamily kRgb9[] = {EpFamily::delta, EpFamily::delta_contract};
+constexpr EpFamily kRgbAll[] = {EpFamily::direct, EpFamily::contract, EpFamily::delta,
+                                EpFamily::delta_contract};
+constexpr EpFamily kScale[] = {EpFamily::scale};
+// Lowest endpoint quant the generic multi-partition path uses. Kodak
+// dev subset at 6x6: QUANT_12 beats QUANT_24 by +0.08 S2; QUANT_6
+// loses 0.21.
+constexpr int kQuant12Index = 7;
+constexpr int kGenericNpFloor = kQuant12Index;
+
+// Endpoint configuration of all partitions of one candidate.
+template <int NP>
+struct ConfigNp {
+    int qi = -1;
+    bool mixed = false;
+    EpEnc enc[NP];
+    float q = std::numeric_limits<float>::infinity();
+};
+
+// Best no-flip encoding of one partition among the given families.
+inline EpEnc best_of(std::span<const EpFamily> fams, int qi, const float A[3],
+                     const float B[3], const Gram& G) {
+    EpEnc best;
+    for (EpFamily f : fams) {
+        EpEnc e = encode_endpoints(f, qi, A, B, G, false);
+        if (e.ok && e.q < best.q) best = e;
+    }
+    return best;
+}
+
+// Colour bits left for endpoints: 99 - weight bits, minus the extra CEM
+// bits a mixed (per-partition) CEM encoding stores below the weights.
+template <int NP>
+constexpr int np_color_bits(int wb, bool mixed) {
+    return 99 - wb - (mixed ? 3 * NP - 4 : 0);
+}
+
+// Choose the configuration with the lowest predicted sRGB error.
+template <int NP>
+ConfigNp<NP> choose_config_np(int wb, const float e0[][3], const float e1[][3], const Gram G[],
+                              int qi_floor) {
+    ConfigNp<NP> best;
+    auto consider = [&](int qi, bool mixed, std::span<const EpFamily> const fams[NP]) {
+        ConfigNp<NP> c;
+        c.qi = qi; c.mixed = mixed; c.q = 0.f;
+        for (int p = 0; p < NP; ++p) {
+            c.enc[p] = best_of(fams[p], qi, e0[p], e1[p], G[p]);
+            if (!c.enc[p].ok) return;
+            c.q += c.enc[p].q;
+        }
+        if (c.q < best.q) best = c;
+    };
+    // Same CEM in every partition (no extra CEM bits).
+    const int q_rgb = endpoint_quant_for(6 * NP, np_color_bits<NP>(wb, false));
+    const int q_scale = endpoint_quant_for(4 * NP, np_color_bits<NP>(wb, false));
+    std::span<const EpFamily> fam[NP];
+    if (q_rgb >= qi_floor) {
+        for (auto& f : fam) f = kRgb8;
+        consider(q_rgb, false, fam);
+        for (auto& f : fam) f = kRgb9;
+        consider(q_rgb, false, fam);
+    }
+    if (q_scale >= qi_floor) {
+        for (auto& f : fam) f = kScale;
+        consider(q_scale, false, fam);
+    }
+    // Mixed: every subset of partitions on CEM 6, the rest on any RGB CEM.
+    const int mbits = np_color_bits<NP>(wb, true);
+    for (int mask = 0; mask < (1 << NP) - 1; ++mask) {
+        int n6 = 0;
+        for (int p = 0; p < NP; ++p) {
+            const bool sc = (mask >> p) & 1;
+            fam[p] = sc ? std::span<const EpFamily>(kScale) : std::span<const EpFamily>(kRgbAll);
+            n6 += sc ? 1 : 0;
+        }
+        const int qi = endpoint_quant_for(4 * n6 + 6 * (NP - n6), mbits);
+        if (qi >= qi_floor) consider(qi, true, fam);
+    }
+    return best;
+}
+
+// Re-encode every partition in the CEM + quant of an existing config.
+template <int NP>
+ConfigNp<NP> reencode_config_np(const ConfigNp<NP>& c, const float e0[][3], const float e1[][3],
+                                const Gram G[]) {
+    ConfigNp<NP> r = c;
+    r.q = 0.f;
+    for (int p = 0; p < NP; ++p) {
+        const int cem = c.enc[p].cem;
+        const std::span<const EpFamily> fams = cem == 6 ? std::span<const EpFamily>(kScale)
+                                             : cem == 8 ? std::span<const EpFamily>(kRgb8)
+                                                        : std::span<const EpFamily>(kRgb9);
+        r.enc[p] = best_of(fams, c.qi, e0[p], e1[p], G[p]);
+        if (!r.enc[p].ok) { r.qi = -1; return r; }
+        r.q += r.enc[p].q;
+    }
+    return r;
+}
+
+template <int NP>
+void pack_generic_np(const ModeRT& md, const WeightQuantRT& wq, int pi, const ConfigNp<NP>& c,
+                     const std::uint8_t* w, Block& out) {
+    std::uint8_t pcb[16] = {};
+    std::uint8_t ws[64], wbuf[16] = {};
+    const int gn = md.gw * md.gh;
+    for (int i = 0; i < gn; ++i) ws[i] = wq.scramble ? wq.scramble[w[i]] : w[i];
+    ise_encode_rt(ws, gn, md.wqi, wbuf, 0);
+    for (int i = 0; i < 16; ++i) pcb[i] = bitrev8(wbuf[15 - i]);
+    write_bits(md.bm, 11, 0, pcb);
+    write_bits(NP - 1, 2, 11, pcb);
+    write_bits(std::uint32_t(pi), 10, 13, pcb);
+    if (!c.mixed) {
+        write_bits(std::uint32_t(c.enc[0].cem << 2), 6, 23, pcb);
+    } else {
+        // Class-relative CEM encoding: base class + 1, one class-offset
+        // bit per partition, then two mode bits per partition.
+        int base = 3;
+        for (int p = 0; p < NP; ++p) base = std::min(base, c.enc[p].cem >> 2);
+        int enc = base + 1;
+        for (int p = 0; p < NP; ++p) {
+            enc |= ((c.enc[p].cem >> 2) - base) << (2 + p);
+            enc |= (c.enc[p].cem & 3) << (2 + NP + 2 * p);
+        }
+        constexpr int kHigh = 3 * NP - 4;
+        write_bits(std::uint32_t(enc & 0x3F), 6, 23, pcb);
+        write_bits(std::uint32_t(enc >> 6), kHigh, 128 - md.wb - kHigh, pcb);
+    }
+    const ColorLattice& L = color_lattice(c.qi);
+    std::uint8_t st[18];
+    int n = 0;
+    for (int p = 0; p < NP; ++p)
+        for (int i = 0; i < c.enc[p].nvals; ++i) st[n++] = L.stored_of[c.enc[p].unq[i]];
+    ise_encode_rt(st, n, c.qi, pcb, 29);
+    for (std::size_t i = 0; i < kBlockBytes; ++i) out[i] = pcb[i];
+}
+
+template <int TexW, int TexH, int NP, block_compress::BlockMetric M>
+void try_mode_np(const SampleT<TexW * TexH>& s, const ModeRT& md, int pi, const std::uint8_t* assign,
+                 const float seed0[][3], const float seed1[][3], int qi_floor, Candidate& best) {
+    constexpr int TN = TexW * TexH;
+    const GridMapRT& gm = *md.map;
+    const WeightQuantRT& wq = weight_quant(md.wqi);
+    float e0[NP][3], e1[NP][3];
+    std::memcpy(e0, seed0, sizeof(e0));
+    std::memcpy(e1, seed1, sizeof(e1));
+    Gram G[NP];
+    WeightState<TN> st;
+    fit_weights_lsq<TN, NP>(s, gm, wq, assign, e0, e1, G, st);
+    ConfigNp<NP> cfg = choose_config_np<NP>(md.wb, e0, e1, G, qi_floor);
+    if (cfg.qi < 0) return;
+    Palette pal[NP];
+    const Palette* tp[std::size_t(TN)];
+    for (int j = 0; j < TN; ++j) tp[j] = &pal[assign[j]];
+    for (int round = 0; round < 2; ++round) {
+        for (int p = 0; p < NP; ++p) {
+            std::uint8_t d0[3], d1[3];
+            decode_rgb_endpoints(cfg.enc[p].cem, cfg.enc[p].unq, d0, d1);
+            build_palette<M>(d0, d1, pal[p]);
+        }
+        const float err = refine_weights<M>(s, gm, wq, tp, st);
+        if (err < best.err) {
+            best.err = err;
+            for (int j = 0; j < TN; ++j) {
+                const int wi = infill_weight(st.wsum[j]);
+                for (int ch = 0; ch < 3; ++ch) best.decoded[j][ch] = tp[j]->rgb[wi][ch];
+                best.decoded[j][3] = 255;
+            }
+            pack_generic_np<NP>(md, wq, pi, cfg, st.w, best.block);
+        }
+        if (round == 1) return;
+        for (int p = 0; p < NP; ++p) {
+            float n0[3], n1[3];
+            if (lsq_endpoints(s, st.wsum, assign, p, n0, n1, G[p])) {
+                std::memcpy(e0[p], n0, sizeof(n0));
+                std::memcpy(e1[p], n1, sizeof(n1));
+            }
+        }
+        cfg = reencode_config_np<NP>(cfg, e0, e1, G);
+        if (cfg.qi < 0) return;
+    }
+}
+
+// Top-K partition indices for NP partitions by the PCA-seed line-fit
+// residual (same surrogate as find_best_2p_partitions).
+template <int TexW, int TexH, int NP, int K>
+void find_best_np_partitions(const SampleT<TexW * TexH>& s, int out[std::size_t(K)]) {
+    constexpr int TN = TexW * TexH;
+    const auto& table = partition_table_np<NP, TexW, TexH>();
+    float bestErr[std::size_t(K)];
+    for (int i = 0; i < K; ++i) { bestErr[i] = std::numeric_limits<float>::infinity(); out[i] = 0; }
+    for (int pi = 0; pi < 1024; ++pi) {
+        const std::uint8_t* assign = table.assign[pi];
+        int counts[NP] = {};
+        for (int j = 0; j < TN; ++j) ++counts[assign[j]];
+        bool empty = false;
+        for (int p = 0; p < NP; ++p) empty = empty || counts[p] == 0;
+        if (empty) continue;
+        std::uint8_t e0[NP][3], e1[NP][3];
+        for (int p = 0; p < NP; ++p) {
+            std::uint8_t mask[std::size_t(TN)];
+            for (int j = 0; j < TN; ++j) mask[j] = assign[j] == p ? 1 : 0;
+            pca_seed_rgb_subset_n<TN>(s, mask, e0[p], e1[p]);
+        }
+        float err = 0.f;
+        for (int j = 0; j < TN; ++j) {
+            const int p = assign[j];
+            float d[3], x[3], dot = 0.f, rsq = 0.f;
+            for (int ch = 0; ch < 3; ++ch) {
+                d[ch] = float(e1[p][ch]) - float(e0[p][ch]);
+                x[ch] = float(s.rgba8[j][ch]) - float(e0[p][ch]);
+                dot += x[ch] * d[ch];
+                rsq += d[ch] * d[ch];
+            }
+            const float w = rsq > 1e-6f ? std::clamp(dot / rsq, 0.f, 1.f) : 0.f;
+            for (int ch = 0; ch < 3; ++ch) {
+                const float r = x[ch] - w * d[ch];
+                err += r * r;
+            }
+        }
+        if (err < bestErr[K - 1]) {
+            int p = K - 1;
+            while (p > 0 && err < bestErr[p - 1]) {
+                bestErr[p] = bestErr[p - 1];
+                out[p] = out[p - 1];
+                --p;
+            }
+            bestErr[p] = err;
+            out[p] = pi;
+        }
+    }
+}
+
+// Cheap sRGB error estimate per weight grid for one partitioning:
+// continuous (unquantised) decimated weights from the seed axes, then a
+// per-partition endpoint LSQ. R[g] = residual SSE, S[g] = sum over
+// texels of the squared endpoint span (scales the weight-quant noise).
+template <int TN, int NP>
+void estimate_grids(const SampleT<TN>& s, const std::vector<GridMapRT>& maps,
+                    const std::uint8_t* assign, const float e0[][3], const float e1[][3],
+                    float* R, float* S) {
+    float T[std::size_t(TN)];
+    for (int j = 0; j < TN; ++j) {
+        const int p = assign[j];
+        float dot = 0.f, rsq = 0.f;
+        for (int ch = 0; ch < 3; ++ch) {
+            const float d = e1[p][ch] - e0[p][ch];
+            dot += (float(s.rgba8[j][ch]) - e0[p][ch]) * d;
+            rsq += d * d;
+        }
+        T[j] = rsq > 1e-9f ? std::clamp(dot / rsq, 0.f, 1.f) * 64.f : 0.f;
+    }
+    for (std::size_t g = 0; g < maps.size(); ++g) {
+        const GridMapRT& gm = maps[g];
+        float v[64];
+        for (int i = 0; i < gm.gn; ++i) {
+            const float* row = &gm.pinv[std::size_t(i) * std::size_t(TN)];
+            float a = 0.f;
+            for (int j = 0; j < TN; ++j) a += row[j] * T[j];
+            v[i] = std::clamp(a, 0.f, 64.f);
+        }
+        float u[std::size_t(TN)];
+        float a00[NP] = {}, a01[NP] = {}, a11[NP] = {}, b0[NP][3] = {}, b1[NP][3] = {};
+        for (int j = 0; j < TN; ++j) {
+            float w = 0.f;
+            for (int k = 0; k < 4; ++k) w += float(gm.tc[j][k]) * v[gm.tg[j][k]];
+            u[j] = w * (1.f / 1024.f);
+            const int p = assign[j];
+            const float w0 = 1.f - u[j];
+            a00[p] += w0 * w0; a01[p] += w0 * u[j]; a11[p] += u[j] * u[j];
+            for (int ch = 0; ch < 3; ++ch) {
+                b0[p][ch] += w0 * float(s.rgba8[j][ch]);
+                b1[p][ch] += u[j] * float(s.rgba8[j][ch]);
+            }
+        }
+        float ea[NP][3], eb[NP][3];
+        for (int p = 0; p < NP; ++p) {
+            const float det = a00[p] * a11[p] - a01[p] * a01[p];
+            for (int ch = 0; ch < 3; ++ch) {
+                if (std::abs(det) < 1e-6f) { ea[p][ch] = e0[p][ch]; eb[p][ch] = e1[p][ch]; continue; }
+                ea[p][ch] = std::clamp((a11[p] * b0[p][ch] - a01[p] * b1[p][ch]) / det, 0.f, 255.f);
+                eb[p][ch] = std::clamp((a00[p] * b1[p][ch] - a01[p] * b0[p][ch]) / det, 0.f, 255.f);
+            }
+        }
+        float r = 0.f, sp = 0.f;
+        for (int j = 0; j < TN; ++j) {
+            const int p = assign[j];
+            for (int ch = 0; ch < 3; ++ch) {
+                const float d = eb[p][ch] - ea[p][ch];
+                const float e = float(s.rgba8[j][ch]) - ea[p][ch] - u[j] * d;
+                r += e * e;
+                sp += d * d;
+            }
+        }
+        R[g] = r;
+        S[g] = sp;
+    }
+}
+
+// Estimated block SSE of a mode from its grid's estimate: residual +
+// uniform weight-quant noise + uniform endpoint-quant noise.
+inline float estimate_mode(float R, float S, int wl, int qi, int tn) {
+    if (qi < 0) return std::numeric_limits<float>::infinity();
+    const float ws = 1.f / float(wl - 1);
+    const float es = 255.f / float(kQuantDesc[qi].levels - 1);
+    return R + S * ws * ws * (1.f / 12.f) + float(tn) * es * es * (1.f / 6.f);
+}
+
+// Number of (partition, mode) pairs the generic multi-partition path
+// fully encodes, chosen by estimate_mode over every top-K partition x
+// block mode. Kodak dev subset at 6x6, mean S2: 2p 8 -> 83.53,
+// 24 -> 83.58, 64 -> 83.66 (with 3p 24); 3p 24 -> 64 adds 0.01.
+template <int NP>
+constexpr int kGenericNpTop = NP == 2 ? 64 : 24;
+
+// All NP-partition generic candidates for one block.
+template <int TexW, int TexH, int NP, block_compress::BlockMetric M>
+Candidate encode_block_generic_np(const SampleT<TexW * TexH>& s, const int* pis, int npis) {
+    constexpr int TN = TexW * TexH;
+    const auto& ctx = generic_ctx<TexW, TexH>();
+    const auto& table = partition_table_np<NP, TexW, TexH>();
+    Candidate best{};
+    best.err = std::numeric_limits<float>::infinity();
+    constexpr int kTopN = kGenericNpTop<NP>;
+    struct Est { float e; int k; int m; };
+    Est top[kTopN];
+    int ntop = 0;
+    float seed0[kTop2pPartitions][NP][3], seed1[kTop2pPartitions][NP][3];
+    float R[12 * 12], S[12 * 12];  // per weight grid (<= 11 x 11 maps)
+    for (int k = 0; k < npis; ++k) {
+        const std::uint8_t* assign = table.assign[pis[k]];
+        for (int p = 0; p < NP; ++p) {
+            std::uint8_t mask[std::size_t(TN)], a[3], b[3];
+            for (int j = 0; j < TN; ++j) mask[j] = assign[j] == p ? 1 : 0;
+            pca_seed_rgb_subset_n<TN>(s, mask, a, b);
+            const bool sw = int(a[0]) + int(a[1]) + int(a[2]) > int(b[0]) + int(b[1]) + int(b[2]);
+            for (int ch = 0; ch < 3; ++ch) {
+                seed0[k][p][ch] = float(sw ? b[ch] : a[ch]);
+                seed1[k][p][ch] = float(sw ? a[ch] : b[ch]);
+            }
+        }
+        estimate_grids<TN, NP>(s, ctx.maps, assign, seed0[k], seed1[k], R, S);
+        for (std::size_t m = 0; m < ctx.modes.size(); ++m) {
+            const ModeRT& md = ctx.modes[m];
+            const int q_scale = endpoint_quant_for(4 * NP, np_color_bits<NP>(md.wb, false));
+            if (q_scale < kGenericNpFloor) continue;
+            const auto g = std::size_t(md.map - ctx.maps.data());
+            const int q_rgb = endpoint_quant_for(6 * NP, np_color_bits<NP>(md.wb, false));
+            const int qi = q_rgb >= kGenericNpFloor ? q_rgb : q_scale;
+            const Est e{estimate_mode(R[g], S[g], kQuantDesc[md.wqi].levels, qi, TN), k, int(m)};
+            int pos = std::min(ntop, kTopN);
+            while (pos > 0 && e.e < top[pos - 1].e) {
+                if (pos < kTopN) top[pos] = top[pos - 1];
+                --pos;
+            }
+            if (pos < kTopN) { top[pos] = e; if (ntop < kTopN) ++ntop; }
+        }
+    }
+    for (int t = 0; t < ntop; ++t) {
+        const int k = top[t].k;
+        try_mode_np<TexW, TexH, NP, M>(s, ctx.modes[std::size_t(top[t].m)], pis[k],
+                                       table.assign[pis[k]], seed0[k], seed1[k],
+                                       kGenericNpFloor, best);
+    }
+    return best;
+}
+
 // Per-block dispatch: alpha blocks → CEM-12 (1-partition); RGB blocks
 // try 1p (CEM-8 QUANT_8 weights + QUANT_256 endpoints) and 2p (CEM-8
 // QUANT_4 weights + QUANT_40 endpoints), pick lower-OKLab².
 //
-// 3-partition was prototyped and dropped: 10-image DIV2K sweep showed
-// adding 3p (QUANT_12 endpoints — only 12 levels per channel) regressed
-// mean S2 by 0.17 vs 1p+2p. Encoder's OKLab² favoured 3p for some
-// blocks but perceptual S2 preferred 2p's smoother gradients on
-// natural-image content. Revisit if QUANT_12 coarseness can be
-// mitigated (e.g., RGBA gate, content-classifier).
-//
-// 4-partition CEM-8 is INFEASIBLE — ASTC color_integer_count caps at
-// 18 vs 4 × 6 = 24 — would require CEM-6 (base+scale).
+// 3 partitions with CEM 8 only (QUANT_12 endpoints) regressed S2 and
+// were dropped; with CEM 6 available the generic multi-partition path
+// (encode_block_generic_np) runs 3 partitions and they pay (Kodak 6x6
+// dev subset +0.08 S2).
 // The 4x4 opaque dispatch lives in make_encode_fn_4x4_exhaustive (defined
 // after the pack helpers it depends on); alpha + 2-partition
 // specialisations are sized to the 16-texel footprint there.
@@ -4581,8 +4960,9 @@ EncodeResult encode_image_impl(std::span<const std::uint8_t> rgba_srgb8,
 namespace {
 
 // Every footprint runs its template candidate set plus the generic
-// runtime path (all LDR RGB CEMs over the full block-mode set) and keeps
-// the lower-error block. 4x4 alpha blocks stay on the RGBA paths.
+// runtime paths (all LDR RGB CEMs over the full block-mode set, with 1
+// and 2 partitions) and keeps the lowest-error block. 4x4 alpha blocks
+// stay on the RGBA paths.
 template <block_compress::BlockMetric M, int W, int H, typename EncodeBlockFn>
 EncodeResult encode_image_gen(std::span<const std::uint8_t> rgba_srgb8, int image_w, int image_h,
                               const Options& options, EncodeBlockFn fn) {
@@ -4594,7 +4974,12 @@ EncodeResult encode_image_gen(std::span<const std::uint8_t> rgba_srgb8, int imag
                     if (s.alpha[i] != 255) return a;
             }
             Candidate b = encode_block_generic_1p<W, H, M>(s);
-            return (b.err < a.err) ? b : a;
+            if (b.err < a.err) a = b;
+            int pis[kTop2pPartitions];
+            find_best_2p_partitions<W, H, kTop2pPartitions>(s, pis);
+            Candidate c = encode_block_generic_np<W, H, 2, M>(s, pis, kTop2pPartitions);
+            if (c.err < a.err) a = c;
+            return a;
         });
 }
 
