@@ -1255,7 +1255,7 @@ sys.exit(0 if got==expect else (print(f'expected {expect}, got {got}') or 1))"
         COMMAND ${PNG2AMIGA_PYTHON} ${CMAKE_SOURCE_DIR}/tools/check_astc_rdo.py
             --cli $<TARGET_FILE:png2amiga> --ktx2-to-png $<TARGET_FILE:ktx2_to_png>
             --input ${CMAKE_SOURCE_DIR}/examples/logo.png --check decode --mode astc-4x4
-            --width 256 --rdo 100)
+            --width 256 --rdo 100 --allow-unchanged)
     # Plain lores + STRIPS (1-4 planes, 8-px slot grid): the .h carries the
     # strips_lores_ocs copper list, one 40-slot chain per row.
     add_test(

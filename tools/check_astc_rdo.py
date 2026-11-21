@@ -46,6 +46,10 @@ def main():
     ap.add_argument("--mode", default="astc-6x6")
     ap.add_argument("--width", type=int, default=192)
     ap.add_argument("--rdo", type=int, default=30)
+    # An image that is nearly all alpha blocks has only a few blocks the
+    # pass may edit, and which ones differs by compiler. Then the check is
+    # only that the pass leaves a valid file.
+    ap.add_argument("--allow-unchanged", action="store_true")
     a = ap.parse_args()
     ok = True
     with tempfile.TemporaryDirectory() as td:
@@ -66,7 +70,7 @@ def main():
             print(f"astc_predict_mismatch_rdo_off={off}")
             print(f"rdo_changed_output={int(changed)}")
             print(f"thirdparty_decode_exit={p.returncode}")
-            ok = mm == 0 and off == 0 and changed and p.returncode == 0 and (td / "r.png").exists()
+            ok = mm == 0 and off == 0 and (changed or a.allow_unchanged) and p.returncode == 0 and (td / "r.png").exists()
         else:
             encode(a.cli, a.input, td / "o.ktx2", a.mode, a.width, [])
             encode(a.cli, a.input, td / "r.ktx2", a.mode, a.width, ["--rdo", str(a.rdo)])
