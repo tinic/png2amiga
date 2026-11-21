@@ -1191,6 +1191,25 @@ sys.exit(0 if got==expect else (print(f'expected {expect}, got {got}') or 1))"
     )
     set_tests_properties("smoke-bc7-thirdparty-decode-png"
         PROPERTIES DEPENDS "smoke-bc7-thirdparty-decode")
+
+    # ASTC 6x6 round-trip through astcenc's decoder. The block histogram
+    # ktx2_to_png prints must show CEM 6 (RGB base+scale) blocks: the
+    # encoder chooses among CEM 6/8/9 per block, and natural images take
+    # CEM 6 for a large share of blocks at 6x6.
+    add_test(
+        NAME "smoke-astc-thirdparty-decode"
+        COMMAND png2amiga --mode astc-6x6 --width 96 ${PNG2AMIGA_TEST_INPUT}
+                ${CMAKE_BINARY_DIR}/astc_thirdparty.ktx2
+    )
+    add_test(
+        NAME "smoke-astc-thirdparty-decode-png"
+        COMMAND ktx2_to_png
+                ${CMAKE_BINARY_DIR}/astc_thirdparty.ktx2
+                ${CMAKE_BINARY_DIR}/astc_thirdparty.png
+    )
+    set_tests_properties("smoke-astc-thirdparty-decode-png"
+        PROPERTIES DEPENDS "smoke-astc-thirdparty-decode"
+                   PASS_REGULAR_EXPRESSION "astc_blocks=[1-9][0-9]* .*cem6=[1-9]")
     # Plain lores + STRIPS (1-4 planes, 8-px slot grid): the .h carries the
     # strips_lores_ocs copper list, one 40-slot chain per row.
     add_test(

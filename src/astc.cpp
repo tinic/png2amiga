@@ -4960,8 +4960,8 @@ EncodeResult encode_image_impl(std::span<const std::uint8_t> rgba_srgb8,
 namespace {
 
 // Every footprint runs its template candidate set plus the generic
-// runtime paths (all LDR RGB CEMs over the full block-mode set, with 1
-// and 2 partitions) and keeps the lowest-error block. 4x4 alpha blocks
+// runtime paths (all LDR RGB CEMs over the full block-mode set, with 1,
+// 2 and 3 partitions) and keeps the lowest-error block. 4x4 alpha blocks
 // stay on the RGBA paths.
 template <block_compress::BlockMetric M, int W, int H, typename EncodeBlockFn>
 EncodeResult encode_image_gen(std::span<const std::uint8_t> rgba_srgb8, int image_w, int image_h,
@@ -4979,6 +4979,9 @@ EncodeResult encode_image_gen(std::span<const std::uint8_t> rgba_srgb8, int imag
             find_best_2p_partitions<W, H, kTop2pPartitions>(s, pis);
             Candidate c = encode_block_generic_np<W, H, 2, M>(s, pis, kTop2pPartitions);
             if (c.err < a.err) a = c;
+            find_best_np_partitions<W, H, 3, kTop2pPartitions>(s, pis);
+            Candidate d = encode_block_generic_np<W, H, 3, M>(s, pis, kTop2pPartitions);
+            if (d.err < a.err) a = d;
             return a;
         });
 }

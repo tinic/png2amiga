@@ -243,6 +243,34 @@ int main(int argc, char* argv[]) {
         }
         std::fprintf(stderr, "ktx2_to_png: wrote %s (%dx%d 4ch ASTC %dx%d, vkFormat %u)\n",
                      argv[2], W, H, bw, bh, img.vk_format);
+        // Block-format histogram: partition count and colour endpoint
+        // mode per block (void-extent blocks counted apart). Read by
+        // the astc-cem ctest.
+        int cem_count[16] = {};
+        int part_count[5] = {};
+        int void_extent = 0, mixed = 0;
+        for (std::size_t b = 0; b + 16 <= blocks_len; b += 16) {
+            const std::uint8_t* p = blocks_ptr + b;
+            auto bits = [p](int off, int n) {
+                int v = 0;
+                for (int i = 0; i < n; ++i)
+                    v |= ((p[(off + i) >> 3] >> ((off + i) & 7)) & 1) << i;
+                return v;
+            };
+            if (bits(0, 9) == 0x1FC) { ++void_extent; continue; }
+            const int parts = bits(11, 2) + 1;
+            ++part_count[parts];
+            if (parts == 1) { ++cem_count[bits(13, 4)]; continue; }
+            const int field = bits(23, 6);
+            if ((field & 3) == 0) cem_count[field >> 2] += parts;
+            else ++mixed;
+        }
+        std::fprintf(stderr,
+                     "astc_blocks=%zu void_extent=%d p1=%d p2=%d p3=%d p4=%d mixed=%d "
+                     "cem0=%d cem6=%d cem8=%d cem9=%d\n",
+                     blocks_len / 16, void_extent, part_count[1], part_count[2],
+                     part_count[3], part_count[4], mixed, cem_count[0], cem_count[6],
+                     cem_count[8], cem_count[9]);
         return 0;
     }
 
