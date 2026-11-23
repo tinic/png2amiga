@@ -95,12 +95,34 @@ set(PNG2AMIGA_CORE_SOURCES
     src/bc7.cpp
     src/bc3.cpp
     src/bc2.cpp
-    src/astc.cpp
     src/astc_rdo.cpp
     src/ktx2.cpp
     src/dds.cpp
     src/api.cpp
     src/ocs_cand_table.cpp
+)
+
+# ASTC encoder. The block encoders (src/astc_impl.inc) are templates over the
+# footprint and the candidate lists; one translation unit per footprint keeps
+# each compile short and lets the build run them in parallel. Native builds
+# compile these once (object library png2amiga_astc below) and link the
+# objects into every executable that takes the core sources.
+set(PNG2AMIGA_ASTC_SOURCES
+    src/astc.cpp
+    src/astc_fp_4x4.cpp
+    src/astc_fp_5x4.cpp
+    src/astc_fp_5x5.cpp
+    src/astc_fp_6x5.cpp
+    src/astc_fp_6x6.cpp
+    src/astc_fp_8x5.cpp
+    src/astc_fp_8x6.cpp
+    src/astc_fp_8x8.cpp
+    src/astc_fp_10x5.cpp
+    src/astc_fp_10x6.cpp
+    src/astc_fp_10x8.cpp
+    src/astc_fp_10x10.cpp
+    src/astc_fp_12x10.cpp
+    src/astc_fp_12x12.cpp
 )
 
 if(EMSCRIPTEN)
@@ -125,6 +147,7 @@ if(EMSCRIPTEN)
     foreach(tgt IN LISTS PNG2AMIGA_WASM_TARGETS)
     add_executable(${tgt}
         ${PNG2AMIGA_CORE_SOURCES}
+        ${PNG2AMIGA_ASTC_SOURCES}
         src/quantize_metal.cpp
         src/wasm_bindings.cpp
     )
@@ -202,9 +225,21 @@ else()
     # --- Native CLI build ---
     include(cmake/CompilerWarnings.cmake)
 
+    # ASTC encoder objects, compiled once for all native executables. It is in
+    # PNG2AMIGA_SIMD_TARGETS below, so it takes the same SIMD / FP-contract
+    # flags as the executables.
+    add_library(png2amiga_astc OBJECT ${PNG2AMIGA_ASTC_SOURCES})
+    target_include_directories(png2amiga_astc PRIVATE
+        src
+        ${CMAKE_SOURCE_DIR}/third_party
+        ${CMAKE_BINARY_DIR}/generated)
+    target_link_libraries(png2amiga_astc PRIVATE stb spng zstd astcenc webp_headers webpdecode webpdspdecode webputilsdecode constixel nlohmann_json)
+    target_compile_options(png2amiga_astc PRIVATE ${PNG2AMIGA_WARNING_FLAGS})
+
     add_executable(png2amiga
         src/main.cpp
         ${PNG2AMIGA_CORE_SOURCES}
+        $<TARGET_OBJECTS:png2amiga_astc>
     )
 
     # api_pipeline_smoke: minimal CLI wrapper around api::encode_state,
@@ -215,6 +250,7 @@ else()
     add_executable(api_pipeline_smoke
         tools/api_pipeline_smoke.cpp
         ${PNG2AMIGA_CORE_SOURCES}
+        $<TARGET_OBJECTS:png2amiga_astc>
     )
     target_include_directories(api_pipeline_smoke PRIVATE
         src
@@ -229,6 +265,7 @@ else()
     add_executable(iff_camg_check
         tools/iff_camg_check.cpp
         ${PNG2AMIGA_CORE_SOURCES}
+        $<TARGET_OBJECTS:png2amiga_astc>
     )
     target_include_directories(iff_camg_check PRIVATE
         src
@@ -248,6 +285,7 @@ else()
     add_executable(palette_search
         tools/palette_search.cpp
         ${PNG2AMIGA_CORE_SOURCES}
+        $<TARGET_OBJECTS:png2amiga_astc>
     )
     target_include_directories(palette_search PRIVATE
         src
@@ -355,7 +393,7 @@ else()
     # .github/workflows/release.yml. On ARM64 the option is a no-op (the
     # -mavx2 probe already fails there and NEON is the baseline ISA).
     set(PNG2AMIGA_SIMD_TARGETS
-        png2amiga api_pipeline_smoke iff_camg_check bench_ssimulacra2 palette_search)
+        png2amiga png2amiga_astc api_pipeline_smoke iff_camg_check bench_ssimulacra2 palette_search)
     if(PNG2AMIGA_BASELINE_SIMD)
         message(STATUS "png2amiga: baseline SIMD build (no AVX2/FMA/SSE4.1)")
     endif()
