@@ -100,7 +100,8 @@ inline float madd(float a, float x, float y) noexcept {
 #endif
 }
 inline void axpy_sub_scalar(float* y, const float* a, float x, int n) noexcept {
-    for (int i = 0; i < n; ++i) y[i] = madd(-a[i], x, y[i]);
+    for (int i = 0; i < n; ++i)
+        y[i] = madd(-a[i], x, y[i]);
 }
 
 // y[i] -= a[i] * x for i in [0, n).
@@ -122,8 +123,9 @@ inline void axpy_sub(float* y, const float* a, float x, int n) noexcept {
         _mm256_storeu_ps(y + i,
                          _mm256_fnmadd_ps(_mm256_loadu_ps(a + i), vx, _mm256_loadu_ps(y + i)));
 #else
-        _mm256_storeu_ps(y + i, _mm256_sub_ps(_mm256_loadu_ps(y + i),
-                                              _mm256_mul_ps(_mm256_loadu_ps(a + i), vx)));
+        _mm256_storeu_ps(
+            y + i,
+            _mm256_sub_ps(_mm256_loadu_ps(y + i), _mm256_mul_ps(_mm256_loadu_ps(a + i), vx)));
 #endif
     }
 #elif defined(PNG2AMIGA_ASTC_SIMD_SSE2)
@@ -133,10 +135,12 @@ inline void axpy_sub(float* y, const float* a, float x, int n) noexcept {
 #elif defined(PNG2AMIGA_ASTC_SIMD_WASM)
     const v128_t vx = wasm_f32x4_splat(x);
     for (; i + 4 <= n; i += 4)
-        wasm_v128_store(y + i, wasm_f32x4_sub(wasm_v128_load(y + i),
-                                              wasm_f32x4_mul(wasm_v128_load(a + i), vx)));
+        wasm_v128_store(
+            y + i,
+            wasm_f32x4_sub(wasm_v128_load(y + i), wasm_f32x4_mul(wasm_v128_load(a + i), vx)));
 #endif
-    for (; i < n; ++i) y[i] = madd(-a[i], x, y[i]);
+    for (; i < n; ++i)
+        y[i] = madd(-a[i], x, y[i]);
 }
 
 }  // namespace png2amiga::astc::simd

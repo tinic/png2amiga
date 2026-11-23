@@ -28,7 +28,7 @@ public:
     // Driver: job(i, worker) for every i in [0, n); returns when all have
     // finished. worker = 0 for the driver, else the value a helper passed
     // to join().
-    template <typename Job>
+    template<typename Job>
     void run(int n, Job& job) {
         if (n <= 0) return;
         if (n == 1) {
@@ -36,7 +36,9 @@ public:
             return;
         }
         ctx_ = &job;
-        call_ = [](void* c, int i, int worker) { (*static_cast<Job*>(c))(i, worker); };
+        call_ = [](void* c, int i, int worker) {
+            (*static_cast<Job*>(c))(i, worker);
+        };
         n_ = n;
         next_.store(0);
         done_.store(0);
@@ -46,11 +48,13 @@ public:
             job(i, 0);
             done_.fetch_add(1);
         }
-        while (done_.load() < n) std::this_thread::yield();
+        while (done_.load() < n)
+            std::this_thread::yield();
         // No helper may enter the batch from here on. Wait for the ones
         // that are inside before the next batch changes the job.
         open_.store(false);
-        while (active_.load() != 0) std::this_thread::yield();
+        while (active_.load() != 0)
+            std::this_thread::yield();
     }
 
     // Helper: take jobs of the open batch, if there is one; returns when

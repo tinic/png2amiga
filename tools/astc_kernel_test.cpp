@@ -33,9 +33,20 @@ struct Rng {
     }
 };
 
-constexpr int kFootprints[14][2] = {{4, 4},  {5, 4},  {5, 5},  {6, 5},   {6, 6},
-                                    {8, 5},  {8, 6},  {8, 8},  {10, 5},  {10, 6},
-                                    {10, 8}, {10, 10}, {12, 10}, {12, 12}};
+constexpr int kFootprints[14][2] = {{4, 4},
+                                    {5, 4},
+                                    {5, 5},
+                                    {6, 5},
+                                    {6, 6},
+                                    {8, 5},
+                                    {8, 6},
+                                    {8, 8},
+                                    {10, 5},
+                                    {10, 6},
+                                    {10, 8},
+                                    {10, 10},
+                                    {12, 10},
+                                    {12, 12}};
 
 // SIMD arm == scalar arm for every length that mixes vector and tail lanes.
 int check_axpy() {
@@ -64,11 +75,12 @@ int check_axpy() {
 
 // The elimination the template encoders ran per block before the solver
 // table: normal matrix and right-hand side together.
-void solve_reference(const BilinearTexel* texels, int tn, int gn, const float* w_ideal,
-                     float* atb) {
+void solve_reference(
+    const BilinearTexel* texels, int tn, int gn, const float* w_ideal, float* atb) {
     const auto n = std::size_t(gn);
     std::vector<float> ata(n * n, 0.f);
-    for (std::size_t i = 0; i < n; ++i) atb[i] = 0.f;
+    for (std::size_t i = 0; i < n; ++i)
+        atb[i] = 0.f;
     for (int j = 0; j < tn; ++j) {
         const BilinearTexel& t = texels[j];
         float T_j = w_ideal[j] * 64.f;
@@ -85,27 +97,34 @@ void solve_reference(const BilinearTexel* texels, int tn, int gn, const float* w
         }
     }
     constexpr float kRidge = 1e-3f;
-    for (std::size_t i = 0; i < n; ++i) ata[i * n + i] += kRidge;
+    for (std::size_t i = 0; i < n; ++i)
+        ata[i * n + i] += kRidge;
     for (std::size_t i = 0; i < n; ++i) {
         std::size_t piv = i;
         float bestmag = std::abs(ata[i * n + i]);
         for (std::size_t r = i + 1; r < n; ++r) {
             float m = std::abs(ata[r * n + i]);
-            if (m > bestmag) { bestmag = m; piv = r; }
+            if (m > bestmag) {
+                bestmag = m;
+                piv = r;
+            }
         }
         if (bestmag < 1e-9f) continue;
         if (piv != i) {
-            for (std::size_t c = 0; c < n; ++c) std::swap(ata[i * n + c], ata[piv * n + c]);
+            for (std::size_t c = 0; c < n; ++c)
+                std::swap(ata[i * n + c], ata[piv * n + c]);
             std::swap(atb[i], atb[piv]);
         }
         float pinv = 1.f / ata[i * n + i];
-        for (std::size_t c = 0; c < n; ++c) ata[i * n + c] *= pinv;
+        for (std::size_t c = 0; c < n; ++c)
+            ata[i * n + c] *= pinv;
         atb[i] *= pinv;
         for (std::size_t r = 0; r < n; ++r) {
             if (r == i) continue;
             float f = ata[r * n + i];
             if (f == 0.f) continue;
-            for (std::size_t c = 0; c < n; ++c) ata[r * n + c] -= f * ata[i * n + c];
+            for (std::size_t c = 0; c < n; ++c)
+                ata[r * n + c] -= f * ata[i * n + c];
             atb[r] -= f * atb[i];
         }
     }
@@ -149,18 +168,22 @@ int check_decim_solve() {
                     }
                     decim_solve_apply(sv, atb);
                     for (int i = 0; i < gn; ++i) {
-                        if (!(atb[i] == ref[i])) ++bad;
-                        else if (std::memcmp(&atb[i], &ref[i], sizeof(float)) != 0) ++zero_sign;
+                        if (!(atb[i] == ref[i]))
+                            ++bad;
+                        else if (std::memcmp(&atb[i], &ref[i], sizeof(float)) != 0)
+                            ++zero_sign;
                     }
                 }
             }
     }
     std::printf("decim_solve_grids=%d\ndecim_solve_mismatch=%d\ndecim_solve_zero_sign=%d\n",
-                grids, bad, zero_sign);
+                grids,
+                bad,
+                zero_sign);
     return bad;
 }
 
-template <int N, int TexW, int TexH>
+template<int N, int TexW, int TexH>
 int check_partition_table(int& distinct) {
     const auto& table = partition_table_np<N, TexW, TexH>();
     int bad = 0;
@@ -176,14 +199,15 @@ int check_partition_table(int& distinct) {
     }
     // same_partitions on a list with repeats.
     int pis[32], same[32];
-    for (int k = 0; k < 32; ++k) pis[k] = (k * 37 + (k % 3 == 0 ? 0 : 11)) % 1024;
+    for (int k = 0; k < 32; ++k)
+        pis[k] = (k * 37 + (k % 3 == 0 ? 0 : 11)) % 1024;
     pis[7] = pis[2];
     same_partitions<N, TexW, TexH>(pis, 32, same);
     for (int k = 0; k < 32; ++k) {
         int want = k;
         for (int q = 0; q < k; ++q)
-            if (std::memcmp(table.assign[pis[q]], table.assign[pis[k]],
-                            std::size_t(TexW * TexH)) == 0) {
+            if (std::memcmp(table.assign[pis[q]], table.assign[pis[k]], std::size_t(TexW * TexH)) ==
+                0) {
                 want = q;
                 break;
             }

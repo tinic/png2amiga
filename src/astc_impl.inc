@@ -1468,8 +1468,8 @@ Candidate encode_block_rgb(const SampleT<W * H>& s) {
 // the texel weights the encoder produces match what the decoder
 // reconstructs bit-for-bit.
 struct BilinearTexel {
-    std::uint8_t grid[4];   // qweight indices into the GridW × GridH array
-    std::uint8_t weight[4]; // 0..16 each; sum = 16
+    std::uint8_t grid[4];    // qweight indices into the GridW × GridH array
+    std::uint8_t weight[4];  // 0..16 each; sum = 16
 };
 
 template <int TexW, int TexH, int GridW, int GridH>
@@ -1563,28 +1563,35 @@ struct DecimSolve {
         }
     }
     constexpr float kRidge = 1e-3f;
-    for (std::size_t i = 0; i < n; ++i) ata[i * n + i] += kRidge;
+    for (std::size_t i = 0; i < n; ++i)
+        ata[i * n + i] += kRidge;
     for (std::size_t i = 0; i < n; ++i) {
         std::size_t piv = i;
         float bestmag = std::abs(ata[i * n + i]);
         for (std::size_t r = i + 1; r < n; ++r) {
             float m = std::abs(ata[r * n + i]);
-            if (m > bestmag) { bestmag = m; piv = r; }
+            if (m > bestmag) {
+                bestmag = m;
+                piv = r;
+            }
         }
         sv.piv[i] = std::uint8_t(piv);
         if (bestmag < 1e-9f) continue;
         sv.used[i] = 1;
         if (piv != i)
-            for (std::size_t c = 0; c < n; ++c) std::swap(ata[i * n + c], ata[piv * n + c]);
+            for (std::size_t c = 0; c < n; ++c)
+                std::swap(ata[i * n + c], ata[piv * n + c]);
         float pinv = 1.f / ata[i * n + i];
         sv.pinv[i] = pinv;
-        for (std::size_t c = 0; c < n; ++c) ata[i * n + c] *= pinv;
+        for (std::size_t c = 0; c < n; ++c)
+            ata[i * n + c] *= pinv;
         for (std::size_t r = 0; r < n; ++r) {
             if (r == i) continue;
             float f = ata[r * n + i];
             if (f == 0.f) continue;
             sv.f[i * n + r] = f;
-            for (std::size_t c = 0; c < n; ++c) ata[r * n + c] -= f * ata[i * n + c];
+            for (std::size_t c = 0; c < n; ++c)
+                ata[r * n + c] -= f * ata[i * n + c];
         }
     }
     return sv;
@@ -1603,7 +1610,8 @@ inline void decim_solve_apply(const DecimSolve& sv, float* atb) {
         if (simd::kKernels) {
             simd::axpy_sub(atb, f, x, gn);
         } else {
-            for (int r = 0; r < gn; ++r) atb[r] -= f[r] * x;
+            for (int r = 0; r < gn; ++r)
+                atb[r] -= f[r] * x;
         }
     }
 }
@@ -2822,7 +2830,7 @@ const PartTab<N, TexW, TexH>& partition_table_np() {
 // same_as[k] = lowest k' <= k whose partition has the same texel assignment
 // as partition pis[k] (see PartTab::first_same). A candidate of a list
 // entry with same_as[k] != k repeats a candidate of entry same_as[k].
-template <int N, int TexW, int TexH>
+template<int N, int TexW, int TexH>
 void same_partitions(const int* pis, int npis, int* same_as) {
     const auto& table = partition_table_np<N, TexW, TexH>();
     for (int k = 0; k < npis; ++k) {
@@ -3278,32 +3286,33 @@ void find_best_2p_partitions(const SampleT<TexW * TexH>& s, int out[std::size_t(
             errs[pi] = pi_err;
             if (pi_err == kSkip) continue;
         } else {
-        int counts[2] = {};
-        for (int j = 0; j < TN; ++j) {
-            for (int k = 0; k < 2; ++k) mask[k][j] = (assign[j] == k) ? 1 : 0;
-            ++counts[assign[j]];
-        }
-        errs[pi] = kSkip;
-        if (counts[0] == 0 || counts[1] == 0) continue;
-        for (int k = 0; k < 2; ++k)
-            pca_seed_rgb_subset_n<TN>(s, mask[k], e0_seed[k], e1_seed[k]);
-        for (int j = 0; j < TN; ++j) {
-            int k = assign[j];
-            float dr0 = float(e1_seed[k][0]) - float(e0_seed[k][0]);
-            float dg0 = float(e1_seed[k][1]) - float(e0_seed[k][1]);
-            float db0 = float(e1_seed[k][2]) - float(e0_seed[k][2]);
-            float rsq = dr0 * dr0 + dg0 * dg0 + db0 * db0;
-            float inv = (rsq > 1e-6f) ? (1.f / rsq) : 0.f;
-            float pr = float(s.rgba8[j][0]) - float(e0_seed[k][0]);
-            float pg = float(s.rgba8[j][1]) - float(e0_seed[k][1]);
-            float pb = float(s.rgba8[j][2]) - float(e0_seed[k][2]);
-            float w = std::clamp((pr * dr0 + pg * dg0 + pb * db0) * inv, 0.f, 1.f);
-            float dr = pr - w * dr0;
-            float dg = pg - w * dg0;
-            float db = pb - w * db0;
-            pi_err += dr * dr + dg * dg + db * db;
-        }
-        errs[pi] = pi_err;
+            int counts[2] = {};
+            for (int j = 0; j < TN; ++j) {
+                for (int k = 0; k < 2; ++k)
+                    mask[k][j] = (assign[j] == k) ? 1 : 0;
+                ++counts[assign[j]];
+            }
+            errs[pi] = kSkip;
+            if (counts[0] == 0 || counts[1] == 0) continue;
+            for (int k = 0; k < 2; ++k)
+                pca_seed_rgb_subset_n<TN>(s, mask[k], e0_seed[k], e1_seed[k]);
+            for (int j = 0; j < TN; ++j) {
+                int k = assign[j];
+                float dr0 = float(e1_seed[k][0]) - float(e0_seed[k][0]);
+                float dg0 = float(e1_seed[k][1]) - float(e0_seed[k][1]);
+                float db0 = float(e1_seed[k][2]) - float(e0_seed[k][2]);
+                float rsq = dr0 * dr0 + dg0 * dg0 + db0 * db0;
+                float inv = (rsq > 1e-6f) ? (1.f / rsq) : 0.f;
+                float pr = float(s.rgba8[j][0]) - float(e0_seed[k][0]);
+                float pg = float(s.rgba8[j][1]) - float(e0_seed[k][1]);
+                float pb = float(s.rgba8[j][2]) - float(e0_seed[k][2]);
+                float w = std::clamp((pr * dr0 + pg * dg0 + pb * db0) * inv, 0.f, 1.f);
+                float dr = pr - w * dr0;
+                float dg = pg - w * dg0;
+                float db = pb - w * db0;
+                pi_err += dr * dr + dg * dg + db * db;
+            }
+            errs[pi] = pi_err;
         }
         if (pi_err < bestErr[K - 1]) {
             int p = K - 1;
@@ -4718,34 +4727,37 @@ void find_best_np_partitions(const SampleT<TexW * TexH>& s, int out[std::size_t(
             errs[pi] = err;
             if (err == kSkip) continue;
         } else {
-        int counts[std::size_t(NP)] = {};
-        for (int j = 0; j < TN; ++j) ++counts[assign[j]];
-        bool empty = false;
-        for (int p = 0; p < NP; ++p) empty = empty || counts[p] == 0;
-        errs[pi] = kSkip;
-        if (empty) continue;
-        std::uint8_t e0[std::size_t(NP)][3], e1[std::size_t(NP)][3];
-        for (int p = 0; p < NP; ++p) {
-            std::uint8_t mask[std::size_t(TN)];
-            for (int j = 0; j < TN; ++j) mask[j] = assign[j] == p ? 1 : 0;
-            pca_seed_rgb_subset_n<TN>(s, mask, e0[p], e1[p]);
-        }
-        for (int j = 0; j < TN; ++j) {
-            const int p = assign[j];
-            float d[3], x[3], dot = 0.f, rsq = 0.f;
-            for (int ch = 0; ch < 3; ++ch) {
-                d[ch] = float(e1[p][ch]) - float(e0[p][ch]);
-                x[ch] = float(s.rgba8[j][ch]) - float(e0[p][ch]);
-                dot += x[ch] * d[ch];
-                rsq += d[ch] * d[ch];
+            int counts[std::size_t(NP)] = {};
+            for (int j = 0; j < TN; ++j)
+                ++counts[assign[j]];
+            bool empty = false;
+            for (int p = 0; p < NP; ++p)
+                empty = empty || counts[p] == 0;
+            errs[pi] = kSkip;
+            if (empty) continue;
+            std::uint8_t e0[std::size_t(NP)][3], e1[std::size_t(NP)][3];
+            for (int p = 0; p < NP; ++p) {
+                std::uint8_t mask[std::size_t(TN)];
+                for (int j = 0; j < TN; ++j)
+                    mask[j] = assign[j] == p ? 1 : 0;
+                pca_seed_rgb_subset_n<TN>(s, mask, e0[p], e1[p]);
             }
-            const float w = rsq > 1e-6f ? std::clamp(dot / rsq, 0.f, 1.f) : 0.f;
-            for (int ch = 0; ch < 3; ++ch) {
-                const float r = x[ch] - w * d[ch];
-                err += r * r;
+            for (int j = 0; j < TN; ++j) {
+                const int p = assign[j];
+                float d[3], x[3], dot = 0.f, rsq = 0.f;
+                for (int ch = 0; ch < 3; ++ch) {
+                    d[ch] = float(e1[p][ch]) - float(e0[p][ch]);
+                    x[ch] = float(s.rgba8[j][ch]) - float(e0[p][ch]);
+                    dot += x[ch] * d[ch];
+                    rsq += d[ch] * d[ch];
+                }
+                const float w = rsq > 1e-6f ? std::clamp(dot / rsq, 0.f, 1.f) : 0.f;
+                for (int ch = 0; ch < 3; ++ch) {
+                    const float r = x[ch] - w * d[ch];
+                    err += r * r;
+                }
             }
-        }
-        errs[pi] = err;
+            errs[pi] = err;
         }
         if (err < bestErr[K - 1]) {
             int p = K - 1;
@@ -4870,17 +4882,19 @@ Candidate encode_block_generic_np(const SampleT<TexW * TexH>& s, const int* pis,
             std::memcpy(seed0[k], seed0[k0], sizeof(seed0[k]));
             std::memcpy(seed1[k], seed1[k0], sizeof(seed1[k]));
         } else {
-        for (int p = 0; p < NP; ++p) {
-            std::uint8_t mask[std::size_t(TN)], a[3], b[3];
-            for (int j = 0; j < TN; ++j) mask[j] = assign[j] == p ? 1 : 0;
-            pca_seed_rgb_subset_n<TN>(s, mask, a, b);
-            const bool sw = int(a[0]) + int(a[1]) + int(a[2]) > int(b[0]) + int(b[1]) + int(b[2]);
-            for (int ch = 0; ch < 3; ++ch) {
-                seed0[k][p][ch] = float(sw ? b[ch] : a[ch]);
-                seed1[k][p][ch] = float(sw ? a[ch] : b[ch]);
+            for (int p = 0; p < NP; ++p) {
+                std::uint8_t mask[std::size_t(TN)], a[3], b[3];
+                for (int j = 0; j < TN; ++j)
+                    mask[j] = assign[j] == p ? 1 : 0;
+                pca_seed_rgb_subset_n<TN>(s, mask, a, b);
+                const bool sw = int(a[0]) + int(a[1]) + int(a[2]) >
+                                int(b[0]) + int(b[1]) + int(b[2]);
+                for (int ch = 0; ch < 3; ++ch) {
+                    seed0[k][p][ch] = float(sw ? b[ch] : a[ch]);
+                    seed1[k][p][ch] = float(sw ? a[ch] : b[ch]);
+                }
             }
-        }
-        estimate_grids<TN, NP>(s, ctx.maps, assign, seed0[k], seed1[k], R, S);
+            estimate_grids<TN, NP>(s, ctx.maps, assign, seed0[k], seed1[k], R, S);
         }
         for (std::size_t m = 0; m < ctx.modes.size(); ++m) {
             const ModeRT& md = ctx.modes[m];
@@ -5073,7 +5087,8 @@ struct DpPaintMemo {
     std::uint16_t touched[kKeys];
     int ntouched = 0;
     void clear() {
-        for (int i = 0; i < ntouched; ++i) have[touched[i]] = 0;
+        for (int i = 0; i < ntouched; ++i)
+            have[touched[i]] = 0;
         ntouched = 0;
     }
 };
@@ -5420,8 +5435,8 @@ Candidate encode_block_generic_dp(const SampleT<TexW * TexH>& s, const int* pis,
             } else {
                 for (int p = 0; p < NP; ++p)
                     dp_seed<TN>(s, assign, p, comp, seed0[k][comp][p], seed1[k][comp][p]);
-                estimate_grids_dp<TN, NP>(s, ctx.maps, assign, comp, seed0[k][comp],
-                                          seed1[k][comp], R, S);
+                estimate_grids_dp<TN, NP>(
+                    s, ctx.maps, assign, comp, seed0[k][comp], seed1[k][comp], R, S);
             }
             for (std::size_t m = 0; m < ctx.dp_modes.size(); ++m) {
                 const ModeRT& md = ctx.dp_modes[m];
@@ -5558,7 +5573,8 @@ EncodeResult encode_image_impl(std::span<const std::uint8_t> rgba_srgb8,
 
         block_compress::BlockGrid<color_space::OKLab> err_carry(
             res.block_cols, by_hi - by_lo);
-        for (auto& v : err_carry.as_span()) v = {0.f, 0.f, 0.f};
+        for (auto& v : err_carry.as_span())
+            v = {0.f, 0.f, 0.f};
 
         // Per-texel error buffer for the pixel-ED path: pad_w × strip-height
         // in texels, OKLab, zero-initialised. Indexed (gy_local*pw + gx).
@@ -5640,10 +5656,14 @@ EncodeResult encode_image_impl(std::span<const std::uint8_t> rgba_srgb8,
                     float tL = 0.f, ta = 0.f, tb = 0.f;
                     float dL = 0.f, da = 0.f, db = 0.f;
                     for (int i = 0; i < N; ++i) {
-                        tL += s.lab[i].L; ta += s.lab[i].a; tb += s.lab[i].b;
+                        tL += s.lab[i].L;
+                        ta += s.lab[i].a;
+                        tb += s.lab[i].b;
                         auto dec_lab = color_space::srgb8_to_oklab(
                             c.decoded[i][0], c.decoded[i][1], c.decoded[i][2]);
-                        dL += dec_lab.L; da += dec_lab.a; db += dec_lab.b;
+                        dL += dec_lab.L;
+                        da += dec_lab.a;
+                        db += dec_lab.b;
                     }
                     const float inv_n = 1.f / float(N);
                     color_space::OKLab residual{(tL - dL) * inv_n,
@@ -5691,9 +5711,12 @@ EncodeResult encode_image_impl(std::span<const std::uint8_t> rgba_srgb8,
                     b.join(1);
                     helped = true;
                 }
-            if (helped) idle = 0;
-            else if (++idle < 64) std::this_thread::yield();
-            else std::this_thread::sleep_for(std::chrono::microseconds(200));
+            if (helped)
+                idle = 0;
+            else if (++idle < 64)
+                std::this_thread::yield();
+            else
+                std::this_thread::sleep_for(std::chrono::microseconds(200));
         }
     });
     res.total_oklab2_error = total_err_atom.load();
@@ -5712,7 +5735,12 @@ template <block_compress::BlockMetric M, int W, int H, typename EncodeBlockFn>
 EncodeResult encode_image_gen(std::span<const std::uint8_t> rgba_srgb8, int image_w, int image_h,
                               const Options& options, rdo::Side* side,
                               EncodeBlockFn fn) {
-    return encode_image_impl<W, H>(rgba_srgb8, image_w, image_h, options, side,
+    return encode_image_impl<W, H>(
+        rgba_srgb8,
+        image_w,
+        image_h,
+        options,
+        side,
         [fn](const SampleT<W * H>& s, jobs::Board& board) {
             if constexpr (W == 4 && H == 4) {
                 for (int i = 0; i < 16; ++i)

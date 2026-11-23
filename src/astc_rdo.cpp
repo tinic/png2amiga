@@ -1541,8 +1541,10 @@ int start_layouts(int W, int H, Layout out[8]) {
 class Crew {
 public:
     // job(i, worker) for every i in [0, n); returns when all have finished.
-    template <typename Job>
-    void run_jobs(int n, Job& job) { board_.run(n, job); }
+    template<typename Job>
+    void run_jobs(int n, Job& job) {
+        board_.run(n, job);
+    }
 
     // Body of a helper thread: serves batches until finish().
     void help(int worker) {
@@ -1553,8 +1555,10 @@ public:
             int spins = 0;
             std::uint32_t b = board_.batch();
             while (b == seen) {
-                if (++spins < kSpins) std::this_thread::yield();
-                else board_.wait_batch(seen);
+                if (++spins < kSpins)
+                    std::this_thread::yield();
+                else
+                    board_.wait_batch(seen);
                 b = board_.batch();
             }
             seen = b;
@@ -1596,8 +1600,16 @@ Block splice_weights(const Block& head, const Block& tail, int wb) {
     return out;
 }
 
-void run(EncodeResult& res, const Side& side, std::span<const std::uint8_t> rgba, int image_w,
-         int image_h, int W, int H, float strength, Crew& crew, int workers) {
+void run(EncodeResult& res,
+         const Side& side,
+         std::span<const std::uint8_t> rgba,
+         int image_w,
+         int image_h,
+         int W,
+         int H,
+         float strength,
+         Crew& crew,
+         int workers) {
     const int TN = W * H;
     const int cols = res.block_cols, rows = res.block_rows;
     const auto nblocks = res.blocks.size();
@@ -1720,77 +1732,78 @@ void run(EncodeResult& res, const Side& side, std::span<const std::uint8_t> rgba
     // darker and of the brighter texels spread by two factors, the darkest
     // and the brightest texel); each is refined by alternate weight and
     // endpoint solves, and the best score is kept.
-    auto solve_config = [&](Work& best_w, const Sym& cfg, const Target& tgt, const Sym& enc,
-                            Ctx& tables_ctx) {
-        const Tables& tb = tables();
-        float lum[kMaxTexels], mean = 0.f;
-        int jmin = 0, jmax = 0;
-        for (int j = 0; j < TN; ++j) {
-            lum[j] = float(tgt.rgb[j][0]) + 2.f * float(tgt.rgb[j][1]) + float(tgt.rgb[j][2]);
-            mean += lum[j];
-            if (lum[j] < lum[jmin]) jmin = j;
-            if (lum[j] > lum[jmax]) jmax = j;
-        }
-        mean /= float(TN);
-        float lo[3] = {}, hi[3] = {};
-        int nlo = 0, nhi = 0;
-        for (int j = 0; j < TN; ++j) {
-            float* acc = lum[j] < mean ? lo : hi;
-            for (int k = 0; k < 3; ++k) acc[k] += float(tgt.rgb[j][k]);
-            ++(lum[j] < mean ? nlo : nhi);
-        }
-        for (int k = 0; k < 3; ++k) {
-            hi[k] = nhi ? hi[k] / float(nhi) : 0.f;
-            lo[k] = nlo ? lo[k] / float(nlo) : hi[k];
-        }
-        float best = kInf;
-        Work w;
-        for (int start = 0; start < 4; ++start) {
-            float a[3], e[3];
-            if (start == 0) {
-                if (!enc.ok || enc.np != 1) continue;
-                Work ew;
-                load_work(ew, enc, tables_ctx);
-                for (int k = 0; k < 3; ++k) {
-                    a[k] = float(ew.e0[0][k]);
-                    e[k] = float(ew.e1[0][k]);
-                }
-            } else if (start == 3) {
-                for (int k = 0; k < 3; ++k) {
-                    a[k] = float(tgt.rgb[jmin][k]);
-                    e[k] = float(tgt.rgb[jmax][k]);
-                }
-            } else {
-                const float spread = start == 1 ? 0.5f : 1.25f;
-                for (int k = 0; k < 3; ++k) {
-                    a[k] = std::clamp(lo[k] - spread * (hi[k] - lo[k]), 0.f, 255.f);
-                    e[k] = std::clamp(hi[k] + spread * (hi[k] - lo[k]), 0.f, 255.f);
-                }
+    auto solve_config =
+        [&](Work& best_w, const Sym& cfg, const Target& tgt, const Sym& enc, Ctx& tables_ctx) {
+            const Tables& tb = tables();
+            float lum[kMaxTexels], mean = 0.f;
+            int jmin = 0, jmax = 0;
+            for (int j = 0; j < TN; ++j) {
+                lum[j] = float(tgt.rgb[j][0]) + 2.f * float(tgt.rgb[j][1]) + float(tgt.rgb[j][2]);
+                mean += lum[j];
+                if (lum[j] < lum[jmin]) jmin = j;
+                if (lum[j] > lum[jmax]) jmax = j;
             }
-            // CEM 8 keeps the pair as it is when the first sum is not larger.
-            if (a[0] + a[1] + a[2] > e[0] + e[1] + e[2]) std::swap(a, e);
-            Sym s = cfg;
+            mean /= float(TN);
+            float lo[3] = {}, hi[3] = {};
+            int nlo = 0, nhi = 0;
+            for (int j = 0; j < TN; ++j) {
+                float* acc = lum[j] < mean ? lo : hi;
+                for (int k = 0; k < 3; ++k)
+                    acc[k] += float(tgt.rgb[j][k]);
+                ++(lum[j] < mean ? nlo : nhi);
+            }
             for (int k = 0; k < 3; ++k) {
-                s.ev[2 * k] = tb.c_near[s.qi][int(a[k] + 0.5f)];
-                s.ev[2 * k + 1] = tb.c_near[s.qi][int(e[k] + 0.5f)];
+                hi[k] = nhi ? hi[k] / float(nhi) : 0.f;
+                lo[k] = nlo ? lo[k] / float(nlo) : hi[k];
             }
-            load_work(w, s, tables_ctx);
-            float prev = kInf;
-            for (int it = 0; it < 6; ++it) {
-                solve_weights(w, tgt, TN);
-                float d;
-                const float sc = score_block(w, tgt, W, H, d);
-                if (sc < best) {
-                    best = sc;
-                    best_w = w;
+            float best = kInf;
+            Work w;
+            for (int start = 0; start < 4; ++start) {
+                float a[3], e[3];
+                if (start == 0) {
+                    if (!enc.ok || enc.np != 1) continue;
+                    Work ew;
+                    load_work(ew, enc, tables_ctx);
+                    for (int k = 0; k < 3; ++k) {
+                        a[k] = float(ew.e0[0][k]);
+                        e[k] = float(ew.e1[0][k]);
+                    }
+                } else if (start == 3) {
+                    for (int k = 0; k < 3; ++k) {
+                        a[k] = float(tgt.rgb[jmin][k]);
+                        e[k] = float(tgt.rgb[jmax][k]);
+                    }
+                } else {
+                    const float spread = start == 1 ? 0.5f : 1.25f;
+                    for (int k = 0; k < 3; ++k) {
+                        a[k] = std::clamp(lo[k] - spread * (hi[k] - lo[k]), 0.f, 255.f);
+                        e[k] = std::clamp(hi[k] + spread * (hi[k] - lo[k]), 0.f, 255.f);
+                    }
                 }
-                if (sc > prev * 0.995f) break;
-                prev = sc;
-                solve_endpoints(w, tgt, TN);
+                // CEM 8 keeps the pair as it is when the first sum is not larger.
+                if (a[0] + a[1] + a[2] > e[0] + e[1] + e[2]) std::swap(a, e);
+                Sym s = cfg;
+                for (int k = 0; k < 3; ++k) {
+                    s.ev[2 * k] = tb.c_near[s.qi][int(a[k] + 0.5f)];
+                    s.ev[2 * k + 1] = tb.c_near[s.qi][int(e[k] + 0.5f)];
+                }
+                load_work(w, s, tables_ctx);
+                float prev = kInf;
+                for (int it = 0; it < 6; ++it) {
+                    solve_weights(w, tgt, TN);
+                    float d;
+                    const float sc = score_block(w, tgt, W, H, d);
+                    if (sc < best) {
+                        best = sc;
+                        best_w = w;
+                    }
+                    if (sc > prev * 0.995f) break;
+                    prev = sc;
+                    solve_endpoints(w, tgt, TN);
+                }
             }
-        }
-        store_weights(best_w);
-    };
+            store_weights(best_w);
+        };
     // Every start layout solved for every block. The first pass starts
     // from the one with the lowest expected cost: its score, with the
     // charge for the rise, plus lambda times the bits of its weight bytes
@@ -1809,35 +1822,35 @@ void run(EncodeResult& res, const Side& side, std::span<const std::uint8_t> rgba
             c.TN = TN;
         }
         auto layout_job = [&](int b, int worker) {
-                const int bx = b % cols, by = b / cols;
-                const auto bi = static_cast<std::size_t>(b);
-                if (!syms[bi].ok) return;
-                Target tgt;
-                load_target(bx, by, tgt);
-                if (tgt.alpha) return;  // the layouts have no alpha
-                Work w;
-                float best_cost = kInf;
-                std::size_t best_m = 0;
-                for (std::size_t m = 0; m < nl; ++m) {
-                    solve_config(w, layouts[m], tgt, syms[bi],
-                                 worker_ctx[static_cast<std::size_t>(worker)]);
-                    float d;
-                    const float sc = score_block(w, tgt, W, H, d);
-                    lay_blk[bi * nl + m] = encode_sym(w.s);
-                    lay_score[bi * nl + m] = sc;
-                    float cost = sc;
-                    if (cost > base_score[bi]) {
-                        const float r = cost - base_score[bi];
-                        cost += kRiseWeight * r * r / (base_score[bi] + rise_floor);
-                    }
-                    cost += lambda * kLiteralBits * float((layouts[m].wb + 7) / 8);
-                    if (cost < best_cost) {
-                        best_cost = cost;
-                        best_m = m;
-                    }
+            const int bx = b % cols, by = b / cols;
+            const auto bi = static_cast<std::size_t>(b);
+            if (!syms[bi].ok) return;
+            Target tgt;
+            load_target(bx, by, tgt);
+            if (tgt.alpha) return;  // the layouts have no alpha
+            Work w;
+            float best_cost = kInf;
+            std::size_t best_m = 0;
+            for (std::size_t m = 0; m < nl; ++m) {
+                solve_config(
+                    w, layouts[m], tgt, syms[bi], worker_ctx[static_cast<std::size_t>(worker)]);
+                float d;
+                const float sc = score_block(w, tgt, W, H, d);
+                lay_blk[bi * nl + m] = encode_sym(w.s);
+                lay_score[bi * nl + m] = sc;
+                float cost = sc;
+                if (cost > base_score[bi]) {
+                    const float r = cost - base_score[bi];
+                    cost += kRiseWeight * r * r / (base_score[bi] + rise_floor);
                 }
-                out[bi] = lay_blk[bi * nl + best_m];
-                syms[bi] = decode_sym(out[bi], W, H);
+                cost += lambda * kLiteralBits * float((layouts[m].wb + 7) / 8);
+                if (cost < best_cost) {
+                    best_cost = cost;
+                    best_m = m;
+                }
+            }
+            out[bi] = lay_blk[bi * nl + best_m];
+            syms[bi] = decode_sym(out[bi], W, H);
         };
         crew.run_jobs(int(nblocks), layout_job);
     }
@@ -1994,8 +2007,8 @@ void run(EncodeResult& res, const Side& side, std::span<const std::uint8_t> rgba
                     // The two solves that start from the donor's head give
                     // the same blocks for every donor with that head.
                     const Block head = splice_weights(out[d], Block{}, syms[d].wb);
-                    jobs[k].new_head =
-                        std::find(heads_done.begin(), heads_done.end(), head) == heads_done.end();
+                    jobs[k].new_head = std::find(heads_done.begin(), heads_done.end(), head) ==
+                                       heads_done.end();
                     if (jobs[k].new_head) heads_done.push_back(head);
                 }
                 auto donor_job = [&](int k, int) {
@@ -2185,7 +2198,15 @@ void optimize(EncodeResult& res, const Side& side, std::span<const std::uint8_t>
     const int workers = int(std::max(std::thread::hardware_concurrency(), 1u));
     pipeline::parallel_for(std::size_t(workers), [&](std::size_t i) {
         if (i == 0) {
-            run(res, side, rgba_srgb8, image_w, image_h, block_w, block_h, float(strength), crew,
+            run(res,
+                side,
+                rgba_srgb8,
+                image_w,
+                image_h,
+                block_w,
+                block_h,
+                float(strength),
+                crew,
                 workers);
             crew.finish();
         } else {
