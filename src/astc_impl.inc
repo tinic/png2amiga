@@ -4988,6 +4988,31 @@ inline float rgb_err(const SampleT<TN>& s, int j, std::uint8_t r, std::uint8_t g
     }
 }
 
+// OKLab of the dual-plane paints one refine_weights_dp() call has scored.
+// A texel's paint depends on (partition, first-plane infill weight,
+// second-plane infill weight); the descent scores the same triple many
+// times (the trial of an accepted step, the same step in the next sweep,
+// other texels of the partition), and every score needs the paint in OKLab.
+// The entry holds the value srgb8_to_oklab() returns, so a hit gives the
+// same error as a new conversion. One instance per thread; a call clears
+// the entries it has set.
+struct DpPaintMemo {
+    static constexpr int kKeys = 3 * 65 * 65;
+    color_space::OKLab lab[kKeys];
+    std::uint8_t have[kKeys] = {};
+    std::uint16_t touched[kKeys];
+    int ntouched = 0;
+    void clear() {
+        for (int i = 0; i < ntouched; ++i) have[touched[i]] = 0;
+        ntouched = 0;
+    }
+};
+
+inline DpPaintMemo& dp_paint_memo() {
+    static thread_local DpPaintMemo memo;
+    return memo;
+}
+
 // Coordinate descent on both planes against the exact decoder paint
 // (see refine_weights). st[0].terr holds the texel errors. Returns the
 // block error.
@@ -4998,13 +5023,34 @@ float refine_weights_dp(const SampleT<TN>& s, const GridMapRT& gm, const WeightQ
     const int* ramp = wq.ramp;
     const int c0 = comp == 0 ? 1 : 0, c1 = comp == 2 ? 1 : 2;
     // Texel error for first-plane infill weight wa and second-plane wb.
+    DpPaintMemo& memo = dp_paint_memo();
+    struct MemoClear {
+        DpPaintMemo& m;
+        ~MemoClear() { m.clear(); }
+    } memo_clear{memo};
     auto eval = [&](int j, int wa, int wb) {
         const PaintCh& pc = paint[assign[j]];
-        std::uint8_t c[3];
-        c[c0] = pc.v[c0][wa];
-        c[c1] = pc.v[c1][wa];
-        c[comp] = pc.v[comp][wb];
-        return rgb_err<M, TN>(s, j, c[0], c[1], c[2]);
+        if constexpr (M == block_compress::BlockMetric::oklab2) {
+            const int key = (int(assign[j]) * 65 + wa) * 65 + wb;
+            if (!memo.have[key]) {
+                std::uint8_t c[3];
+                c[c0] = pc.v[c0][wa];
+                c[c1] = pc.v[c1][wa];
+                c[comp] = pc.v[comp][wb];
+                memo.lab[key] = color_space::srgb8_to_oklab(c[0], c[1], c[2]);
+                memo.have[key] = 1;
+                memo.touched[memo.ntouched++] = std::uint16_t(key);
+            }
+            const color_space::OKLab l = memo.lab[key];
+            const float dL = s.lab[j].L - l.L, dA = s.lab[j].a - l.a, dB = s.lab[j].b - l.b;
+            return dL * dL + dA * dA + dB * dB;
+        } else {
+            std::uint8_t c[3];
+            c[c0] = pc.v[c0][wa];
+            c[c1] = pc.v[c1][wa];
+            c[comp] = pc.v[comp][wb];
+            return rgb_err<M, TN>(s, j, c[0], c[1], c[2]);
+        }
     };
     float* terr = st[0].terr;
     if (gm.identity) {
