@@ -40,6 +40,7 @@
 #include <chrono>
 #include <cstring>
 #include <limits>
+#include <memory>
 #include <mutex>
 #include <thread>
 #include <utility>
@@ -167,6 +168,10 @@ struct SampleT {
     std::uint8_t rgba8[std::size_t(N)][4];
     color_space::OKLab lab[std::size_t(N)];
     std::uint8_t alpha[std::size_t(N)];
+    // The 2-partition ranking of this block (find_best_2p_partitions), when
+    // the caller has it already; nullptr otherwise. Two candidate groups
+    // use the same ranking.
+    mutable const int* top2p = nullptr;
 };
 using Sample16 = SampleT<16>;
 using Sample20 = SampleT<20>;
@@ -5093,9 +5098,13 @@ struct DpPaintMemo {
     }
 };
 
+// Allocated on a thread's first dual-plane descent (190 KB): a thread-local
+// object of that size would be reserved for every thread of the process and
+// for every footprint's translation unit.
 inline DpPaintMemo& dp_paint_memo() {
-    static thread_local DpPaintMemo memo;
-    return memo;
+    static thread_local std::unique_ptr<DpPaintMemo> memo;
+    if (!memo) memo = std::make_unique<DpPaintMemo>();
+    return *memo;
 }
 
 // Coordinate descent on both planes against the exact decoder paint
@@ -5755,14 +5764,17 @@ EncodeResult encode_image_gen(std::span<const std::uint8_t> rgba_srgb8, int imag
             //   r[2] generic 2 partitions     r[3] generic 3 partitions
             //   r[4..6] dual plane with 1, 2 and 3 partitions
             Candidate r[7];
+            // The template set and the generic 2-partition groups rank the
+            // partitions the same way: once, before the jobs.
+            int pis[kTop2pPartitions];
+            find_best_2p_partitions<W, H, kTop2pPartitions>(s, pis);
+            s.top2p = pis;
             auto job = [&](int i, int) {
                 switch (i) {
                 case 0:
                     r[0] = fn(s);
                     break;
                 case 1: {
-                    int pis[kTop2pPartitions];
-                    find_best_2p_partitions<W, H, kTop2pPartitions>(s, pis);
                     r[2] = encode_block_generic_np<W, H, 2, M>(s, pis, kTop2pPartitions);
                     r[5] = encode_block_generic_dp<W, H, 2, M>(s, pis, kTop2pPartitions);
                     break;
@@ -5784,6 +5796,7 @@ EncodeResult encode_image_gen(std::span<const std::uint8_t> rgba_srgb8, int imag
                 }
             };
             board.run(5, job);
+            s.top2p = nullptr;
             Candidate a = r[0];
             for (int i = 1; i < 7; ++i)
                 if (r[i].err < a.err) a = r[i];
@@ -5952,8 +5965,12 @@ auto make_encode_fn_2p_pack() {
         // The 1024-partition surrogate is grid/quant-independent — run it
         // once and carry the top-K partition indices into the full 2p
         // candidate sweep (the surrogate can mis-rank the post-quant best).
-        int pis[kTop2pPartitions];
-        find_best_2p_partitions<TexW, TexH, kTop2pPartitions>(s, pis);
+        int pis_here[kTop2pPartitions];
+        const int* pis = s.top2p;
+        if (pis == nullptr) {
+            find_best_2p_partitions<TexW, TexH, kTop2pPartitions>(s, pis_here);
+            pis = pis_here;
+        }
         int same_as[kTop2pPartitions];
         same_partitions<2, TexW, TexH>(pis, kTop2pPartitions, same_as);
         for (int pidx = 0; pidx < kTop2pPartitions; ++pidx) {

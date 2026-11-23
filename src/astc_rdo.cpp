@@ -1550,18 +1550,8 @@ public:
     void help(int worker) {
         std::uint32_t seen = 0;
         for (;;) {
-            // The serial work of the pass between two batches is short, so
-            // yield for a while before the thread sleeps.
-            int spins = 0;
-            std::uint32_t b = board_.batch();
-            while (b == seen) {
-                if (++spins < kSpins)
-                    std::this_thread::yield();
-                else
-                    board_.wait_batch(seen);
-                b = board_.batch();
-            }
-            seen = b;
+            board_.wait_batch(seen);
+            seen = board_.batch();
             if (quit_.load()) return;
             board_.join(worker);
         }
@@ -1574,7 +1564,6 @@ public:
     }
 
 private:
-    static constexpr int kSpins = 4000;
     jobs::Board board_;
     std::atomic<bool> quit_{false};
 };

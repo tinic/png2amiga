@@ -25,9 +25,10 @@
 //     clang or MSVC; GCC on AArch64): not checked. There the kernels are
 //     off by default and the encoder runs plain scalar loops, which the
 //     compiler contracts by its own rules. To try the kernels:
-//     -DPNG2AMIGA_ASTC_SIMD_KERNELS=1 (with -DPNG2AMIGA_ASTC_FUSED=0 for
-//     separate multiply and add), then compare the encoder's files against
-//     a build without it.
+//     -DPNG2AMIGA_ASTC_SIMD_KERNELS=1, then compare the encoder's files
+//     against a build without it. (Separate multiply and add intrinsics
+//     are no way to an unfused kernel on these targets: the compiler
+//     contracts them like scalar code.)
 // A kernel must not replace a loop-carried sum (a dot product turned into
 // column updates): clang on AArch64 fuses such a sum in most instantiations
 // but not in all (found at 10x8), so no fixed choice reproduces it.
@@ -75,13 +76,12 @@
 #endif
 #endif
 
-// 1: the kernels fuse multiply-add (the target has FMA).
-#if !defined(PNG2AMIGA_ASTC_FUSED)
+// 1: the kernels fuse multiply-add (NEON, AVX2 + FMA). 0: the target has no
+// FMA instruction and nothing can be fused.
 #if defined(PNG2AMIGA_ASTC_SIMD_NEON) || defined(PNG2AMIGA_ASTC_SIMD_AVX2)
 #define PNG2AMIGA_ASTC_FUSED 1
 #else
 #define PNG2AMIGA_ASTC_FUSED 0
-#endif
 #endif
 
 namespace png2amiga::astc::simd {
@@ -110,23 +110,13 @@ inline void axpy_sub(float* y, const float* a, float x, int n) noexcept {
 #if defined(PNG2AMIGA_ASTC_SIMD_NEON)
     const float32x4_t vx = vdupq_n_f32(x);
     for (; i + 4 <= n; i += 4) {
-#if PNG2AMIGA_ASTC_FUSED
         vst1q_f32(y + i, vfmsq_f32(vld1q_f32(y + i), vld1q_f32(a + i), vx));
-#else
-        vst1q_f32(y + i, vsubq_f32(vld1q_f32(y + i), vmulq_f32(vld1q_f32(a + i), vx)));
-#endif
     }
 #elif defined(PNG2AMIGA_ASTC_SIMD_AVX2)
     const __m256 vx = _mm256_set1_ps(x);
     for (; i + 8 <= n; i += 8) {
-#if PNG2AMIGA_ASTC_FUSED
         _mm256_storeu_ps(y + i,
                          _mm256_fnmadd_ps(_mm256_loadu_ps(a + i), vx, _mm256_loadu_ps(y + i)));
-#else
-        _mm256_storeu_ps(
-            y + i,
-            _mm256_sub_ps(_mm256_loadu_ps(y + i), _mm256_mul_ps(_mm256_loadu_ps(a + i), vx)));
-#endif
     }
 #elif defined(PNG2AMIGA_ASTC_SIMD_SSE2)
     const __m128 vx = _mm_set1_ps(x);

@@ -18,10 +18,49 @@
 // pipeline::parallel_for runs its bodies one after the other).
 
 #include <atomic>
+#include <chrono>
 #include <cstdint>
 #include <thread>
 
+#if defined(_MSC_VER) && (defined(_M_X64) || defined(_M_IX86))
+#include <immintrin.h>
+#endif
+
 namespace png2amiga::astc::jobs {
+
+// One step of a short wait loop: tells the core that the thread spins,
+// without a system call.
+inline void spin_pause() noexcept {
+#if defined(_MSC_VER) && (defined(_M_X64) || defined(_M_IX86))
+    _mm_pause();
+#elif defined(__x86_64__) || defined(__i386__)
+    __builtin_ia32_pause();
+#elif defined(__aarch64__) && (defined(__GNUC__) || defined(__clang__))
+    __asm__ __volatile__("yield");
+#else
+    std::this_thread::yield();
+#endif
+}
+
+// Spins until done() holds or about kSpinMicros have passed; returns done().
+// A waiting thread spins first because the waits of this file are short
+// (the serial work between two batches of the RDO pass, the last job of a
+// batch): a sleeping helper wakes up too late for the next batch, and that
+// cost half of the pass's speed-up when it was measured. After the spin it
+// sleeps on the atomic, so a long wait does not burn a core.
+inline constexpr int kSpinMicros = 500;
+template<typename Done>
+bool spin_until(Done done) {
+    const auto start = std::chrono::steady_clock::now();
+    for (;;) {
+        for (int i = 0; i < 64; ++i) {
+            if (done()) return true;
+            spin_pause();
+        }
+        if (std::chrono::steady_clock::now() - start > std::chrono::microseconds(kSpinMicros))
+            return done();
+    }
+}
 
 class Board {
 public:
@@ -48,13 +87,17 @@ public:
             job(i, 0);
             done_.fetch_add(1);
         }
-        while (done_.load() < n)
-            std::this_thread::yield();
+        // Helpers may still run jobs they took.
+        for (;;) {
+            const int d = done_.load();
+            if (d >= n) break;
+            if (!spin_until([&] { return done_.load() != d; })) done_.wait(d);
+        }
         // No helper may enter the batch from here on. Wait for the ones
         // that are inside before the next batch changes the job.
         open_.store(false);
         while (active_.load() != 0)
-            std::this_thread::yield();
+            spin_pause();
     }
 
     // Helper: take jobs of the open batch, if there is one; returns when
@@ -68,6 +111,7 @@ public:
             for (int i = next_.fetch_add(1); i < n_; i = next_.fetch_add(1)) {
                 call_(ctx_, i, worker);
                 done_.fetch_add(1);
+                done_.notify_all();
             }
         }
         active_.fetch_sub(1);
@@ -79,7 +123,11 @@ public:
     // For helpers that sleep between batches: sequence number of the last
     // batch (or wake() call), and a wait until it differs from `seen`.
     std::uint32_t batch() const { return batch_.load(); }
-    void wait_batch(std::uint32_t seen) const { batch_.wait(seen); }
+    // Returns when batch() != seen: after a short spin, by sleeping.
+    void wait_batch(std::uint32_t seen) const {
+        if (spin_until([&] { return batch_.load() != seen; })) return;
+        batch_.wait(seen);
+    }
     void wake() {
         batch_.fetch_add(1);
         batch_.notify_all();
