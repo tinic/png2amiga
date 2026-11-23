@@ -45,9 +45,9 @@ inline void spin_pause() noexcept {
 // Spins until done() holds or about kSpinMicros have passed; returns done().
 // A waiting thread spins first because the waits of this file are short
 // (the serial work between two batches of the RDO pass, the last job of a
-// batch): a sleeping helper wakes up too late for the next batch, and that
-// cost half of the pass's speed-up when it was measured. After the spin it
-// sleeps on the atomic, so a long wait does not burn a core.
+// batch): a helper that sleeps at once wakes up late for the next batch.
+// After the spin it sleeps on the atomic, so a long wait does not burn a
+// core.
 inline constexpr int kSpinMicros = 500;
 template<typename Done>
 bool spin_until(Done done) {
