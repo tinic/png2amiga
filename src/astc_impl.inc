@@ -2786,6 +2786,12 @@ Candidate encode_block_rgb_2p(const Sample16& s) {
 template <int N, int TexW, int TexH>
 struct PartTab {
     std::uint8_t assign[1024][std::size_t(TexW * TexH)];
+    // Lowest partition index with the same assign row (itself if none).
+    // The partition hash gives many seeds the same texel assignment,
+    // mostly on small footprints. Every candidate of a later copy is a
+    // candidate of the first one again, with the same error, and a block
+    // only replaces the incumbent on a lower error: the copy cannot win.
+    std::uint16_t first_same[1024];
 };
 template <int N, int TexW, int TexH>
 const PartTab<N, TexW, TexH>& partition_table_np() {
@@ -2799,10 +2805,32 @@ const PartTab<N, TexW, TexH>& partition_table_np() {
                         spec_select_partition(pi, dx, dy, 0, N, small);
                 }
             }
+            t.first_same[pi] = std::uint16_t(pi);
+            for (int q = 0; q < pi; ++q)
+                if (std::memcmp(t.assign[q], t.assign[pi], sizeof(t.assign[pi])) == 0) {
+                    t.first_same[pi] = std::uint16_t(q);
+                    break;
+                }
         }
         return t;
     }();
     return table;
+}
+
+// same_as[k] = lowest k' <= k whose partition has the same texel assignment
+// as partition pis[k] (see PartTab::first_same). A candidate of a list
+// entry with same_as[k] != k repeats a candidate of entry same_as[k].
+template <int N, int TexW, int TexH>
+void same_partitions(const int* pis, int npis, int* same_as) {
+    const auto& table = partition_table_np<N, TexW, TexH>();
+    for (int k = 0; k < npis; ++k) {
+        same_as[k] = k;
+        for (int q = 0; q < k; ++q)
+            if (table.first_same[pis[q]] == table.first_same[pis[k]]) {
+                same_as[k] = q;
+                break;
+            }
+    }
 }
 
 // PCA seed over a texel subset (mask = 1 for "include"). Generalised
@@ -3236,17 +3264,27 @@ void find_best_2p_partitions(const SampleT<TexW * TexH>& s, int out[std::size_t(
         bestErr[i] = std::numeric_limits<float>::infinity();
         out[i] = 0;
     }
+    // errs[pi] = surrogate error of partition pi; kSkip = a part is empty.
+    constexpr float kSkip = -1.f;
+    float errs[1024];
     for (int pi = 0; pi < 1024; ++pi) {
         const std::uint8_t* assign = table.assign[pi];
+        float pi_err = 0.f;
+        if (table.first_same[pi] != pi) {
+            // Same assignment as an earlier index: same seeds, same error.
+            pi_err = errs[table.first_same[pi]];
+            errs[pi] = pi_err;
+            if (pi_err == kSkip) continue;
+        } else {
         int counts[2] = {};
         for (int j = 0; j < TN; ++j) {
             for (int k = 0; k < 2; ++k) mask[k][j] = (assign[j] == k) ? 1 : 0;
             ++counts[assign[j]];
         }
+        errs[pi] = kSkip;
         if (counts[0] == 0 || counts[1] == 0) continue;
         for (int k = 0; k < 2; ++k)
             pca_seed_rgb_subset_n<TN>(s, mask[k], e0_seed[k], e1_seed[k]);
-        float pi_err = 0.f;
         for (int j = 0; j < TN; ++j) {
             int k = assign[j];
             float dr0 = float(e1_seed[k][0]) - float(e0_seed[k][0]);
@@ -3262,6 +3300,8 @@ void find_best_2p_partitions(const SampleT<TexW * TexH>& s, int out[std::size_t(
             float dg = pg - w * dg0;
             float db = pb - w * db0;
             pi_err += dr * dr + dg * dg + db * db;
+        }
+        errs[pi] = pi_err;
         }
         if (pi_err < bestErr[K - 1]) {
             int p = K - 1;
@@ -4664,12 +4704,23 @@ void find_best_np_partitions(const SampleT<TexW * TexH>& s, int out[std::size_t(
     const auto& table = partition_table_np<NP, TexW, TexH>();
     float bestErr[std::size_t(K)];
     for (int i = 0; i < K; ++i) { bestErr[i] = std::numeric_limits<float>::infinity(); out[i] = 0; }
+    // errs[pi] = surrogate error of partition pi; kSkip = a part is empty.
+    constexpr float kSkip = -1.f;
+    float errs[1024];
     for (int pi = 0; pi < 1024; ++pi) {
         const std::uint8_t* assign = table.assign[pi];
+        float err = 0.f;
+        if (table.first_same[pi] != pi) {
+            // Same assignment as an earlier index: same seeds, same error.
+            err = errs[table.first_same[pi]];
+            errs[pi] = err;
+            if (err == kSkip) continue;
+        } else {
         int counts[std::size_t(NP)] = {};
         for (int j = 0; j < TN; ++j) ++counts[assign[j]];
         bool empty = false;
         for (int p = 0; p < NP; ++p) empty = empty || counts[p] == 0;
+        errs[pi] = kSkip;
         if (empty) continue;
         std::uint8_t e0[std::size_t(NP)][3], e1[std::size_t(NP)][3];
         for (int p = 0; p < NP; ++p) {
@@ -4677,7 +4728,6 @@ void find_best_np_partitions(const SampleT<TexW * TexH>& s, int out[std::size_t(
             for (int j = 0; j < TN; ++j) mask[j] = assign[j] == p ? 1 : 0;
             pca_seed_rgb_subset_n<TN>(s, mask, e0[p], e1[p]);
         }
-        float err = 0.f;
         for (int j = 0; j < TN; ++j) {
             const int p = assign[j];
             float d[3], x[3], dot = 0.f, rsq = 0.f;
@@ -4692,6 +4742,8 @@ void find_best_np_partitions(const SampleT<TexW * TexH>& s, int out[std::size_t(
                 const float r = x[ch] - w * d[ch];
                 err += r * r;
             }
+        }
+        errs[pi] = err;
         }
         if (err < bestErr[K - 1]) {
             int p = K - 1;
@@ -4801,9 +4853,21 @@ Candidate encode_block_generic_np(const SampleT<TexW * TexH>& s, const int* pis,
     Est top[std::size_t(kTopN)];
     int ntop = 0;
     float seed0[std::size_t(kTop2pPartitions)][std::size_t(NP)][3], seed1[std::size_t(kTop2pPartitions)][std::size_t(NP)][3];
-    float R[12 * 12], S[12 * 12];  // per weight grid (<= 11 x 11 maps)
+    // Per list entry and weight grid (<= 11 x 11 maps).
+    float Rk[std::size_t(kTop2pPartitions)][12 * 12], Sk[std::size_t(kTop2pPartitions)][12 * 12];
+    int same_as[std::size_t(kTop2pPartitions)];
+    same_partitions<NP, TexW, TexH>(pis, npis, same_as);
     for (int k = 0; k < npis; ++k) {
         const std::uint8_t* assign = table.assign[pis[k]];
+        // A repeated assignment has the seeds and the estimates of its
+        // first entry; only the ranking below sees it again.
+        const int k0 = same_as[k];
+        float* const R = Rk[k0];
+        float* const S = Sk[k0];
+        if (k0 != k) {
+            std::memcpy(seed0[k], seed0[k0], sizeof(seed0[k]));
+            std::memcpy(seed1[k], seed1[k0], sizeof(seed1[k]));
+        } else {
         for (int p = 0; p < NP; ++p) {
             std::uint8_t mask[std::size_t(TN)], a[3], b[3];
             for (int j = 0; j < TN; ++j) mask[j] = assign[j] == p ? 1 : 0;
@@ -4815,6 +4879,7 @@ Candidate encode_block_generic_np(const SampleT<TexW * TexH>& s, const int* pis,
             }
         }
         estimate_grids<TN, NP>(s, ctx.maps, assign, seed0[k], seed1[k], R, S);
+        }
         for (std::size_t m = 0; m < ctx.modes.size(); ++m) {
             const ModeRT& md = ctx.modes[m];
             const int q_scale = endpoint_quant_for(4 * NP, np_color_bits<NP>(md.wb, false));
@@ -4833,6 +4898,9 @@ Candidate encode_block_generic_np(const SampleT<TexW * TexH>& s, const int* pis,
     }
     for (int t = 0; t < ntop; ++t) {
         const int k = top[t].k;
+        // The first entry of this assignment has the same estimate, so it
+        // ranks ahead and has run this mode already, with the same error.
+        if (same_as[k] != k) continue;
         try_mode_np<TexW, TexH, NP, M>(s, ctx.modes[std::size_t(top[t].m)], pis[k],
                                        table.assign[pis[k]], seed0[k], seed1[k],
                                        kGenericNpFloor, best);
@@ -5332,14 +5400,27 @@ Candidate encode_block_generic_dp(const SampleT<TexW * TexH>& s, const int* pis,
     int ntop = 0;
     float seed0[std::size_t(kMaxPi)][3][std::size_t(NP)][3];
     float seed1[std::size_t(kMaxPi)][3][std::size_t(NP)][3];
-    float R[12 * 12], S[12 * 12];  // per weight grid (<= 11 x 11 maps)
+    // Per list entry, component and weight grid (<= 11 x 11 maps).
+    float Rk[std::size_t(kMaxPi)][3][12 * 12], Sk[std::size_t(kMaxPi)][3][12 * 12];
+    int same_as[std::size_t(kMaxPi)] = {};
+    if constexpr (NP > 1) same_partitions<NP, TexW, TexH>(pis, npis, same_as);
     for (int k = 0; k < npis; ++k) {
         const std::uint8_t* assign = assign_of(k);
+        // A repeated assignment has the seeds and the estimates of its
+        // first entry; only the ranking below sees it again.
+        const int k0 = same_as[k];
         for (int comp = 0; comp < 3; ++comp) {
-            for (int p = 0; p < NP; ++p)
-                dp_seed<TN>(s, assign, p, comp, seed0[k][comp][p], seed1[k][comp][p]);
-            estimate_grids_dp<TN, NP>(s, ctx.maps, assign, comp, seed0[k][comp], seed1[k][comp],
-                                      R, S);
+            float* const R = Rk[k0][comp];
+            float* const S = Sk[k0][comp];
+            if (k0 != k) {
+                std::memcpy(seed0[k][comp], seed0[k0][comp], sizeof(seed0[k][comp]));
+                std::memcpy(seed1[k][comp], seed1[k0][comp], sizeof(seed1[k][comp]));
+            } else {
+                for (int p = 0; p < NP; ++p)
+                    dp_seed<TN>(s, assign, p, comp, seed0[k][comp][p], seed1[k][comp][p]);
+                estimate_grids_dp<TN, NP>(s, ctx.maps, assign, comp, seed0[k][comp],
+                                          seed1[k][comp], R, S);
+            }
             for (std::size_t m = 0; m < ctx.dp_modes.size(); ++m) {
                 const ModeRT& md = ctx.dp_modes[m];
                 const int bits = dp_color_bits<NP>(md.wb, false);
@@ -5361,6 +5442,9 @@ Candidate encode_block_generic_dp(const SampleT<TexW * TexH>& s, const int* pis,
     }
     for (int t = 0; t < ntop; ++t) {
         const Est& e = top[t];
+        // See encode_block_generic_np: the first entry of the assignment
+        // has run this (component, mode) already.
+        if (same_as[e.k] != e.k) continue;
         try_mode_dp<TexW, TexH, NP, M>(s, ctx.dp_modes[std::size_t(e.m)], NP == 1 ? 0 : pis[e.k],
                                        assign_of(e.k), e.comp, seed0[e.k][e.comp],
                                        seed1[e.k][e.comp], kGenericNpFloor, best);
@@ -5785,7 +5869,12 @@ auto make_encode_fn_2p_pack() {
         // candidate sweep (the surrogate can mis-rank the post-quant best).
         int pis[kTop2pPartitions];
         find_best_2p_partitions<TexW, TexH, kTop2pPartitions>(s, pis);
+        int same_as[kTop2pPartitions];
+        same_partitions<2, TexW, TexH>(pis, kTop2pPartitions, same_as);
         for (int pidx = 0; pidx < kTop2pPartitions; ++pidx) {
+            // A repeat of an earlier assignment gives the same errors again
+            // and cannot replace the incumbent (strict <).
+            if (same_as[pidx] != pidx) continue;
             const int best_pi = pis[pidx];
             ((
                 [&] {
