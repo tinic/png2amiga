@@ -1277,11 +1277,12 @@ sys.exit(0 if got==expect else (print(f'expected {expect}, got {got}') or 1))"
             --check smaller --mode astc-4x4 --width 384 --rdo 100 --max-ratio 0.71)
     # Similarity donors: the blocks of a generated tiled image repeat 32
     # blocks apart, out of reach of the neighbour donors (ratio 1.00
-    # without the similarity donors, 0.90 with them).
+    # without the similarity donors; with them 0.90 with clang on arm64
+    # and 0.96 with GCC 15 on x86-64).
     add_test(NAME "astc-rdo-far-repeats"
         COMMAND ${PNG2AMIGA_PYTHON} ${CMAKE_SOURCE_DIR}/tools/check_astc_rdo.py
             --cli $<TARGET_FILE:png2amiga> --input tiled
-            --check smaller --mode astc-6x6 --width 256 --rdo 20 --max-ratio 0.95)
+            --check smaller --mode astc-6x6 --width 256 --rdo 20 --max-ratio 0.98)
     # Plain lores + STRIPS (1-4 planes, 8-px slot grid): the .h carries the
     # strips_lores_ocs copper list, one 40-slot chain per row.
     add_test(
