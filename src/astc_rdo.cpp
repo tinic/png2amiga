@@ -51,12 +51,16 @@
 
 #include "astc_rdo.hpp"
 
+#include "pipeline.hpp"
+
 #include <algorithm>
+#include <atomic>
 #include <bit>
 #include <cmath>
 #include <cstring>
 #include <limits>
 #include <memory>
+#include <thread>
 #include <vector>
 
 
@@ -1519,6 +1523,99 @@ int start_layouts(int W, int H, Layout out[8]) {
     return n;
 }
 
+// Helper threads of the pass.
+//
+// The pass takes the blocks in stream order: the rate of a block depends
+// on the blocks written before it. Two parts of the work do not depend on
+// that order. The start layouts of a block depend on that block alone, and
+// the solves of the donors of one block depend on the donor and the block,
+// not on each other or on the rate model. A Crew runs such a batch of
+// independent jobs on the calling thread and on the helper threads. Every
+// job writes its own result slot, and the caller uses the slots in the
+// order of the serial code, so the output does not depend on the number of
+// threads or on their timing.
+//
+// The helpers are the other indices of one pipeline::parallel_for() around
+// the whole pass (see run()), so a batch costs no thread start. When
+// parallel_for runs its bodies one after the other (nested call, one core),
+// the caller of run_jobs() does every job itself.
+class Crew {
+public:
+    // job(i, worker) for every i in [0, n); returns when all have finished.
+    // worker = 0 for the caller, the helper's index otherwise.
+    template <typename Job>
+    void run_jobs(int n, Job& job) {
+        if (n <= 0) return;
+        if (n == 1) {
+            job(0, 0);
+            return;
+        }
+        ctx_ = &job;
+        call_ = [](void* c, int i, int worker) { (*static_cast<Job*>(c))(i, worker); };
+        n_ = n;
+        next_.store(0);
+        done_.store(0);
+        open_.store(true);
+        batch_.fetch_add(1);
+        batch_.notify_all();
+        for (int i = next_.fetch_add(1); i < n; i = next_.fetch_add(1)) {
+            job(i, 0);
+            done_.fetch_add(1);
+        }
+        while (done_.load() < n) std::this_thread::yield();
+        // No helper may enter the batch from here on; wait for the ones
+        // that are inside before the next batch changes the job.
+        open_.store(false);
+        while (active_.load() != 0) std::this_thread::yield();
+    }
+
+    // Body of a helper thread: serves batches until finish().
+    void help(int worker) {
+        std::uint32_t seen = 0;
+        for (;;) {
+            int spins = 0;
+            std::uint32_t b = batch_.load();
+            while (b == seen) {
+                if (++spins < kSpins) std::this_thread::yield();
+                else batch_.wait(seen);
+                b = batch_.load();
+            }
+            seen = b;
+            if (quit_.load()) return;
+            active_.fetch_add(1);
+            if (open_.load()) {
+                for (int i = next_.fetch_add(1); i < n_; i = next_.fetch_add(1)) {
+                    call_(ctx_, i, worker);
+                    done_.fetch_add(1);
+                }
+            }
+            active_.fetch_sub(1);
+        }
+    }
+
+    // Ends every help() call. No batch may follow.
+    void finish() {
+        quit_.store(true);
+        batch_.fetch_add(1);
+        batch_.notify_all();
+    }
+
+private:
+    // Yields before a helper blocks: the caller's serial work between two
+    // batches is short (well under a millisecond).
+    static constexpr int kSpins = 4000;
+    std::atomic<std::uint32_t> batch_{0};
+    std::atomic<bool> open_{false};
+    std::atomic<bool> quit_{false};
+    std::atomic<int> active_{0};
+    std::atomic<int> next_{0};
+    std::atomic<int> done_{0};
+    // Written by run_jobs() while no helper is inside a batch.
+    int n_ = 0;
+    void (*call_)(void*, int, int) = nullptr;
+    void* ctx_ = nullptr;
+};
+
 struct Cand {
     Block blk{};
     float d = 0.f;      // block error
@@ -1541,7 +1638,7 @@ Block splice_weights(const Block& head, const Block& tail, int wb) {
 }
 
 void run(EncodeResult& res, const Side& side, std::span<const std::uint8_t> rgba, int image_w,
-         int image_h, int W, int H, float strength) {
+         int image_h, int W, int H, float strength, Crew& crew, int workers) {
     const int TN = W * H;
     const int cols = res.block_cols, rows = res.block_rows;
     const auto nblocks = res.blocks.size();
@@ -1664,7 +1761,8 @@ void run(EncodeResult& res, const Side& side, std::span<const std::uint8_t> rgba
     // darker and of the brighter texels spread by two factors, the darkest
     // and the brightest texel); each is refined by alternate weight and
     // endpoint solves, and the best score is kept.
-    auto solve_config = [&](Work& best_w, const Sym& cfg, const Target& tgt, const Sym& enc) {
+    auto solve_config = [&](Work& best_w, const Sym& cfg, const Target& tgt, const Sym& enc,
+                            Ctx& tables_ctx) {
         const Tables& tb = tables();
         float lum[kMaxTexels], mean = 0.f;
         int jmin = 0, jmax = 0;
@@ -1693,7 +1791,7 @@ void run(EncodeResult& res, const Side& side, std::span<const std::uint8_t> rgba
             if (start == 0) {
                 if (!enc.ok || enc.np != 1) continue;
                 Work ew;
-                load_work(ew, enc, ctx);
+                load_work(ew, enc, tables_ctx);
                 for (int k = 0; k < 3; ++k) {
                     a[k] = float(ew.e0[0][k]);
                     e[k] = float(ew.e1[0][k]);
@@ -1717,7 +1815,7 @@ void run(EncodeResult& res, const Side& side, std::span<const std::uint8_t> rgba
                 s.ev[2 * k] = tb.c_near[s.qi][int(a[k] + 0.5f)];
                 s.ev[2 * k + 1] = tb.c_near[s.qi][int(e[k] + 0.5f)];
             }
-            load_work(w, s, ctx);
+            load_work(w, s, tables_ctx);
             float prev = kInf;
             for (int it = 0; it < 6; ++it) {
                 solve_weights(w, tgt, TN);
@@ -1743,18 +1841,27 @@ void run(EncodeResult& res, const Side& side, std::span<const std::uint8_t> rgba
     std::vector<Block> lay_blk(nl * nblocks);
     std::vector<float> lay_score(nl * nblocks, kInf);
     if (nl > 0) {
-        for (int by = 0; by < rows; ++by)
-            for (int bx = 0; bx < cols; ++bx) {
-                const auto bi = static_cast<std::size_t>(by * cols + bx);
-                if (!syms[bi].ok) continue;
+        // One job per block: a block's layouts depend on that block alone.
+        // Every worker has its own table cache (Ctx fills it on demand).
+        std::vector<Ctx> worker_ctx(static_cast<std::size_t>(workers));
+        for (Ctx& c : worker_ctx) {
+            c.W = W;
+            c.H = H;
+            c.TN = TN;
+        }
+        auto layout_job = [&](int b, int worker) {
+                const int bx = b % cols, by = b / cols;
+                const auto bi = static_cast<std::size_t>(b);
+                if (!syms[bi].ok) return;
                 Target tgt;
                 load_target(bx, by, tgt);
-                if (tgt.alpha) continue;  // the layouts have no alpha
+                if (tgt.alpha) return;  // the layouts have no alpha
                 Work w;
                 float best_cost = kInf;
                 std::size_t best_m = 0;
                 for (std::size_t m = 0; m < nl; ++m) {
-                    solve_config(w, layouts[m], tgt, syms[bi]);
+                    solve_config(w, layouts[m], tgt, syms[bi],
+                                 worker_ctx[static_cast<std::size_t>(worker)]);
                     float d;
                     const float sc = score_block(w, tgt, W, H, d);
                     lay_blk[bi * nl + m] = encode_sym(w.s);
@@ -1772,12 +1879,23 @@ void run(EncodeResult& res, const Side& side, std::span<const std::uint8_t> rgba
                 }
                 out[bi] = lay_blk[bi * nl + best_m];
                 syms[bi] = decode_sym(out[bi], W, H);
-            }
+        };
+        crew.run_jobs(int(nblocks), layout_job);
     }
 
     std::vector<Cand> cands;
     std::vector<int> donors;
     std::vector<Block> heads_done;
+    // The solves of one donor: the donor block as loaded, and the blocks
+    // of the three solves with their scores (see the donor loop).
+    struct DonorJob {
+        Work w;
+        bool new_head = false;
+        Block blk[3];
+        float score[4] = {};
+        float d[4] = {};
+    };
+    std::vector<DonorJob> jobs;
     struct Hist {
         int block = 0;
         int bm = 0;
@@ -1836,9 +1954,16 @@ void run(EncodeResult& res, const Side& side, std::span<const std::uint8_t> rgba
                     rate(c);
                     cands.push_back(c);
                 };
-                auto add_work = [&](Work& wk) {
-                    store_weights(wk);
-                    add(encode_sym(wk.s), wk);
+                // add() for a block whose score a donor job has computed.
+                auto add_scored = [&](const Block& blk, float score, float d) {
+                    for (const Cand& c : cands)
+                        if (c.blk == blk) return;
+                    Cand c;
+                    c.blk = blk;
+                    c.d = d;
+                    c.score = score;
+                    rate(c);
+                    cands.push_back(c);
                 };
                 // The encoder's block, then the block of the previous pass
                 // (first pass: the block in its start layout).
@@ -1900,28 +2025,53 @@ void run(EncodeResult& res, const Side& side, std::span<const std::uint8_t> rgba
                     }
                     for (int q = 0; q < nb; ++q) donor(bestk[q]);
                 }
-                for (int d : donors) {
-                    load_work(w, syms[static_cast<std::size_t>(d)], ctx);
-                    // The donor block itself.
-                    add(out[static_cast<std::size_t>(d)], w);
+                // The solves and scores of the donors do not depend on each
+                // other or on the rate model: they run as one batch of jobs.
+                // The candidates then enter the list in the donor order.
+                jobs.resize(donors.size());
+                for (std::size_t k = 0; k < donors.size(); ++k) {
+                    const auto d = static_cast<std::size_t>(donors[k]);
+                    load_work(jobs[k].w, syms[d], ctx);
                     // The two solves that start from the donor's head give
                     // the same blocks for every donor with that head.
-                    const Block head = splice_weights(out[static_cast<std::size_t>(d)], Block{},
-                                                      syms[static_cast<std::size_t>(d)].wb);
-                    if (std::find(heads_done.begin(), heads_done.end(), head) == heads_done.end()) {
-                        heads_done.push_back(head);
+                    const Block head = splice_weights(out[d], Block{}, syms[d].wb);
+                    jobs[k].new_head =
+                        std::find(heads_done.begin(), heads_done.end(), head) == heads_done.end();
+                    if (jobs[k].new_head) heads_done.push_back(head);
+                }
+                auto donor_job = [&](int k, int) {
+                    DonorJob& job = jobs[static_cast<std::size_t>(k)];
+                    // The donor block itself.
+                    job.score[0] = score_block(job.w, tgt, W, H, job.d[0]);
+                    if (job.new_head) {
                         // Donor configuration and endpoints, new weights.
-                        Work we = w;
+                        Work we = job.w;
                         solve_weights(we, tgt, TN);
-                        add_work(we);
+                        store_weights(we);
+                        job.blk[0] = encode_sym(we.s);
+                        job.score[1] = score_block(we, tgt, W, H, job.d[1]);
                         // Donor configuration alone.
                         solve_endpoints(we, tgt, TN);
                         solve_weights(we, tgt, TN);
-                        add_work(we);
+                        store_weights(we);
+                        job.blk[1] = encode_sym(we.s);
+                        job.score[2] = score_block(we, tgt, W, H, job.d[2]);
                     }
                     // Donor configuration and weights, new endpoints.
-                    solve_endpoints(w, tgt, TN);
-                    add_work(w);
+                    solve_endpoints(job.w, tgt, TN);
+                    store_weights(job.w);
+                    job.blk[2] = encode_sym(job.w.s);
+                    job.score[3] = score_block(job.w, tgt, W, H, job.d[3]);
+                };
+                crew.run_jobs(int(donors.size()), donor_job);
+                for (std::size_t k = 0; k < donors.size(); ++k) {
+                    const DonorJob& job = jobs[k];
+                    add_scored(out[static_cast<std::size_t>(donors[k])], job.score[0], job.d[0]);
+                    if (job.new_head) {
+                        add_scored(job.blk[0], job.score[1], job.d[1]);
+                        add_scored(job.blk[1], job.score[2], job.d[2]);
+                    }
+                    add_scored(job.blk[2], job.score[3], job.d[3]);
                 }
                 // The block in each start layout.
                 for (std::size_t m = 0; m < nl; ++m) {
@@ -2071,7 +2221,18 @@ void run(EncodeResult& res, const Side& side, std::span<const std::uint8_t> rgba
 void optimize(EncodeResult& res, const Side& side, std::span<const std::uint8_t> rgba_srgb8,
               int image_w, int image_h, int block_w, int block_h, int strength) {
     if (strength <= 0 || res.blocks.empty()) return;
-    run(res, side, rgba_srgb8, image_w, image_h, block_w, block_h, float(strength));
+    // Index 0 runs the pass, the other indices help with its job batches.
+    Crew crew;
+    const int workers = int(std::max(std::thread::hardware_concurrency(), 1u));
+    pipeline::parallel_for(std::size_t(workers), [&](std::size_t i) {
+        if (i == 0) {
+            run(res, side, rgba_srgb8, image_w, image_h, block_w, block_h, float(strength), crew,
+                workers);
+            crew.finish();
+        } else {
+            crew.help(int(i));
+        }
+    });
 }
 
 }  // namespace png2amiga::astc::rdo
