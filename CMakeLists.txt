@@ -236,6 +236,23 @@ else()
     target_link_libraries(png2amiga_astc PRIVATE stb spng zstd astcenc webp_headers webpdecode webpdspdecode webputilsdecode constixel nlohmann_json)
     target_compile_options(png2amiga_astc PRIVATE ${PNG2AMIGA_WARNING_FLAGS})
 
+    # astc_kernel_test: the encoder's tables and SIMD kernels against their
+    # direct / scalar computation (ctest astc-kernels). It includes the
+    # encoder internals and uses a few of them, hence no unused-function
+    # warning. Same SIMD / FP-contract flags as the encoder.
+    add_executable(astc_kernel_test tools/astc_kernel_test.cpp)
+    target_include_directories(astc_kernel_test PRIVATE
+        src
+        ${CMAKE_SOURCE_DIR}/third_party
+        ${CMAKE_BINARY_DIR}/generated)
+    target_link_libraries(astc_kernel_test PRIVATE stb spng zstd astcenc webp_headers webpdecode webpdspdecode webputilsdecode constixel nlohmann_json)
+    target_compile_options(astc_kernel_test PRIVATE ${PNG2AMIGA_WARNING_FLAGS})
+    if(MSVC)
+        target_compile_options(astc_kernel_test PRIVATE /wd4505)
+    else()
+        target_compile_options(astc_kernel_test PRIVATE -Wno-unused-function)
+    endif()
+
     add_executable(png2amiga
         src/main.cpp
         ${PNG2AMIGA_CORE_SOURCES}
@@ -393,7 +410,7 @@ else()
     # .github/workflows/release.yml. On ARM64 the option is a no-op (the
     # -mavx2 probe already fails there and NEON is the baseline ISA).
     set(PNG2AMIGA_SIMD_TARGETS
-        png2amiga png2amiga_astc api_pipeline_smoke iff_camg_check bench_ssimulacra2 palette_search)
+        png2amiga png2amiga_astc astc_kernel_test api_pipeline_smoke iff_camg_check bench_ssimulacra2 palette_search)
     if(PNG2AMIGA_BASELINE_SIMD)
         message(STATUS "png2amiga: baseline SIMD build (no AVX2/FMA/SSE4.1)")
     endif()
@@ -1291,6 +1308,11 @@ sys.exit(0 if got==expect else (print(f'expected {expect}, got {got}') or 1))"
                 --cli $<TARGET_FILE:png2amiga> --input ${PNG2AMIGA_TEST_INPUT}
                 --check off-identical --mode astc-${fp} --width 128)
     endforeach()
+    # ASTC tables and SIMD kernels (tools/astc_kernel_test.cpp, key=value
+    # output): SIMD arm == scalar arm, tables == direct computation.
+    add_test(NAME "astc-kernels" COMMAND astc_kernel_test)
+    set_tests_properties("astc-kernels"
+        PROPERTIES PASS_REGULAR_EXPRESSION "status=ok")
     add_test(NAME "astc-rdo-decode-4x4"
         COMMAND ${PNG2AMIGA_PYTHON} ${CMAKE_SOURCE_DIR}/tools/check_astc_rdo.py
             --cli $<TARGET_FILE:png2amiga> --ktx2-to-png $<TARGET_FILE:ktx2_to_png>
