@@ -43,12 +43,14 @@ inline void spin_pause() noexcept {
 }
 
 // Spins until done() holds or about kSpinMicros have passed; returns done().
-// A waiting thread spins first because the waits of this file are short
-// (the serial work between two batches of the RDO pass, the last job of a
-// batch): a helper that sleeps at once wakes up late for the next batch.
-// After the spin it sleeps on the atomic, so a long wait does not burn a
-// core.
-inline constexpr int kSpinMicros = 500;
+// A waiting thread spins for a moment (pause instruction, no system call)
+// because many waits of this file are shorter than a sleep and a wake-up.
+// The spin is short on purpose: on a machine with more runnable threads
+// than cores a spinning helper takes the core that the thread it waits for
+// needs (one --rdo 20 encode with a 500 microsecond spin took 236 s instead
+// of 70 s on a loaded machine). After the spin the thread sleeps on the
+// atomic.
+inline constexpr int kSpinMicros = 50;
 template<typename Done>
 bool spin_until(Done done) {
     const auto start = std::chrono::steady_clock::now();
