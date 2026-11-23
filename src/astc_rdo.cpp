@@ -51,6 +51,7 @@
 
 #include "astc_rdo.hpp"
 
+#include "astc_jobs.hpp"
 #include "pipeline.hpp"
 
 #include <algorithm>
@@ -1529,91 +1530,49 @@ int start_layouts(int W, int H, Layout out[8]) {
 // on the blocks written before it. Two parts of the work do not depend on
 // that order. The start layouts of a block depend on that block alone, and
 // the solves of the donors of one block depend on the donor and the block,
-// not on each other or on the rate model. A Crew runs such a batch of
-// independent jobs on the calling thread and on the helper threads. Every
-// job writes its own result slot, and the caller uses the slots in the
-// order of the serial code, so the output does not depend on the number of
-// threads or on their timing.
+// not on each other or on the rate model. Such a batch of independent jobs
+// runs on a jobs::Board (astc_jobs.hpp): on the thread of the pass and on
+// helper threads. Every job writes its own result slot and the pass uses
+// the slots in the order of the serial code, so the output does not depend
+// on the number of threads or on their timing.
 //
 // The helpers are the other indices of one pipeline::parallel_for() around
-// the whole pass (see run()), so a batch costs no thread start. When
-// parallel_for runs its bodies one after the other (nested call, one core),
-// the caller of run_jobs() does every job itself.
+// the whole pass (see optimize()), so a batch costs no thread start.
 class Crew {
 public:
     // job(i, worker) for every i in [0, n); returns when all have finished.
-    // worker = 0 for the caller, the helper's index otherwise.
     template <typename Job>
-    void run_jobs(int n, Job& job) {
-        if (n <= 0) return;
-        if (n == 1) {
-            job(0, 0);
-            return;
-        }
-        ctx_ = &job;
-        call_ = [](void* c, int i, int worker) { (*static_cast<Job*>(c))(i, worker); };
-        n_ = n;
-        next_.store(0);
-        done_.store(0);
-        open_.store(true);
-        batch_.fetch_add(1);
-        batch_.notify_all();
-        for (int i = next_.fetch_add(1); i < n; i = next_.fetch_add(1)) {
-            job(i, 0);
-            done_.fetch_add(1);
-        }
-        while (done_.load() < n) std::this_thread::yield();
-        // No helper may enter the batch from here on; wait for the ones
-        // that are inside before the next batch changes the job.
-        open_.store(false);
-        while (active_.load() != 0) std::this_thread::yield();
-    }
+    void run_jobs(int n, Job& job) { board_.run(n, job); }
 
     // Body of a helper thread: serves batches until finish().
     void help(int worker) {
         std::uint32_t seen = 0;
         for (;;) {
+            // The serial work of the pass between two batches is short, so
+            // yield for a while before the thread sleeps.
             int spins = 0;
-            std::uint32_t b = batch_.load();
+            std::uint32_t b = board_.batch();
             while (b == seen) {
                 if (++spins < kSpins) std::this_thread::yield();
-                else batch_.wait(seen);
-                b = batch_.load();
+                else board_.wait_batch(seen);
+                b = board_.batch();
             }
             seen = b;
             if (quit_.load()) return;
-            active_.fetch_add(1);
-            if (open_.load()) {
-                for (int i = next_.fetch_add(1); i < n_; i = next_.fetch_add(1)) {
-                    call_(ctx_, i, worker);
-                    done_.fetch_add(1);
-                }
-            }
-            active_.fetch_sub(1);
+            board_.join(worker);
         }
     }
 
     // Ends every help() call. No batch may follow.
     void finish() {
         quit_.store(true);
-        batch_.fetch_add(1);
-        batch_.notify_all();
+        board_.wake();
     }
 
 private:
-    // Yields before a helper blocks: the caller's serial work between two
-    // batches is short (well under a millisecond).
     static constexpr int kSpins = 4000;
-    std::atomic<std::uint32_t> batch_{0};
-    std::atomic<bool> open_{false};
+    jobs::Board board_;
     std::atomic<bool> quit_{false};
-    std::atomic<int> active_{0};
-    std::atomic<int> next_{0};
-    std::atomic<int> done_{0};
-    // Written by run_jobs() while no helper is inside a batch.
-    int n_ = 0;
-    void (*call_)(void*, int, int) = nullptr;
-    void* ctx_ = nullptr;
 };
 
 struct Cand {

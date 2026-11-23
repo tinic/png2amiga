@@ -24,6 +24,7 @@
 // 64 stored bits).
 
 #include "astc.hpp"
+#include "astc_jobs.hpp"
 #include "astc_rdo.hpp"
 #include "astc_simd.hpp"
 
@@ -36,6 +37,7 @@
 #include <array>
 #include <cmath>
 #include <atomic>
+#include <chrono>
 #include <cstring>
 #include <limits>
 #include <mutex>
@@ -5538,7 +5540,18 @@ EncodeResult encode_image_impl(std::span<const std::uint8_t> rgba_srgb8,
 
     std::atomic<float> total_err_atom{0.0f};
 
-    pipeline::parallel_for(std::size_t(n_strips), [&](std::size_t strip) {
+    // One thread per strip. The strips do not take the same time (block
+    // content, performance and efficiency cores), and the blocks of a strip
+    // must stay in order (error diffusion). So a thread whose strip is
+    // finished helps the strips that still run: the encoder of a block posts
+    // its independent candidate groups on the strip's board (see
+    // encode_image_gen) and an idle thread takes some of them.
+    std::vector<jobs::Board> boards(static_cast<std::size_t>(n_strips));
+    std::atomic<int> strips_started{0};
+    std::atomic<int> strips_done{0};
+
+    auto encode_strip = [&](std::size_t strip) {
+        jobs::Board& board = boards[strip];
         const int by_lo = int(strip) * rows_per_strip;
         const int by_hi = std::min(by_lo + rows_per_strip, res.block_rows);
         if (by_lo >= by_hi) return;
@@ -5593,7 +5606,7 @@ EncodeResult encode_image_impl(std::span<const std::uint8_t> rgba_srgb8,
                                          std::size_t(bx * W + dx)] = s.lab[dy * W + dx];
                 }
 
-                Candidate c = encode_block_fn(s);
+                Candidate c = encode_block_fn(s, board);
 
                 if (pixel_ed) {
                     // Diffuse each texel's residual (shifted target − decoded)
@@ -5661,6 +5674,27 @@ EncodeResult encode_image_impl(std::span<const std::uint8_t> rgba_srgb8,
             next = prev + strip_err;
         } while (!total_err_atom.compare_exchange_weak(prev, next,
                                                         std::memory_order_relaxed));
+    };
+
+    pipeline::parallel_for(std::size_t(n_strips), [&](std::size_t strip) {
+        strips_started.fetch_add(1);
+        encode_strip(strip);
+        strips_done.fetch_add(1);
+        // Help until every strip that has started is finished. (When
+        // parallel_for runs the strips one after the other, that holds at
+        // once.)
+        int idle = 0;
+        while (strips_done.load() < strips_started.load()) {
+            bool helped = false;
+            for (jobs::Board& b : boards)
+                if (b.open()) {
+                    b.join(1);
+                    helped = true;
+                }
+            if (helped) idle = 0;
+            else if (++idle < 64) std::this_thread::yield();
+            else std::this_thread::sleep_for(std::chrono::microseconds(200));
+        }
     });
     res.total_oklab2_error = total_err_atom.load();
     return res;
@@ -5679,29 +5713,52 @@ EncodeResult encode_image_gen(std::span<const std::uint8_t> rgba_srgb8, int imag
                               const Options& options, rdo::Side* side,
                               EncodeBlockFn fn) {
     return encode_image_impl<W, H>(rgba_srgb8, image_w, image_h, options, side,
-        [fn](const SampleT<W * H>& s) {
-            Candidate a = fn(s);
+        [fn](const SampleT<W * H>& s, jobs::Board& board) {
             if constexpr (W == 4 && H == 4) {
                 for (int i = 0; i < 16; ++i)
-                    if (s.alpha[i] != 255) return a;
+                    if (s.alpha[i] != 255) return fn(s);
             }
-            Candidate b = encode_block_generic_1p<W, H, M>(s);
-            if (b.err < a.err) a = b;
-            int pis[kTop2pPartitions];
-            find_best_2p_partitions<W, H, kTop2pPartitions>(s, pis);
-            Candidate c = encode_block_generic_np<W, H, 2, M>(s, pis, kTop2pPartitions);
-            if (c.err < a.err) a = c;
-            int pis3[kTop2pPartitions];
-            find_best_np_partitions<W, H, 3, kTop2pPartitions>(s, pis3);
-            Candidate d = encode_block_generic_np<W, H, 3, M>(s, pis3, kTop2pPartitions);
-            if (d.err < a.err) a = d;
-            // Dual plane: 1, 2 and 3 partitions, any second-plane component.
-            Candidate e = encode_block_generic_dp<W, H, 1, M>(s, nullptr, 1);
-            if (e.err < a.err) a = e;
-            e = encode_block_generic_dp<W, H, 2, M>(s, pis, kTop2pPartitions);
-            if (e.err < a.err) a = e;
-            e = encode_block_generic_dp<W, H, 3, M>(s, pis3, kTop2pPartitions);
-            if (e.err < a.err) a = e;
+            // The candidate groups do not depend on each other: five jobs
+            // that an idle thread may take (see encode_image_impl). Every job
+            // fills its own slots; the lowest error is then taken in the
+            // fixed order below, as if the groups had run one after the
+            // other.
+            //   r[0] template candidate set   r[1] generic 1 partition
+            //   r[2] generic 2 partitions     r[3] generic 3 partitions
+            //   r[4..6] dual plane with 1, 2 and 3 partitions
+            Candidate r[7];
+            auto job = [&](int i, int) {
+                switch (i) {
+                case 0:
+                    r[0] = fn(s);
+                    break;
+                case 1: {
+                    int pis[kTop2pPartitions];
+                    find_best_2p_partitions<W, H, kTop2pPartitions>(s, pis);
+                    r[2] = encode_block_generic_np<W, H, 2, M>(s, pis, kTop2pPartitions);
+                    r[5] = encode_block_generic_dp<W, H, 2, M>(s, pis, kTop2pPartitions);
+                    break;
+                }
+                case 2: {
+                    int pis3[kTop2pPartitions];
+                    find_best_np_partitions<W, H, 3, kTop2pPartitions>(s, pis3);
+                    r[3] = encode_block_generic_np<W, H, 3, M>(s, pis3, kTop2pPartitions);
+                    r[6] = encode_block_generic_dp<W, H, 3, M>(s, pis3, kTop2pPartitions);
+                    break;
+                }
+                case 3:
+                    // Dual plane, one partition, any second-plane component.
+                    r[4] = encode_block_generic_dp<W, H, 1, M>(s, nullptr, 1);
+                    break;
+                default:
+                    r[1] = encode_block_generic_1p<W, H, M>(s);
+                    break;
+                }
+            };
+            board.run(5, job);
+            Candidate a = r[0];
+            for (int i = 1; i < 7; ++i)
+                if (r[i].err < a.err) a = r[i];
             return a;
         });
 }
