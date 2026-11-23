@@ -1237,25 +1237,51 @@ sys.exit(0 if got==expect else (print(f'expected {expect}, got {got}') or 1))"
         PROPERTIES DEPENDS "smoke-astc-alpha-decode"
                    PASS_REGULAR_EXPRESSION "cem12=[1-9].* dual_plane=[1-9].* dp_a=[1-9]")
     # ASTC --rdo (tools/check_astc_rdo.py, key=value output): --rdo 0 is
-    # byte-identical to no option; with --rdo on the predicted decode still
-    # equals the astcenc decode and the file decodes; and the zstd level
-    # data is smaller than with --rdo off. The 4x4 case covers dual-plane
-    # donors, the alpha case the blocks the pass must leave alone.
+    # byte-identical to no option (6x6, 4x4, 8x8); with --rdo on the
+    # predicted decode still equals the astcenc decode and the file
+    # decodes; and the zstd level data is smaller than with --rdo off.
+    # The 4x4 decode case covers dual-plane donors.
     foreach(check off-identical decode smaller)
         add_test(NAME "astc-rdo-${check}"
             COMMAND ${PNG2AMIGA_PYTHON} ${CMAKE_SOURCE_DIR}/tools/check_astc_rdo.py
                 --cli $<TARGET_FILE:png2amiga> --ktx2-to-png $<TARGET_FILE:ktx2_to_png>
                 --input ${PNG2AMIGA_TEST_INPUT} --check ${check})
     endforeach()
+    foreach(fp 4x4 8x8)
+        add_test(NAME "astc-rdo-off-identical-${fp}"
+            COMMAND ${PNG2AMIGA_PYTHON} ${CMAKE_SOURCE_DIR}/tools/check_astc_rdo.py
+                --cli $<TARGET_FILE:png2amiga> --input ${PNG2AMIGA_TEST_INPUT}
+                --check off-identical --mode astc-${fp} --width 128)
+    endforeach()
     add_test(NAME "astc-rdo-decode-4x4"
         COMMAND ${PNG2AMIGA_PYTHON} ${CMAKE_SOURCE_DIR}/tools/check_astc_rdo.py
             --cli $<TARGET_FILE:png2amiga> --ktx2-to-png $<TARGET_FILE:ktx2_to_png>
             --input ${PNG2AMIGA_TEST_INPUT} --check decode --mode astc-4x4 --width 128)
+    # Blocks with alpha (CEM 12, alpha on the second weight plane): the
+    # pass edits them, the predicted alpha equals the decode, and the
+    # file shrinks (ratio 0.66; 1.00 if the pass leaves alpha blocks alone).
     add_test(NAME "astc-rdo-decode-alpha"
         COMMAND ${PNG2AMIGA_PYTHON} ${CMAKE_SOURCE_DIR}/tools/check_astc_rdo.py
             --cli $<TARGET_FILE:png2amiga> --ktx2-to-png $<TARGET_FILE:ktx2_to_png>
             --input ${CMAKE_SOURCE_DIR}/examples/logo.png --check decode --mode astc-4x4
-            --width 256 --rdo 100 --allow-unchanged)
+            --width 256 --rdo 100)
+    add_test(NAME "astc-rdo-smaller-alpha"
+        COMMAND ${PNG2AMIGA_PYTHON} ${CMAKE_SOURCE_DIR}/tools/check_astc_rdo.py
+            --cli $<TARGET_FILE:png2amiga> --input ${CMAKE_SOURCE_DIR}/examples/logo.png
+            --check smaller --mode astc-4x4 --width 256 --rdo 40 --max-ratio 0.85)
+    # Start layouts (4x4: byte-aligned 4-bit weight grid). Without them
+    # --rdo 100 reaches a ratio of 0.75 on this input; with them 0.67.
+    add_test(NAME "astc-rdo-smaller-4x4"
+        COMMAND ${PNG2AMIGA_PYTHON} ${CMAKE_SOURCE_DIR}/tools/check_astc_rdo.py
+            --cli $<TARGET_FILE:png2amiga> --input ${PNG2AMIGA_TEST_INPUT}
+            --check smaller --mode astc-4x4 --width 384 --rdo 100 --max-ratio 0.71)
+    # Similarity donors: the blocks of a generated tiled image repeat 32
+    # blocks apart, out of reach of the neighbour donors (ratio 1.00
+    # without the similarity donors, 0.90 with them).
+    add_test(NAME "astc-rdo-far-repeats"
+        COMMAND ${PNG2AMIGA_PYTHON} ${CMAKE_SOURCE_DIR}/tools/check_astc_rdo.py
+            --cli $<TARGET_FILE:png2amiga> --input tiled
+            --check smaller --mode astc-6x6 --width 256 --rdo 20 --max-ratio 0.95)
     # Plain lores + STRIPS (1-4 planes, 8-px slot grid): the .h carries the
     # strips_lores_ocs copper list, one 40-slot chain per row.
     add_test(

@@ -1,7 +1,7 @@
 // ASTC rate-distortion optimisation (--rdo). See astc_rdo.hpp.
 //
-// The pass walks the finished block grid in stream order, twice. For
-// every block it builds a set of replacement candidates, scores each
+// The pass walks the finished block grid in stream order, three times.
+// For every block it builds a set of replacement candidates, scores each
 // one with
 //
 //     J = D + lambda * R
@@ -9,9 +9,10 @@
 // and keeps the lowest.
 //
 // D is the encoder's own block error (OKLab squared distance to the
-// per-texel target the main search used), plus the error of the
-// quadrant means and of the block mean, plus a charge for a large rise
-// over the encoder's block (see "The pass" below).
+// per-texel target the main search used, plus the alpha error of a block
+// with alpha), plus the error of the quadrant means and of the block
+// mean, plus a charge for a large rise over the encoder's block (see
+// "The pass" below).
 //
 // R is the cost in bits of the 16 block bytes under an LZ77 model of
 // the bytes already written: real matches against the preceding output
@@ -22,15 +23,27 @@
 //
 // Candidates of a block:
 //   - the block the main search chose;
+//   - the block solved again in each start layout of the footprint (one
+//     partition, a weight grid that fills whole bytes; see
+//     start_layouts()). The first pass starts from these blocks, so that
+//     neighbours share a layout and the head of a block can repeat as a
+//     run of whole bytes;
 //   - for every donor (a recently written block, a block of the rows
-//     above, in the second pass also a block that follows): the donor
-//     itself; the donor's configuration and endpoints with the weights
-//     solved again for this block; the donor's configuration and weights
-//     with the endpoints solved again; and the donor's configuration
-//     alone with both solved again.
+//     above, an earlier block with similar source colours, from the
+//     second pass on also a block that follows): the donor itself; the
+//     donor's configuration and endpoints with the weights solved again
+//     for this block; the donor's configuration and weights with the
+//     endpoints solved again; and the donor's configuration alone with
+//     both solved again;
+//   - splices: the head of one of the best candidates with the weight
+//     bits of an earlier block of the same block mode.
 // A solve keeps the block mode, partition and endpoint formats of the
 // donor, so the reused bits stay on the same bit positions and whole
 // bytes repeat.
+//
+// Blocks with alpha (CEM 12, alpha on the first or on the second weight
+// plane) take part like the others. A block without alpha endpoints on
+// a source with alpha stays as it is.
 //
 // The file holds its own ASTC block codec (symbolic decode / encode and
 // the texel paint). It shares no code with astc.cpp and none with
@@ -45,6 +58,7 @@
 #include <limits>
 #include <memory>
 #include <vector>
+
 
 namespace png2amiga::astc::rdo {
 
@@ -518,6 +532,7 @@ struct Sym {
     int wqi = 0, wb = 0; // weight quant index, weight bits
     bool dual = false;
     int plane2 = 0;      // component on the second weight plane
+    bool alpha = false;  // a partition with an alpha endpoint pair (CEM 12)
     int np = 1;          // partitions
     int pi = 0;          // partition index
     bool mixed = false;  // per-partition CEM encoding
@@ -580,12 +595,13 @@ Sym decode_sym(const Block& blk, int W, int H) {
     }
     for (int p = 0; p < s.np; ++p) {
         const int c = s.cem[p];
-        if (c != 0 && c != 1 && c != 6 && c != 8 && c != 9) return s;  // HDR or alpha
+        if (c != 0 && c != 1 && c != 6 && c != 8 && c != 9 && c != 12) return s;  // HDR, LA, ...
+        if (c == 12) s.alpha = true;
     }
     if (!derive_endpoint_quant(s)) return s;
     if (s.dual) {
         s.plane2 = get_bits(b, 128 - s.wb - (s.mixed ? 3 * s.np - 4 : 0) - 2, 2);
-        if (s.plane2 == 3) return s;
+        if (s.plane2 == 3 && !s.alpha) return s;
     }
     const int eo = ep_offset(s);
     ise_decode([&](int off, int n) { return get_bits(b, eo + off, n); }, s.nvals, s.qi, s.ev);
@@ -643,7 +659,8 @@ inline void bit_transfer_signed(int& a, int& b) {
     a &= 0x3F;
     if (a & 0x20) a -= 0x40;
 }
-void decode_endpoints(int cem, const int* v, int e0[3], int e1[3]) {
+void decode_endpoints(int cem, const int* v, int e0[4], int e1[4]) {
+    e0[3] = e1[3] = 255;
     switch (cem) {
         case 0:
             for (int ch = 0; ch < 3; ++ch) {
@@ -666,9 +683,11 @@ void decode_endpoints(int cem, const int* v, int e0[3], int e1[3]) {
                 e1[ch] = v[ch];
             }
             break;
-        case 8: {
+        case 8:
+        case 12: {
             int a[3] = {v[0], v[2], v[4]}, b[3] = {v[1], v[3], v[5]};
-            if (a[0] + a[1] + a[2] > b[0] + b[1] + b[2]) {
+            const bool swap = a[0] + a[1] + a[2] > b[0] + b[1] + b[2];
+            if (swap) {
                 blue_contract(a);
                 blue_contract(b);
                 for (int ch = 0; ch < 3; ++ch) {
@@ -680,6 +699,10 @@ void decode_endpoints(int cem, const int* v, int e0[3], int e1[3]) {
                     e0[ch] = a[ch];
                     e1[ch] = b[ch];
                 }
+            }
+            if (cem == 12) {
+                e0[3] = swap ? v[7] : v[6];
+                e1[3] = swap ? v[6] : v[7];
             }
             break;
         }
@@ -823,6 +846,8 @@ struct Ctx {
 struct Target {
     OKLab lab[kMaxTexels];
     u8 rgb[kMaxTexels][3];
+    u8 a[kMaxTexels];
+    bool alpha = false;  // a texel is not opaque
 };
 
 // A symbolic block with its decoded endpoints, weight ranks and per-texel
@@ -831,7 +856,7 @@ struct Work {
     Sym s;
     const GridMap* gm = nullptr;
     const u8* part = nullptr;
-    int e0[4][3]{}, e1[4][3]{};
+    int e0[4][4]{}, e1[4][4]{};  // RGBA
     u8 wr[2][64]{};            // weight ranks per plane
     int wsum[2][kMaxTexels]{};  // infill sums (x16) per plane
 };
@@ -895,25 +920,41 @@ inline void texel_rgb(const Work& w, int j, int ws0, int ws1, u8 rgb[3]) {
     }
 }
 
+// Decoded alpha of a texel (8-bit decode of the sRGB profile: alpha
+// expands to 16 bits by replication, so it is not the RGB formula).
+inline int texel_alpha(const Work& w, int j, int ws0, int ws1) {
+    const int p = w.part[j];
+    const int wi = infill((w.s.dual && w.s.plane2 == 3) ? ws1 : ws0);
+    return (((64 - wi) * w.e0[p][3] + wi * w.e1[p][3]) * 257 + 32) >> 14;
+}
+// Alpha error in the units of the main search: (difference / 256)^2.
+inline float alpha_dist(int a, int b) {
+    const int d = a - b;
+    return float(d * d) * (1.f / 65536.f);
+}
+
 inline float lab_dist(const OKLab& a, const OKLab& b) {
     const float dL = a.L - b.L, da = a.a - b.a, db = a.b - b.b;
     return dL * dL + da * da + db * db;
 }
 
-void paint(const Work& w, int tn, u8 out[][3]) {
-    for (int j = 0; j < tn; ++j) texel_rgb(w, j, w.wsum[0][j], w.wsum[1][j], out[j]);
+void paint(const Work& w, int tn, u8 out[][4]) {
+    for (int j = 0; j < tn; ++j) {
+        texel_rgb(w, j, w.wsum[0][j], w.wsum[1][j], out[j]);
+        out[j][3] = u8(w.s.alpha ? texel_alpha(w, j, w.wsum[0][j], w.wsum[1][j]) : 255);
+    }
 }
 
 // ---------------------------------------------------------------------------
 // Solvers.
 // ---------------------------------------------------------------------------
 
-// Coordinate descent on the weight ranks. col(j, ws0, ws1) is the decoded
-// OKLab colour of texel j for the given infill sums. A grid point scans
+// Coordinate descent on the weight ranks. err(j, ws0, ws1) is the error
+// of texel j for the given infill sums. A grid point scans
 // every level when the grid is 1:1 or the quant is coarse, and +-2 ranks
 // otherwise.
-template <typename ColFn>
-void descend_weights(Work& w, const Target& t, int tn, ColFn col) {
+template <typename ErrFn>
+void descend_weights(Work& w, int tn, ErrFn err) {
     const Tables& tb = tables();
     const GridMap& gm = *w.gm;
     const int wl = kQuant[w.s.wqi].levels;
@@ -921,7 +962,6 @@ void descend_weights(Work& w, const Target& t, int tn, ColFn col) {
     const int planes = w.s.dual ? 2 : 1;
     const bool full = gm.identity || wl <= 8;
     float terr[kMaxTexels];
-    auto err = [&](int j, int ws0, int ws1) { return lab_dist(t.lab[j], col(j, ws0, ws1)); };
     for (int j = 0; j < tn; ++j) terr[j] = err(j, w.wsum[0][j], w.wsum[1][j]);
     for (int sweep = 0; sweep < 8; ++sweep) {
         bool improved = false;
@@ -974,20 +1014,27 @@ void solve_weights(Work& w, const Target& t, int tn) {
     if (!s.dual) {
         // One 65-entry OKLab palette per partition.
         OKLab pal[4][65];
+        u8 pal_a[4][65];
         for (int p = 0; p < s.np; ++p)
             for (int k = 0; k <= 64; ++k) {
                 u8 c[3];
                 for (int ch = 0; ch < 3; ++ch)
                     c[ch] = u8(((64 - k) * w.e0[p][ch] + k * w.e1[p][ch] + 32) >> 6);
                 pal[p][k] = color_space::srgb8_to_oklab(c[0], c[1], c[2]);
+                pal_a[p][k] = u8((((64 - k) * w.e0[p][3] + k * w.e1[p][3]) * 257 + 32) >> 14);
             }
+        auto err = [&](int j, int k) {
+            const int p = w.part[j];
+            float e = lab_dist(t.lab[j], pal[p][k]);
+            if (s.alpha) e += alpha_dist(t.a[j], pal_a[p][k]);
+            return e;
+        };
         if (!gm.identity) {
             for (int j = 0; j < tn; ++j) {
-                const OKLab* pp = pal[w.part[j]];
                 float be = kInf;
                 int bk = 0;
                 for (int k = 0; k <= 64; k += 2) {
-                    const float e = lab_dist(t.lab[j], pp[k]);
+                    const float e = err(j, k);
                     if (e < be) {
                         be = e;
                         bk = k;
@@ -1005,8 +1052,7 @@ void solve_weights(Work& w, const Target& t, int tn) {
             }
             recompute_wsum(w);
         }
-        descend_weights(w, t, tn,
-                        [&](int j, int ws0, int) { return pal[w.part[j]][infill(ws0)]; });
+        descend_weights(w, tn, [&](int j, int ws0, int) { return err(j, infill(ws0)); });
         return;
     }
     // Dual plane: project the source colour on each plane's axis.
@@ -1025,6 +1071,11 @@ void solve_weights(Work& w, const Target& t, int tn) {
             }
         }
         ideal[0][j] = len > 0.f ? std::clamp(dot / len, 0.f, 1.f) * 64.f : 0.f;
+        if (s.plane2 == 3) {
+            const auto d = float(w.e1[p][3] - w.e0[p][3]);
+            const float x = float(t.a[j]) - float(w.e0[p][3]);
+            ideal[1][j] = d != 0.f ? std::clamp(x / d, 0.f, 1.f) * 64.f : 0.f;
+        }
     }
     for (int pl = 0; pl < 2; ++pl)
         for (int g = 0; g < gm.gn; ++g) {
@@ -1036,10 +1087,12 @@ void solve_weights(Work& w, const Target& t, int tn) {
                 near[std::clamp(int(acc * gm.gnorm[static_cast<std::size_t>(g)] + 0.5f), 0, 64)];
         }
     recompute_wsum(w);
-    descend_weights(w, t, tn, [&](int j, int ws0, int ws1) {
+    descend_weights(w, tn, [&](int j, int ws0, int ws1) {
         u8 rgb[3];
         texel_rgb(w, j, ws0, ws1, rgb);
-        return color_space::srgb8_to_oklab(rgb[0], rgb[1], rgb[2]);
+        float e = lab_dist(t.lab[j], color_space::srgb8_to_oklab(rgb[0], rgb[1], rgb[2]));
+        if (s.alpha) e += alpha_dist(t.a[j], texel_alpha(w, j, ws0, ws1));
+        return e;
     });
 }
 
@@ -1052,20 +1105,21 @@ float partition_err(const Work& w, const Target& t, int tn, int p, float limit) 
         u8 rgb[3];
         texel_rgb(w, j, w.wsum[0][j], w.wsum[1][j], rgb);
         e += lab_dist(t.lab[j], color_space::srgb8_to_oklab(rgb[0], rgb[1], rgb[2]));
+        if (w.s.alpha) e += alpha_dist(t.a[j], texel_alpha(w, j, w.wsum[0][j], w.wsum[1][j]));
         if (e >= limit) break;
     }
     return e;
 }
 
 // Least-squares start for the endpoints of partition p under the
-// current weights (CEM 0, 6 and 8). False = no start for this CEM.
+// current weights (CEM 0, 6, 8 and 12). False = no start for this CEM.
 bool lsq_start(const Work& w, const Target& t, int tn, int p, u8 out[8]) {
     const Tables& tb = tables();
     const Sym& s = w.s;
     const int cem = s.cem[p];
-    if (cem != 0 && cem != 6 && cem != 8) return false;
-    float A[3], B[3];
-    for (int ch = 0; ch < 3; ++ch) {
+    if (cem != 0 && cem != 6 && cem != 8 && cem != 12) return false;
+    float A[4] = {}, B[4] = {};
+    for (int ch = 0; ch < (cem == 12 ? 4 : 3); ++ch) {
         const int pl = (s.dual && ch == s.plane2) ? 1 : 0;
         float a00 = 0.f, a01 = 0.f, a11 = 0.f, b0 = 0.f, b1 = 0.f, sum = 0.f;
         int n = 0;
@@ -1073,7 +1127,7 @@ bool lsq_start(const Work& w, const Target& t, int tn, int p, u8 out[8]) {
             if (w.part[j] != p) continue;
             const float w1 = float(infill(w.wsum[pl][j])) * (1.f / 64.f);
             const float w0 = 1.f - w1;
-            const auto x = float(t.rgb[j][ch]);
+            const auto x = float(ch < 3 ? t.rgb[j][ch] : t.a[j]);
             a00 += w0 * w0;
             a01 += w0 * w1;
             a11 += w1 * w1;
@@ -1110,6 +1164,8 @@ bool lsq_start(const Work& w, const Target& t, int tn, int p, u8 out[8]) {
                 out[2 * ch] = q(A[ch]);
                 out[2 * ch + 1] = q(B[ch]);
             }
+            out[6] = q(A[3]);
+            out[7] = q(B[3]);
         } else {
             // The decoder swaps the pair and applies blue contraction.
             for (int ch = 0; ch < 3; ++ch) {
@@ -1119,6 +1175,8 @@ bool lsq_start(const Work& w, const Target& t, int tn, int p, u8 out[8]) {
                 out[2 * ch] = q(b);
                 out[2 * ch + 1] = q(a);
             }
+            out[6] = q(B[3]);
+            out[7] = q(A[3]);
         }
     }
     return true;
@@ -1359,13 +1417,26 @@ private:
 // ---------------------------------------------------------------------------
 
 // Donors of a block: the blocks before it in the stream, the rows above,
-// and in the second pass the blocks after it as the first pass left them.
+// and from the second pass on the blocks after it as the pass before
+// left them.
 constexpr int kDonorsBefore = 8;
 constexpr int kDonorsUp = 2;    // row above, +-2 columns
 constexpr int kDonorsUp2 = 1;   // two rows above, +-1 column
 constexpr int kDonorsAfter = 2;
 constexpr int kDonorsDown = 1;  // row below, +-1 column
-constexpr int kPasses = 2;
+constexpr int kPasses = 3;
+// Similarity donors: the earlier blocks, of the last kSimWindow, whose
+// source colours are nearest to this block's (see the feature in run()).
+// They reach repeats that are far away in the stream.
+constexpr int kSimDonors = 8;
+constexpr int kSimWindow = 4096;
+// Splices: the kSpliceHeads best candidates each get the weights of the
+// kSplicesPerHead best patterns of the history (the last kHistory
+// distinct weight patterns).
+constexpr int kSpliceHeads = 4;
+constexpr int kSplicesPerHead = 2;
+constexpr std::size_t kHistory = 1024;
+static_assert(kSimDonors <= 16 && kSpliceHeads <= 8 && kSplicesPerHead <= 8);
 
 // Distortion. SSIMULACRA2 compares the images at several scales, so an
 // error that survives averaging costs more than its share of the squared
@@ -1391,24 +1462,31 @@ constexpr float kRiseFloor = 0.25f;
 // kLambdaMax is lambda / sqrt(mean score) at strength 100.
 constexpr float kLambdaMax = 0.028f;
 constexpr float kScoreFloor = 1e-7f;
+// Expected bits of a literal byte, for the choice of the start layout.
+constexpr float kLiteralBits = 8.f;
 
 // Score of the block in `w`; d receives the plain block error.
 float score_block(const Work& w, const Target& t, int W, int H, float& d) {
     float e = 0.f;
-    float m[4][3] = {};
+    float m[4][4] = {};
     int n[4] = {};
+    const bool alpha = w.s.alpha || t.alpha;
     for (int j = 0; j < W * H; ++j) {
         u8 rgb[3];
         texel_rgb(w, j, w.wsum[0][j], w.wsum[1][j], rgb);
         const OKLab c = color_space::srgb8_to_oklab(rgb[0], rgb[1], rgb[2]);
-        const float dv[3] = {t.lab[j].L - c.L, t.lab[j].a - c.a, t.lab[j].b - c.b};
-        e += dv[0] * dv[0] + dv[1] * dv[1] + dv[2] * dv[2];
+        float dv[4] = {t.lab[j].L - c.L, t.lab[j].a - c.a, t.lab[j].b - c.b, 0.f};
+        if (alpha) {
+            const int a = w.s.alpha ? texel_alpha(w, j, w.wsum[0][j], w.wsum[1][j]) : 255;
+            dv[3] = float(int(t.a[j]) - a) * (1.f / 256.f);
+        }
+        e += dv[0] * dv[0] + dv[1] * dv[1] + dv[2] * dv[2] + dv[3] * dv[3];
         const int q = ((j / W) * 2 / H) * 2 + ((j % W) * 2 / W);
-        for (int k = 0; k < 3; ++k) m[q][k] += dv[k];
+        for (int k = 0; k < 4; ++k) m[q][k] += dv[k];
         ++n[q];
     }
     float mean = 0.f, quad = 0.f;
-    for (int k = 0; k < 3; ++k) {
+    for (int k = 0; k < 4; ++k) {
         const float s = m[0][k] + m[1][k] + m[2][k] + m[3][k];
         mean += s * s / float(W * H);
         for (int q = 0; q < 4; ++q) quad += m[q][k] * m[q][k] / float(n[q]);
@@ -1417,11 +1495,50 @@ float score_block(const Work& w, const Target& t, int W, int H, float& d) {
     return e + kQuadWeight * quad + kMeanWeight * mean;
 }
 
+// Start layouts. Blocks of the main search use dozens of block modes, so
+// two blocks seldom have a field on the same bit position and LZ finds
+// few repeats. A start layout is one partition, CEM 8, and a weight grid
+// whose weight bits fill whole bytes: the head of the block (mode,
+// endpoints) and its weights then begin on byte boundaries, and the head
+// of a block repeats as a whole when a later block takes it over.
+//   up to 25 texels: 4x4 weights of 4 bits (8 bytes head, 8 bytes weights);
+//   above: 6x6 weights of 2 bits, 6x4 and 4x6 of 3 bits (9 bytes each),
+//          4x4 of 3 bits (6 bytes), where the grid fits the footprint.
+struct Layout {
+    int gw, gh, wqi;
+};
+int start_layouts(int W, int H, Layout out[8]) {
+    int n = 0;
+    if (W * H <= 25) {
+        out[n++] = {4, 4, 8};
+        return n;
+    }
+    constexpr Layout kLarge[4] = {{6, 6, 2}, {6, 4, 5}, {4, 6, 5}, {4, 4, 5}};
+    for (const Layout& l : kLarge)
+        if (l.gw <= W && l.gh <= H) out[n++] = l;
+    return n;
+}
+
 struct Cand {
     Block blk{};
     float d = 0.f;      // block error
     float score = 0.f;  // block error + low-frequency terms
+    float j = kInf;     // rate-distortion cost
+    Parse parse{};
 };
+
+// `head` with its top `wb` bits (the weight stream) taken from `tail`.
+Block splice_weights(const Block& head, const Block& tail, int wb) {
+    Block out = head;
+    const int first = 128 - wb;
+    for (int byte = first >> 3; byte < 16; ++byte) {
+        const int lo = std::max(first - byte * 8, 0);
+        const auto mask = u8(0xFF << lo);
+        const auto i = static_cast<std::size_t>(byte);
+        out[i] = u8((head[i] & ~mask) | (tail[i] & mask));
+    }
+    return out;
+}
 
 void run(EncodeResult& res, const Side& side, std::span<const std::uint8_t> rgba, int image_w,
          int image_h, int W, int H, float strength) {
@@ -1435,9 +1552,8 @@ void run(EncodeResult& res, const Side& side, std::span<const std::uint8_t> rgba
     ctx.TN = TN;
 
     // Target and source texels of a block (replicated at the image edge).
-    // False if a source texel is not opaque.
     auto load_target = [&](int bx, int by, Target& tgt) {
-        bool opaque = true;
+        tgt.alpha = false;
         for (int dy = 0; dy < H; ++dy)
             for (int dx = 0; dx < W; ++dx) {
                 const int j = dy * W + dx;
@@ -1451,15 +1567,15 @@ void run(EncodeResult& res, const Side& side, std::span<const std::uint8_t> rgba
                 tgt.rgb[j][0] = px[0];
                 tgt.rgb[j][1] = px[1];
                 tgt.rgb[j][2] = px[2];
-                if (px[3] != 255) opaque = false;
+                tgt.a[j] = px[3];
+                if (px[3] != 255) tgt.alpha = true;
             }
-        return opaque;
     };
 
     // The stream is optimised in place: out[d] holds the block of the
     // current pass for d < b and of the previous pass (first pass: the
-    // encoder's block) for d >= b. A block the pass cannot rebuild (alpha,
-    // HDR, void extent) or whose source has alpha stays as it is.
+    // block in its start layout) for d >= b. A block the pass cannot
+    // rebuild (HDR, luminance + alpha, void extent) stays as it is.
     std::vector<Block> out(res.blocks.begin(), res.blocks.end());
     std::vector<Sym> syms(nblocks);
     std::vector<float> base_d(nblocks, 0.f), base_score(nblocks, 0.f), cur_d(nblocks, 0.f);
@@ -1469,9 +1585,11 @@ void run(EncodeResult& res, const Side& side, std::span<const std::uint8_t> rgba
         for (int bx = 0; bx < cols; ++bx) {
             const auto bi = static_cast<std::size_t>(by * cols + bx);
             Target tgt;
-            const bool opaque = load_target(bx, by, tgt);
+            load_target(bx, by, tgt);
             const Sym s = decode_sym(out[bi], W, H);
-            if (!s.ok || !opaque) continue;
+            // A block without alpha endpoints on a source with alpha stays
+            // as it is: the encoder dropped the alpha there.
+            if (!s.ok || (tgt.alpha && !s.alpha)) continue;
             syms[bi] = s;
             Work w;
             load_work(w, s, ctx);
@@ -1486,18 +1604,200 @@ void run(EncodeResult& res, const Side& side, std::span<const std::uint8_t> rgba
     const float lambda = (strength / 100.f) * (strength / 100.f) * kLambdaMax *
                          std::sqrt(mean_score + kScoreFloor * float(TN));
 
+    // Similarity donors: per block a 6-D colour feature (mean of the darker
+    // and of the brighter source texels).
+    std::vector<float> feat;
+    {
+        feat.assign(nblocks * 6, 0.f);
+        for (int by = 0; by < rows; ++by)
+            for (int bx = 0; bx < cols; ++bx) {
+                Target tgt;
+                load_target(bx, by, tgt);
+                float lum[kMaxTexels], mean = 0.f;
+                for (int j = 0; j < TN; ++j) {
+                    lum[j] = float(tgt.rgb[j][0]) + 2.f * float(tgt.rgb[j][1]) + float(tgt.rgb[j][2]);
+                    mean += lum[j];
+                }
+                mean /= float(TN);
+                float lo[3] = {}, hi[3] = {};
+                int nlo = 0, nhi = 0;
+                for (int j = 0; j < TN; ++j) {
+                    if (lum[j] < mean) {
+                        for (int k = 0; k < 3; ++k) lo[k] += float(tgt.rgb[j][k]);
+                        ++nlo;
+                    } else {
+                        for (int k = 0; k < 3; ++k) hi[k] += float(tgt.rgb[j][k]);
+                        ++nhi;
+                    }
+                }
+                float* f = &feat[static_cast<std::size_t>(by * cols + bx) * 6];
+                for (int k = 0; k < 3; ++k) {
+                    f[3 + k] = nhi ? hi[k] / float(nhi) : 0.f;
+                    f[k] = nlo ? lo[k] / float(nlo) : f[3 + k];
+                }
+            }
+    }
+
+    // The start layouts of this footprint as symbolic blocks.
+    std::vector<Sym> layouts;
+    {
+        Layout lay[8];
+        int n = start_layouts(W, H, lay);
+        for (int k = 0; k < n; ++k)
+            for (int bm = 0; bm < 2048; ++bm) {
+                Sym s;
+                if ((bm & 0x1FF) == 0x1FC) continue;
+                if (!decode_block_mode(bm, s.gw, s.gh, s.wqi, s.wb, s.dual)) continue;
+                if (s.dual || s.gw != lay[k].gw || s.gh != lay[k].gh || s.wqi != lay[k].wqi) continue;
+                s.bm = bm;
+                s.np = 1;
+                s.cem[0] = 8;
+                if (!derive_endpoint_quant(s)) continue;
+                s.ok = true;
+                layouts.push_back(s);
+                break;
+            }
+    }
+
+    // A one-partition CEM 8 configuration solved for a block. Several
+    // starts (the endpoints of the encoder's block, the mean colours of the
+    // darker and of the brighter texels spread by two factors, the darkest
+    // and the brightest texel); each is refined by alternate weight and
+    // endpoint solves, and the best score is kept.
+    auto solve_config = [&](Work& best_w, const Sym& cfg, const Target& tgt, const Sym& enc) {
+        const Tables& tb = tables();
+        float lum[kMaxTexels], mean = 0.f;
+        int jmin = 0, jmax = 0;
+        for (int j = 0; j < TN; ++j) {
+            lum[j] = float(tgt.rgb[j][0]) + 2.f * float(tgt.rgb[j][1]) + float(tgt.rgb[j][2]);
+            mean += lum[j];
+            if (lum[j] < lum[jmin]) jmin = j;
+            if (lum[j] > lum[jmax]) jmax = j;
+        }
+        mean /= float(TN);
+        float lo[3] = {}, hi[3] = {};
+        int nlo = 0, nhi = 0;
+        for (int j = 0; j < TN; ++j) {
+            float* acc = lum[j] < mean ? lo : hi;
+            for (int k = 0; k < 3; ++k) acc[k] += float(tgt.rgb[j][k]);
+            ++(lum[j] < mean ? nlo : nhi);
+        }
+        for (int k = 0; k < 3; ++k) {
+            hi[k] = nhi ? hi[k] / float(nhi) : 0.f;
+            lo[k] = nlo ? lo[k] / float(nlo) : hi[k];
+        }
+        float best = kInf;
+        Work w;
+        for (int start = 0; start < 4; ++start) {
+            float a[3], e[3];
+            if (start == 0) {
+                if (!enc.ok || enc.np != 1) continue;
+                Work ew;
+                load_work(ew, enc, ctx);
+                for (int k = 0; k < 3; ++k) {
+                    a[k] = float(ew.e0[0][k]);
+                    e[k] = float(ew.e1[0][k]);
+                }
+            } else if (start == 3) {
+                for (int k = 0; k < 3; ++k) {
+                    a[k] = float(tgt.rgb[jmin][k]);
+                    e[k] = float(tgt.rgb[jmax][k]);
+                }
+            } else {
+                const float spread = start == 1 ? 0.5f : 1.25f;
+                for (int k = 0; k < 3; ++k) {
+                    a[k] = std::clamp(lo[k] - spread * (hi[k] - lo[k]), 0.f, 255.f);
+                    e[k] = std::clamp(hi[k] + spread * (hi[k] - lo[k]), 0.f, 255.f);
+                }
+            }
+            // CEM 8 keeps the pair as it is when the first sum is not larger.
+            if (a[0] + a[1] + a[2] > e[0] + e[1] + e[2]) std::swap(a, e);
+            Sym s = cfg;
+            for (int k = 0; k < 3; ++k) {
+                s.ev[2 * k] = tb.c_near[s.qi][int(a[k] + 0.5f)];
+                s.ev[2 * k + 1] = tb.c_near[s.qi][int(e[k] + 0.5f)];
+            }
+            load_work(w, s, ctx);
+            float prev = kInf;
+            for (int it = 0; it < 6; ++it) {
+                solve_weights(w, tgt, TN);
+                float d;
+                const float sc = score_block(w, tgt, W, H, d);
+                if (sc < best) {
+                    best = sc;
+                    best_w = w;
+                }
+                if (sc > prev * 0.995f) break;
+                prev = sc;
+                solve_endpoints(w, tgt, TN);
+            }
+        }
+        store_weights(best_w);
+    };
+    // Every start layout solved for every block. The first pass starts
+    // from the one with the lowest expected cost: its score, with the
+    // charge for the rise, plus lambda times the bits of its weight bytes
+    // (the head of a block in a common layout repeats, its weight bytes
+    // do not). The encoder's block stays a candidate in every pass.
+    const auto nl = layouts.size();
+    std::vector<Block> lay_blk(nl * nblocks);
+    std::vector<float> lay_score(nl * nblocks, kInf);
+    if (nl > 0) {
+        for (int by = 0; by < rows; ++by)
+            for (int bx = 0; bx < cols; ++bx) {
+                const auto bi = static_cast<std::size_t>(by * cols + bx);
+                if (!syms[bi].ok) continue;
+                Target tgt;
+                load_target(bx, by, tgt);
+                if (tgt.alpha) continue;  // the layouts have no alpha
+                Work w;
+                float best_cost = kInf;
+                std::size_t best_m = 0;
+                for (std::size_t m = 0; m < nl; ++m) {
+                    solve_config(w, layouts[m], tgt, syms[bi]);
+                    float d;
+                    const float sc = score_block(w, tgt, W, H, d);
+                    lay_blk[bi * nl + m] = encode_sym(w.s);
+                    lay_score[bi * nl + m] = sc;
+                    float cost = sc;
+                    if (cost > base_score[bi]) {
+                        const float r = cost - base_score[bi];
+                        cost += kRiseWeight * r * r / (base_score[bi] + rise_floor);
+                    }
+                    cost += lambda * kLiteralBits * float((layouts[m].wb + 7) / 8);
+                    if (cost < best_cost) {
+                        best_cost = cost;
+                        best_m = m;
+                    }
+                }
+                out[bi] = lay_blk[bi * nl + best_m];
+                syms[bi] = decode_sym(out[bi], W, H);
+            }
+    }
+
     std::vector<Cand> cands;
     std::vector<int> donors;
+    std::vector<Block> heads_done;
+    struct Hist {
+        int block = 0;
+        int bm = 0;
+        u8 tw[kMaxTexels] = {};  // infilled weight of every texel
+    };
+    std::vector<Hist> hist;
+    OKLab pal[4][65];
+    u8 pal_a[4][65];
+    float et[kMaxTexels][65];
     for (int pass = 0; pass < kPasses; ++pass) {
         Lz lz;
         lz.init(nblocks * 16, reinterpret_cast<const u8*>(out.data()), nblocks * 16);
+        hist.clear();
         for (int by = 0; by < rows; ++by) {
             for (int bx = 0; bx < cols; ++bx) {
                 const int b = by * cols + bx;
                 const auto bi = static_cast<std::size_t>(b);
                 const Block& base = res.blocks[bi];
-                Parse parse;
                 if (!syms[bi].ok) {
+                    Parse parse;
                     lz.eval(base.data(), &parse);
                     lz.commit(base.data(), parse);
                     continue;
@@ -1506,25 +1806,56 @@ void run(EncodeResult& res, const Side& side, std::span<const std::uint8_t> rgba
                 load_target(bx, by, tgt);
                 cands.clear();
                 Work w;
+                // From the second pass on the bits of the next block (as
+                // the pass before left it) count as well: they depend on
+                // what this block offers it to copy.
+                const bool with_next = pass > 0 && bi + 1 < nblocks;
+                float best_j = kInf;
+                std::size_t best = 0;
+                auto rate = [&](Cand& c) {
+                    float cost = c.score;
+                    if (cost > base_score[bi]) {
+                        const float rise = cost - base_score[bi];
+                        cost += kRiseWeight * rise * rise / (base_score[bi] + rise_floor);
+                    }
+                    if (cost >= best_j) return;
+                    float bits = lz.eval(c.blk.data(), &c.parse);
+                    if (with_next) bits += lz.eval_next(c.blk.data(), c.parse, out[bi + 1].data());
+                    c.j = cost + lambda * bits;
+                    if (c.j < best_j) {
+                        best_j = c.j;
+                        best = cands.size();
+                    }
+                };
                 auto add = [&](const Block& blk, const Work& wk) {
                     for (const Cand& c : cands)
                         if (c.blk == blk) return;
                     Cand c;
                     c.blk = blk;
                     c.score = score_block(wk, tgt, W, H, c.d);
+                    rate(c);
                     cands.push_back(c);
                 };
                 auto add_work = [&](Work& wk) {
                     store_weights(wk);
                     add(encode_sym(wk.s), wk);
                 };
-                // The encoder's block, then the block of the previous pass.
-                cands.push_back({base, base_d[bi], base_score[bi]});
+                // The encoder's block, then the block of the previous pass
+                // (first pass: the block in its start layout).
+                {
+                    Cand c;
+                    c.blk = base;
+                    c.d = base_d[bi];
+                    c.score = base_score[bi];
+                    rate(c);
+                    cands.push_back(c);
+                }
                 if (out[bi] != base) {
                     load_work(w, syms[bi], ctx);
                     add(out[bi], w);
                 }
                 donors.clear();
+                heads_done.clear();
                 auto donor = [&](int d) {
                     if (d < 0 || d >= int(nblocks) || d == b || !syms[static_cast<std::size_t>(d)].ok)
                         return;
@@ -1545,52 +1876,167 @@ void run(EncodeResult& res, const Side& side, std::span<const std::uint8_t> rgba
                     for (int k = 1; k <= kDonorsAfter; ++k) donor(b + k);
                     donor_row(by + 1, kDonorsDown);
                 }
+                {
+                    const float* fb = &feat[bi * 6];
+                    int bestk[16];
+                    float bestd[16];
+                    int nb = 0;
+                    const int nsim = kSimDonors;
+                    for (int d = b - 1; d >= 0 && d >= b - kSimWindow; --d) {
+                        if (!syms[static_cast<std::size_t>(d)].ok) continue;
+                        const float* fd = &feat[static_cast<std::size_t>(d) * 6];
+                        float dist = 0.f;
+                        for (int k = 0; k < 6; ++k) dist += (fb[k] - fd[k]) * (fb[k] - fd[k]);
+                        int pos = nb;
+                        while (pos > 0 && dist < bestd[pos - 1]) --pos;
+                        if (pos >= nsim) continue;
+                        for (int q = std::min(nb, nsim - 1); q > pos; --q) {
+                            bestd[q] = bestd[q - 1];
+                            bestk[q] = bestk[q - 1];
+                        }
+                        bestd[pos] = dist;
+                        bestk[pos] = d;
+                        if (nb < nsim) ++nb;
+                    }
+                    for (int q = 0; q < nb; ++q) donor(bestk[q]);
+                }
                 for (int d : donors) {
                     load_work(w, syms[static_cast<std::size_t>(d)], ctx);
                     // The donor block itself.
                     add(out[static_cast<std::size_t>(d)], w);
-                    // Donor configuration and endpoints, new weights.
-                    Work we = w;
-                    solve_weights(we, tgt, TN);
-                    add_work(we);
-                    // Donor configuration alone.
-                    solve_endpoints(we, tgt, TN);
-                    solve_weights(we, tgt, TN);
-                    add_work(we);
+                    // The two solves that start from the donor's head give
+                    // the same blocks for every donor with that head.
+                    const Block head = splice_weights(out[static_cast<std::size_t>(d)], Block{},
+                                                      syms[static_cast<std::size_t>(d)].wb);
+                    if (std::find(heads_done.begin(), heads_done.end(), head) == heads_done.end()) {
+                        heads_done.push_back(head);
+                        // Donor configuration and endpoints, new weights.
+                        Work we = w;
+                        solve_weights(we, tgt, TN);
+                        add_work(we);
+                        // Donor configuration alone.
+                        solve_endpoints(we, tgt, TN);
+                        solve_weights(we, tgt, TN);
+                        add_work(we);
+                    }
                     // Donor configuration and weights, new endpoints.
                     solve_endpoints(w, tgt, TN);
                     add_work(w);
                 }
-                // Choose. In the second pass the bits of the next block
-                // (as the first pass left it) count as well: they depend
-                // on what this block offers it to copy.
-                const bool with_next = pass > 0 && bi + 1 < nblocks;
-                float best_j = kInf;
-                std::size_t best = 0;
-                for (std::size_t k = 0; k < cands.size(); ++k) {
-                    const Cand& c = cands[k];
-                    float cost = c.score;
-                    if (cost > base_score[bi]) {
-                        const float rise = cost - base_score[bi];
-                        cost += kRiseWeight * rise * rise / (base_score[bi] + rise_floor);
+                // The block in each start layout.
+                for (std::size_t m = 0; m < nl; ++m) {
+                    const Block& lb = lay_blk[bi * nl + m];
+                    if (lay_score[bi * nl + m] == kInf) continue;
+                    bool dup = false;
+                    for (const Cand& c : cands)
+                        if (c.blk == lb) dup = true;
+                    if (dup) continue;
+                    load_work(w, decode_sym(lb, W, H), ctx);
+                    add(lb, w);
+                }
+                // Splices: the head (configuration and endpoints) of the
+                // best candidates with the weight bits of an earlier block.
+                // The history holds the distinct weight patterns of the
+                // last blocks; a table of the error of every texel for every
+                // weight value ranks them for a head.
+                if (!hist.empty()) {
+                    std::size_t heads[8];
+                    int nh = 0;
+                    const int maxh = kSpliceHeads;
+                    for (std::size_t k = 0; k < cands.size(); ++k) {
+                        if (cands[k].j == kInf) continue;
+                        int pos = nh;
+                        while (pos > 0 && cands[k].j < cands[heads[pos - 1]].j) --pos;
+                        if (pos >= maxh) continue;
+                        for (int q = std::min(nh, maxh - 1); q > pos; --q) heads[q] = heads[q - 1];
+                        heads[pos] = k;
+                        if (nh < maxh) ++nh;
                     }
-                    if (cost >= best_j) continue;
-                    Parse pr;
-                    float bits = lz.eval(c.blk.data(), &pr);
-                    if (with_next) bits += lz.eval_next(c.blk.data(), pr, out[bi + 1].data());
-                    const float j = cost + lambda * bits;
-                    if (j < best_j) {
-                        best_j = j;
-                        best = k;
-                        parse = pr;
+                    for (int h = 0; h < nh; ++h) {
+                        const Block hb = cands[heads[h]].blk;
+                        const Sym hs = decode_sym(hb, W, H);
+                        if (!hs.ok || hs.dual) continue;
+                        load_work(w, hs, ctx);
+                        // Error of texel j for the infilled weight v.
+                        for (int p = 0; p < hs.np; ++p)
+                            for (int v = 0; v <= 64; ++v) {
+                                u8 c[3];
+                                for (int ch = 0; ch < 3; ++ch)
+                                    c[ch] = u8(((64 - v) * w.e0[p][ch] + v * w.e1[p][ch] + 32) >> 6);
+                                pal[p][v] = color_space::srgb8_to_oklab(c[0], c[1], c[2]);
+                                pal_a[p][v] =
+                                    u8((((64 - v) * w.e0[p][3] + v * w.e1[p][3]) * 257 + 32) >> 14);
+                            }
+                        const bool al = hs.alpha || tgt.alpha;
+                        for (int j = 0; j < TN; ++j) {
+                            const int p = w.part[j];
+                            for (int v = 0; v <= 64; ++v) {
+                                float e = lab_dist(tgt.lab[j], pal[p][v]);
+                                if (al) e += alpha_dist(tgt.a[j], pal_a[p][v]);
+                                et[j][v] = e;
+                            }
+                        }
+                        const int maxm = kSplicesPerHead;
+                        std::size_t top[8];
+                        float topk[8];
+                        int nt = 0;
+                        for (std::size_t e = 0; e < hist.size(); ++e) {
+                            const Hist& he = hist[e];
+                            if (he.bm != hs.bm) continue;
+                            const float limit = nt == maxm ? topk[nt - 1] : kInf;
+                            float key = lambda * std::log2(float(16 * (b - he.block)));
+                            for (int j = 0; j < TN && key < limit; ++j) key += et[j][he.tw[j]];
+                            if (key >= limit) continue;
+                            int pos = nt;
+                            while (pos > 0 && key < topk[pos - 1]) --pos;
+                            for (int q = std::min(nt, maxm - 1); q > pos; --q) {
+                                top[q] = top[q - 1];
+                                topk[q] = topk[q - 1];
+                            }
+                            top[pos] = e;
+                            topk[pos] = key;
+                            if (nt < maxm) ++nt;
+                        }
+                        for (int q = 0; q < nt; ++q) {
+                            const Block& src = out[static_cast<std::size_t>(hist[top[q]].block)];
+                            const Block nb = splice_weights(hb, src, hs.wb);
+                            bool dup = false;
+                            for (const Cand& c : cands)
+                                if (c.blk == nb) dup = true;
+                            if (dup) continue;
+                            const Sym s = decode_sym(nb, W, H);
+                            if (!s.ok) continue;
+                            load_work(w, s, ctx);
+                            add(nb, w);
+                        }
                     }
                 }
                 const Cand& c = cands[best];
-                lz.commit(c.blk.data(), parse);
+                lz.commit(c.blk.data(), c.parse);
                 cur_d[bi] = c.d;
                 if (c.blk != out[bi]) {
                     out[bi] = c.blk;
                     syms[bi] = decode_sym(c.blk, W, H);
+                }
+                if (!syms[bi].dual) {
+                    // History of distinct weight patterns, most recent first.
+                    load_work(w, syms[bi], ctx);
+                    Hist he;
+                    he.block = b;
+                    he.bm = syms[bi].bm;
+                    for (int j = 0; j < TN; ++j) he.tw[j] = u8(infill(w.wsum[0][j]));
+                    std::size_t at = hist.size();
+                    for (std::size_t k = 0; k < hist.size(); ++k)
+                        if (hist[k].bm == he.bm && std::memcmp(hist[k].tw, he.tw, std::size_t(TN)) == 0) {
+                            at = k;
+                            break;
+                        }
+                    if (at == hist.size()) {
+                        if (hist.size() < kHistory) hist.emplace_back();
+                        else at = hist.size() - 1;
+                    }
+                    for (std::size_t k = std::min(at, hist.size() - 1); k > 0; --k) hist[k] = hist[k - 1];
+                    hist[0] = he;
                 }
             }
         }
@@ -1607,15 +2053,14 @@ void run(EncodeResult& res, const Side& side, std::span<const std::uint8_t> rgba
             d_change += double(cur_d[bi]) - double(base_d[bi]);
             Work w;
             load_work(w, syms[bi], ctx);
-            u8 px[kMaxTexels][3];
+            u8 px[kMaxTexels][4];
             paint(w, TN, px);
             for (int dy = 0; dy < H && by * H + dy < image_h; ++dy)
                 for (int dx = 0; dx < W && bx * W + dx < image_w; ++dx) {
                     const std::size_t o = (static_cast<std::size_t>(by * H + dy) * iw +
                                            static_cast<std::size_t>(bx * W + dx)) * 4u;
-                    for (std::size_t ch = 0; ch < 3; ++ch)
+                    for (std::size_t ch = 0; ch < 4; ++ch)
                         res.predicted_rgba[o + ch] = px[dy * W + dx][ch];
-                    res.predicted_rgba[o + 3] = 255;
                 }
         }
     res.total_oklab2_error += float(d_change);

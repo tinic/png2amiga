@@ -3,7 +3,8 @@
 // Rate-distortion optimisation for the ASTC encoder (--rdo). A post-pass
 // over the finished block grid: each block may be replaced by a block
 // that costs fewer bits after LZ compression (zstd) for a bounded rise
-// of the encoder's own perceptual error. Internal to the ASTC encoder.
+// of the encoder's own perceptual error. LDR blocks with and without
+// alpha, every footprint. Internal to the ASTC encoder.
 
 #include "astc.hpp"
 #include "color_space.hpp"
