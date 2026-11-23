@@ -25,6 +25,7 @@
 
 #include "astc.hpp"
 #include "astc_rdo.hpp"
+#include "astc_simd.hpp"
 
 #include "color_space.hpp"
 #include "dither.hpp"
@@ -1464,12 +1465,14 @@ Candidate encode_block_rgb(const SampleT<W * H>& s) {
 // matches astcenc_block_sizes.cpp::assign_kmeans_texels exactly so
 // the texel weights the encoder produces match what the decoder
 // reconstructs bit-for-bit.
+struct BilinearTexel {
+    std::uint8_t grid[4];   // qweight indices into the GridW × GridH array
+    std::uint8_t weight[4]; // 0..16 each; sum = 16
+};
+
 template <int TexW, int TexH, int GridW, int GridH>
 struct BilinearMap {
-    struct TexelContrib {
-        std::uint8_t grid[4];   // qweight indices into the GridW × GridH array
-        std::uint8_t weight[4]; // 0..16 each; sum = 16
-    };
+    using TexelContrib = BilinearTexel;
     TexelContrib texels[std::size_t(TexW * TexH)];
 
     constexpr BilinearMap() : texels{} {
@@ -1514,6 +1517,95 @@ struct BilinearMap {
     }
 };
 
+// Solver table of the decimation LSQ of one (footprint, weight grid).
+//
+// The template encoders fit the grid weights v of a decimated block with
+// the normal equations (A^T A + ridge I) v = A^T T, solved by Gauss-Jordan
+// elimination with partial pivoting. A^T A depends on the footprint and the
+// grid only; the block only supplies the right-hand side A^T T. The
+// elimination of the matrix therefore runs once: build_decim_solve() records
+// its pivot rows, pivot reciprocals and row factors, and decim_solve_apply()
+// applies to a right-hand side the operations the elimination of the
+// augmented system applies to it, with the same operands in the same order.
+// The solution has the same bits as a per-block elimination (a factor of 0
+// stands for a row the elimination leaves out; it can only change the sign
+// of a zero, which the weight quantisation does not see).
+struct DecimSolve {
+    int gn = 0;
+    std::vector<std::uint8_t> piv;   // row swapped with row i at step i
+    std::vector<std::uint8_t> used;  // 0 = step i has no pivot (left out)
+    std::vector<float> pinv;         // reciprocal of the pivot of step i
+    std::vector<float> f;            // gn x gn: factor of row r at step i
+};
+
+[[maybe_unused]] DecimSolve build_decim_solve(const BilinearTexel* texels, int tn, int gn) {
+    DecimSolve sv;
+    sv.gn = gn;
+    const auto n = std::size_t(gn);
+    sv.piv.assign(n, 0);
+    sv.used.assign(n, 0);
+    sv.pinv.assign(n, 0.f);
+    sv.f.assign(n * n, 0.f);
+    std::vector<float> ata(n * n, 0.f);
+    for (int j = 0; j < tn; ++j) {
+        const BilinearTexel& t = texels[j];
+        for (int k = 0; k < 4; ++k) {
+            float ck = float(t.weight[k]) * (1.f / 16.f);
+            if (ck <= 0.f) continue;
+            const std::size_t gi = t.grid[k];
+            for (int kk = 0; kk < 4; ++kk) {
+                float cc = float(t.weight[kk]) * (1.f / 16.f);
+                if (cc <= 0.f) continue;
+                ata[gi * n + t.grid[kk]] += ck * cc;
+            }
+        }
+    }
+    constexpr float kRidge = 1e-3f;
+    for (std::size_t i = 0; i < n; ++i) ata[i * n + i] += kRidge;
+    for (std::size_t i = 0; i < n; ++i) {
+        std::size_t piv = i;
+        float bestmag = std::abs(ata[i * n + i]);
+        for (std::size_t r = i + 1; r < n; ++r) {
+            float m = std::abs(ata[r * n + i]);
+            if (m > bestmag) { bestmag = m; piv = r; }
+        }
+        sv.piv[i] = std::uint8_t(piv);
+        if (bestmag < 1e-9f) continue;
+        sv.used[i] = 1;
+        if (piv != i)
+            for (std::size_t c = 0; c < n; ++c) std::swap(ata[i * n + c], ata[piv * n + c]);
+        float pinv = 1.f / ata[i * n + i];
+        sv.pinv[i] = pinv;
+        for (std::size_t c = 0; c < n; ++c) ata[i * n + c] *= pinv;
+        for (std::size_t r = 0; r < n; ++r) {
+            if (r == i) continue;
+            float f = ata[r * n + i];
+            if (f == 0.f) continue;
+            sv.f[i * n + r] = f;
+            for (std::size_t c = 0; c < n; ++c) ata[r * n + c] -= f * ata[i * n + c];
+        }
+    }
+    return sv;
+}
+
+inline void decim_solve_apply(const DecimSolve& sv, float* atb) {
+    const int gn = sv.gn;
+    const float* f = sv.f.data();
+    for (int i = 0; i < gn; ++i, f += gn) {
+        if (!sv.used[std::size_t(i)]) continue;
+        const int piv = sv.piv[std::size_t(i)];
+        if (piv != i) std::swap(atb[i], atb[piv]);
+        atb[i] *= sv.pinv[std::size_t(i)];
+        const float x = atb[i];
+        // f[i] == 0: row i keeps its value.
+        if (simd::kKernels) {
+            simd::axpy_sub(atb, f, x, gn);
+        } else {
+            for (int r = 0; r < gn; ++r) atb[r] -= f[r] * x;
+        }
+    }
+}
+
 template <int TexW, int TexH, int GridW, int GridH,
           std::uint32_t BlockMode, int WL,
           block_compress::BlockMetric M, int EPQuant = 256>
@@ -1521,6 +1613,7 @@ Candidate encode_block_rgb_decim(const SampleT<TexW * TexH>& s) {
     constexpr int TN = TexW * TexH;
     constexpr int GN = GridW * GridH;
     static constexpr BilinearMap<TexW, TexH, GridW, GridH> bm{};
+    static const DecimSolve solve = build_decim_solve(bm.texels, TN, GN);
     constexpr const int* ramp = weight_ramp<WL>();
 
     Candidate out{};
@@ -1561,7 +1654,6 @@ Candidate encode_block_rgb_decim(const SampleT<TexW * TexH>& s) {
         //   Closed-form via normal equations A^T A v = A^T T, solved by
         //   Gauss-Jordan (GN ≤ 36, ~50k flops/iter — negligible).
         //   Small Tikhonov ridge regularises uncovered grid points.
-        float ata[std::size_t(GN)][std::size_t(GN)] = {};
         float atb[std::size_t(GN)] = {};
         for (int j = 0; j < TN; ++j) {
             const auto& t = bm.texels[j];
@@ -1569,41 +1661,10 @@ Candidate encode_block_rgb_decim(const SampleT<TexW * TexH>& s) {
             for (int k = 0; k < 4; ++k) {
                 float ck = float(t.weight[k]) * (1.f / 16.f);
                 if (ck <= 0.f) continue;
-                int gi = t.grid[k];
-                atb[gi] += ck * T_j;
-                for (int kk = 0; kk < 4; ++kk) {
-                    float cc = float(t.weight[kk]) * (1.f / 16.f);
-                    if (cc <= 0.f) continue;
-                    ata[gi][t.grid[kk]] += ck * cc;
-                }
+                atb[t.grid[k]] += ck * T_j;
             }
         }
-        constexpr float kRidge = 1e-3f;
-        for (int i = 0; i < GN; ++i) ata[i][i] += kRidge;
-
-        for (int i = 0; i < GN; ++i) {
-            int piv = i;
-            float bestmag = std::abs(ata[i][i]);
-            for (int r = i + 1; r < GN; ++r) {
-                float m = std::abs(ata[r][i]);
-                if (m > bestmag) { bestmag = m; piv = r; }
-            }
-            if (bestmag < 1e-9f) continue;
-            if (piv != i) {
-                for (int c = 0; c < GN; ++c) std::swap(ata[i][c], ata[piv][c]);
-                std::swap(atb[i], atb[piv]);
-            }
-            float pinv = 1.f / ata[i][i];
-            for (int c = 0; c < GN; ++c) ata[i][c] *= pinv;
-            atb[i] *= pinv;
-            for (int r = 0; r < GN; ++r) {
-                if (r == i) continue;
-                float f = ata[r][i];
-                if (f == 0.f) continue;
-                for (int c = 0; c < GN; ++c) ata[r][c] -= f * ata[i][c];
-                atb[r] -= f * atb[i];
-            }
-        }
+        decim_solve_apply(solve, atb);
 
         // Quantize each continuous v_i to nearest ramp[WL] level.
         for (int i = 0; i < GN; ++i) {
@@ -1655,6 +1716,11 @@ Candidate encode_block_rgb_decim(const SampleT<TexW * TexH>& s) {
     //    cluster boundary fell on a coarse texel contribution. Per-
     //    grid-point trial flips, accept on improvement, iterate to
     //    convergence (typically 2-3 sweeps on natural images).
+    // The endpoints stay fixed during the descent, so a texel's paint
+    // depends on its infill weight only: each of the 65 paints is converted
+    // to OKLab once, on first use.
+    [[maybe_unused]] color_space::OKLab paint_lab[65];
+    [[maybe_unused]] bool paint_have[65] = {};
     auto compute_total_err = [&]() {
         float e = 0.f;
         for (int j = 0; j < TN; ++j) {
@@ -1673,7 +1739,11 @@ Candidate encode_block_rgb_decim(const SampleT<TexW * TexH>& s) {
                 // Match the dispatcher's scoring metric — minimising OKLab²
                 // here puts the coord descent on the same axis as the
                 // pick-best comparison downstream.
-                auto l = color_space::srgb8_to_oklab(pr, pg, pb);
+                if (!paint_have[w_int]) {
+                    paint_lab[w_int] = color_space::srgb8_to_oklab(pr, pg, pb);
+                    paint_have[w_int] = true;
+                }
+                const color_space::OKLab l = paint_lab[w_int];
                 float dL = s.lab[j].L - l.L;
                 float dA = s.lab[j].a - l.a;
                 float dB = s.lab[j].b - l.b;
@@ -3217,6 +3287,7 @@ Candidate encode_block_rgb_2p_decim(const SampleT<TexW * TexH>& s, int best_pi) 
     constexpr int TN = TexW * TexH;
     constexpr int GN = GridW * GridH;
     static constexpr BilinearMap<TexW, TexH, GridW, GridH> bm{};
+    static const DecimSolve solve = build_decim_solve(bm.texels, TN, GN);
     constexpr const int* ramp = weight_ramp<WL>();
     const auto& table = partition_table_np<2, TexW, TexH>();
 
@@ -3252,48 +3323,17 @@ Candidate encode_block_rgb_2p_decim(const SampleT<TexW * TexH>& s, int best_pi) 
         }
 
         // LSQ on the sparse bilinear contribution system (same as 1p).
-        float ata[std::size_t(GN)][std::size_t(GN)] = {};
         float atb[std::size_t(GN)] = {};
         for (int j = 0; j < TN; ++j) {
             const auto& t = bm.texels[j];
             float T_j = w_ideal[j] * 64.f;
-            for (int kk = 0; kk < 4; ++kk) {
-                float ck = float(t.weight[kk]) * (1.f / 16.f);
+            for (int k = 0; k < 4; ++k) {
+                float ck = float(t.weight[k]) * (1.f / 16.f);
                 if (ck <= 0.f) continue;
-                int gi = t.grid[kk];
-                atb[gi] += ck * T_j;
-                for (int ll = 0; ll < 4; ++ll) {
-                    float cc = float(t.weight[ll]) * (1.f / 16.f);
-                    if (cc <= 0.f) continue;
-                    ata[gi][t.grid[ll]] += ck * cc;
-                }
+                atb[t.grid[k]] += ck * T_j;
             }
         }
-        constexpr float kRidge = 1e-3f;
-        for (int i = 0; i < GN; ++i) ata[i][i] += kRidge;
-        for (int i = 0; i < GN; ++i) {
-            int piv = i;
-            float bestmag = std::abs(ata[i][i]);
-            for (int r = i + 1; r < GN; ++r) {
-                float m = std::abs(ata[r][i]);
-                if (m > bestmag) { bestmag = m; piv = r; }
-            }
-            if (bestmag < 1e-9f) continue;
-            if (piv != i) {
-                for (int c = 0; c < GN; ++c) std::swap(ata[i][c], ata[piv][c]);
-                std::swap(atb[i], atb[piv]);
-            }
-            float pinv = 1.f / ata[i][i];
-            for (int c = 0; c < GN; ++c) ata[i][c] *= pinv;
-            atb[i] *= pinv;
-            for (int r = 0; r < GN; ++r) {
-                if (r == i) continue;
-                float f = ata[r][i];
-                if (f == 0.f) continue;
-                for (int c = 0; c < GN; ++c) ata[r][c] -= f * ata[i][c];
-                atb[r] -= f * atb[i];
-            }
-        }
+        decim_solve_apply(solve, atb);
         for (int i = 0; i < GN; ++i) {
             float v = std::clamp(atb[i], 0.f, 64.f);
             int best = 0;
